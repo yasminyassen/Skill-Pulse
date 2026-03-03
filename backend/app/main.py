@@ -5,6 +5,7 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db import models
+from app.api import auth
 
 
 app = FastAPI(
@@ -22,20 +23,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Health check endpoint
-@app.get("/health", tags=["System"])
-def health_check():
-    return {
-        "status": "healthy",
-        "environment": settings.ENVIRONMENT,
-        "version": "0.1.0"
-    }
-
-@app.get("/", tags=["System"])
-def root():
-    return {"message": "Welcome to SkillPulse API"}
+app.include_router(auth.router)
 
 
-@app.get("/users")
-def read_users(db: Session = Depends(get_db)):
-    return db.query(models.User).all()
+
+
