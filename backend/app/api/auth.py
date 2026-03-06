@@ -25,7 +25,30 @@ class UserLogin(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
-    
+
+class RoleUpdate(BaseModel):
+        role: UserRole
+
+
+@router.patch("/role")
+def update_role(data: RoleUpdate, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    current_user.role = data.role
+    db.commit()
+    return {"message": "Role updated", "role": data.role.value}
+
+
+@router.get("/whoami-full")
+def whoami_full(current_user=Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "full_name": current_user.full_name,
+        "work_email": current_user.work_email,
+        "avatar_url": getattr(current_user, "avatar_url", None),
+        "role": current_user.role.value
+    }
+
+
 @router.post("/register")
 def register(user: UserRegister, db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == user.username).first():
@@ -60,6 +83,7 @@ def login(
     response: Response,
     db: Session = Depends(get_db)
 ):
+    print(f"DEBUG — received: username='{user.username}' password='{user.password}'")  # ← add this
     db_user = db.query(User).filter(User.username == user.username).first()
     if not db_user:
         raise HTTPException(status_code=400, detail="Invalid credentials")
