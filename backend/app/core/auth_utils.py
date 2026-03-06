@@ -12,6 +12,9 @@ from fastapi.security import OAuth2PasswordBearer
 from app.db.models import User
 import hmac
 import hashlib
+from cryptography.fernet import Fernet
+
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -64,6 +67,8 @@ def create_refresh_token():
     raw_token = secrets.token_urlsafe(64)
     hashed_token = hash_refresh_token(raw_token)
     return raw_token, hashed_token
+
+
 
 def get_current_user(
     token: str = Depends(oauth2_scheme),
