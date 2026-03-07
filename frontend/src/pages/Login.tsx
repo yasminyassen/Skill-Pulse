@@ -48,6 +48,15 @@ const Login: React.FC = () => {
   const [usernameFocused, setUsernameFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
 
+  // Show error from redirect (e.g. not_registered)
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get('error');
+    if (err === 'not_registered') {
+      setError('This GitHub account is not registered. Please create an account first.');
+    }
+  }, []);
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
@@ -61,7 +70,6 @@ const Login: React.FC = () => {
         localStorage.setItem('token', response.access_token);
       }
 
-      // Get user role and redirect accordingly
       const user = await whoami();
       setSuccess(`✓ Welcome back, ${user.username}! Redirecting...`);
 
@@ -430,7 +438,7 @@ const Login: React.FC = () => {
           </div>
 
           <button className="github-btn" type="button" onClick={async () => {
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/github`);
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/github?action=login`);
             const data = await res.json();
             window.location.href = data.url;
           }}>

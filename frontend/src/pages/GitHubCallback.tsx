@@ -32,10 +32,22 @@ const GitHubCallback: React.FC = () => {
     setStatus('success');
     setMessage('Signed in successfully! Redirecting...');
 
-    // Always go to role selection for new GitHub users
-    setTimeout(() => {
-      window.location.href = '/select-role';
-    }, 1000);
+    // Check user role — if already set, go to dashboard directly
+setTimeout(async () => {
+  try {
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/whoami`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const user = await res.json();
+
+    if (user.role === 'developer') window.location.href = '/dashboard/developer';
+    else if (user.role === 'manager') window.location.href = '/dashboard/manager';
+    else if (user.role === 'recruiter') window.location.href = '/dashboard/recruiter';
+    else window.location.href = '/select-role';
+  } catch {
+    window.location.href = '/select-role';
+  }
+}, 1000);
   }, []);
 
   return (
