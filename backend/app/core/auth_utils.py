@@ -8,12 +8,18 @@ from passlib.hash import argon2
 from app.core.config import settings
 import secrets
 from app.db.database import get_db
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.db.models import User
 import hmac
 import hashlib
+from cryptography.fernet import Fernet
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+
+http_bearer = HTTPBearer()
+
+def oauth2_scheme(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+    return credentials.credentials
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
@@ -26,7 +32,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
-    if expires_delta:
+    if expires_delta is not None:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
@@ -65,9 +71,12 @@ def create_refresh_token():
     hashed_token = hash_refresh_token(raw_token)
     return raw_token, hashed_token
 
+
+
 def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
     db: Session = Depends(get_db)):
+    token = credentials.credentials
     
     payload = decode_access_token(token)
 
