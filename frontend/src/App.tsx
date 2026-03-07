@@ -1,22 +1,18 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import Login from "./pages/Login";
-import DeveloperDashboard from "./pages/Dashboard/DeveloperDashboard";
-import ManagerDashboard from "./pages/Dashboard/ManagerDashboard";
-import RecruiterDashboard from "./pages/Dashboard/RecruiterDashboard";
-import NotFound from "./pages/NotFound";
-
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import Login from './pages/Login';
+import Register from './pages/register';
+import GitHubCallback from './pages/GitHubCallback';
+import RoleSelection from './pages/RoleSelection';
 function App() {
   return (
-    <BrowserRouter>
+    <Router>
       <Routes>
-        <Route path="/" element={<Navigate to="/login" />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/dashboard/developer" element={<DeveloperDashboard />} />
-        <Route path="/dashboard/manager" element={<ManagerDashboard />} />
-        <Route path="/dashboard/recruiter" element={<RecruiterDashboard />} />
-        <Route path="*" element={<NotFound />} />
+        <Route path="/" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+      <Route path="/auth/github/callback" element={<GitHubCallback />} />
+      <Route path="/select-role" element={<RoleSelection />} />
       </Routes>
-    </BrowserRouter>
+    </Router>
   );
 }
 
