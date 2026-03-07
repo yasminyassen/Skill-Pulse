@@ -129,7 +129,7 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
         key="refresh_token",
         value=raw_refresh_token,
         httponly=True,
-        secure=False,  # True in production with HTTPS
+       secure=settings.ENVIRONMENT == "production",
         samesite="lax",
         expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )

@@ -119,7 +119,7 @@ def login(
         key="refresh_token",
         value=raw_refresh_token,
         httponly=True,
-        secure=True,        
+        secure=settings.ENVIRONMENT == "production",        
         samesite="strict",
         expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
@@ -200,7 +200,7 @@ def refresh(
         key="refresh_token",
         value=new_raw_refresh_token,
         httponly=True,
-        secure=True,
+        secure=settings.ENVIRONMENT == "production",
         samesite="strict",
         expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
@@ -231,7 +231,7 @@ def logout(
     response.delete_cookie(
         key="refresh_token",
         httponly=True,
-        secure=True,
+        secure=settings.ENVIRONMENT == "production",
         samesite="strict"
     )
 
