@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import User, RefreshToken, UserRole
-from app.core.auth_utils import create_access_token, create_refresh_token
+from app.core.auth_utils import create_access_token, create_refresh_token, encrypt_github_token
 from app.core.config import settings
 from datetime import datetime, timedelta, timezone
 import httpx
@@ -55,7 +55,6 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
         )
         github_user = user_res.json()
 
-        # Get primary email if not public
         email_res = await client.get(
             GITHUB_EMAIL_URL,
             headers={"Authorization": f"Bearer {github_access_token}"}
@@ -78,11 +77,13 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
     if not work_email:
         raise HTTPException(status_code=400, detail="No verified email found on GitHub account")
 
+    # Encrypt token before storing
+    encrypted_token = encrypt_github_token(github_access_token)
+
     # 3. Find or create user
     db_user = db.query(User).filter(User.github_id == github_id).first()
 
     if not db_user:
-        # Check if username or email already taken
         if db.query(User).filter(User.username == username).first():
             username = f"{username}_gh"
         if db.query(User).filter(User.work_email == work_email).first():
@@ -93,13 +94,18 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
             username=username,
             full_name=full_name,
             work_email=work_email,
-            hashed_password="",  # no password for OAuth users
-            role=UserRole.developer,  # default role, can be changed later
+            hashed_password="",
+            role=UserRole.developer,
             avatar_url=avatar_url,
+            github_access_token=encrypted_token,  # ✅ encrypted
         )
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
+    else:
+        # Update token on every login
+        db_user.github_access_token = encrypted_token
+        db.commit()
 
     # 4. Create JWT tokens
     access_token = create_access_token(
@@ -128,7 +134,7 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
         expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
 
-    # 6. Redirect to frontend with access token
-    frontend_url = f"http://localhost:5173/auth/github/callback?token={access_token}&role={db_user.role.value}"
+    # 6. Redirect to frontend
+    frontend_url = f"http://localhost:5173/auth/github/callback?token={access_token}"
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=frontend_url)

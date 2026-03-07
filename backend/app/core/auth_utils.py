@@ -14,8 +14,6 @@ import hmac
 import hashlib
 from cryptography.fernet import Fernet
 
-
-
 http_bearer = HTTPBearer()
 
 def oauth2_scheme(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
@@ -24,7 +22,6 @@ def oauth2_scheme(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 def hash_password(password: str) -> str:
-    # Use argon2 for password hashing
     return pwd_context.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -43,41 +40,45 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
         algorithm=settings.ALGORITHM
     )
     return encoded_jwt
-# JWT verification
+
 def decode_access_token(token: str):
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
     except jwt.JWTError:
         return None
-    
-    
-
 
 def hash_refresh_token(raw_token: str) -> str:
-    """
-    Use HMAC-SHA256 instead of argon2.
-    Refresh tokens are already high entropy.
-    """
     return hmac.new(
         settings.SECRET_KEY.encode(),
         raw_token.encode(),
         hashlib.sha256
     ).hexdigest()
-    
 
 def create_refresh_token():
     raw_token = secrets.token_urlsafe(64)
     hashed_token = hash_refresh_token(raw_token)
     return raw_token, hashed_token
 
+# ── GitHub Token Encryption ───────────────────────────────────────────────────
 
+def encrypt_github_token(token: str) -> str:
+    """Encrypt GitHub access token before storing in DB."""
+    f = Fernet(settings.ENCRYPTION_KEY.encode())
+    return f.encrypt(token.encode()).decode()
+
+def decrypt_github_token(encrypted_token: str) -> str:
+    """Decrypt stored GitHub access token."""
+    f = Fernet(settings.ENCRYPTION_KEY.encode())
+    return f.decrypt(encrypted_token.encode()).decode()
+
+# ── Auth Dependencies ─────────────────────────────────────────────────────────
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
     db: Session = Depends(get_db)):
     token = credentials.credentials
-    
+
     payload = decode_access_token(token)
 
     if payload is None:

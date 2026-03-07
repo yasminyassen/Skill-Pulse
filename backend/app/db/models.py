@@ -22,6 +22,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     role = Column(Enum(UserRole), default=UserRole.developer)
     avatar_url = Column(String, nullable=True)
+    github_access_token = Column(String, nullable=True)  # stored encrypted
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     repositories = relationship("Repository", back_populates="owner")
@@ -95,15 +96,6 @@ class SkillScore(Base):
     overall_score = Column(Float)
 
     analysis_run = relationship("AnalysisRun", back_populates="skill_scores")
-    
-# class RefreshToken(Base):
-#     __tablename__ = "refresh_tokens"
-
-#     id = Column(Integer, primary_key=True, index=True)
-#     user_id = Column(Integer, ForeignKey("users.id"))
-#     token = Column(String, unique=True)  # This now stores a hash, not the raw token
-#     expires_at = Column(DateTime(timezone=True), nullable=False)
-#     created_at = Column(DateTime, default=datetime.utcnow)
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
