@@ -71,6 +71,15 @@ const Register: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  // Show error from redirect (e.g. already_registered)
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get('error');
+    if (err === 'already_registered') {
+      setError('This GitHub account is already registered. Please sign in instead.');
+    }
+  }, []);
+
   const update = (field: string, value: string) => setForm(prev => ({ ...prev, [field]: value }));
 
   const handleGitHubLogin = async () => {
@@ -78,7 +87,7 @@ const Register: React.FC = () => {
     setGithubLoading(true);
     try {
       const apiUrl = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
-      const res = await fetch(`${apiUrl}/auth/github`);
+      const res = await fetch(`${apiUrl}/auth/github?action=register`);
       if (!res.ok) throw new Error("Server error");
       const data = await res.json();
       if (data.url) {
@@ -385,7 +394,6 @@ const Register: React.FC = () => {
         </div>
 
         <div className="reg-card">
-          {/* ✅ FIXED: Clean GitHub button — no alerts, proper error handling */}
           <button
             className="github-btn"
             type="button"

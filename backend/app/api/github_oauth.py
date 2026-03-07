@@ -14,19 +14,20 @@ GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_EMAIL_URL = "https://api.github.com/user/emails"
 
 @router.get("/github")
-def github_login():
+def github_login(action: str = "login"):
     """Redirect URL to send user to GitHub OAuth"""
     github_auth_url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={settings.GITHUB_CLIENT_ID}"
         f"&redirect_uri={settings.GITHUB_REDIRECT_URI}"
         f"&scope=user:email"
+        f"&state={action}"
     )
     return {"url": github_auth_url}
 
 
 @router.get("/github/callback")
-async def github_callback(code: str, response: Response, db: Session = Depends(get_db)):
+async def github_callback(code: str, state: str = "login", response: Response = None, db: Session = Depends(get_db)):
     """Exchange GitHub code for access token and log user in"""
 
     # 1. Exchange code for GitHub access token
@@ -83,6 +84,17 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
     # 3. Find or create user
     db_user = db.query(User).filter(User.github_id == github_id).first()
 
+    from fastapi.responses import RedirectResponse
+
+    # Register flow: reject if already registered
+    if state == "register":
+        if db_user:
+            return RedirectResponse(url="http://localhost:5173/register?error=already_registered")
+    # Login flow: reject if not registered
+    else:
+        if not db_user:
+            return RedirectResponse(url="http://localhost:5173?error=not_registered")
+
     if not db_user:
         if db.query(User).filter(User.username == username).first():
             username = f"{username}_gh"
@@ -97,7 +109,7 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
             hashed_password="",
             role=UserRole.developer,
             avatar_url=avatar_url,
-            github_access_token=encrypted_token,  # ✅ encrypted
+            github_access_token=encrypted_token,
         )
         db.add(db_user)
         db.commit()
@@ -129,12 +141,11 @@ async def github_callback(code: str, response: Response, db: Session = Depends(g
         key="refresh_token",
         value=raw_refresh_token,
         httponly=True,
-       secure=settings.ENVIRONMENT == "production",
+        secure=settings.ENVIRONMENT == "production",
         samesite="lax",
         expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
 
     # 6. Redirect to frontend
     frontend_url = f"http://localhost:5173/auth/github/callback?token={access_token}"
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url=frontend_url)
