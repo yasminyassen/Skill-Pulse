@@ -20,7 +20,7 @@ class User(Base):
     full_name = Column(String, nullable=False) 
     work_email = Column(String, unique=True, index=True, nullable=False) 
     hashed_password = Column(String, nullable=False)
-    role = Column(Enum(UserRole), default=UserRole.developer)
+    role = Column(Enum(UserRole), nullable=True, default=None)
     avatar_url = Column(String, nullable=True)
     github_access_token = Column(String, nullable=True)  # stored encrypted
     created_at = Column(DateTime(timezone=True), server_default=func.now())

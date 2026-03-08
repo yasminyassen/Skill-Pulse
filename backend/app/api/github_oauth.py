@@ -107,7 +107,7 @@ async def github_callback(code: str, state: str = "login", response: Response = 
             full_name=full_name,
             work_email=work_email,
             hashed_password="",
-            role=UserRole.developer,
+            role=None,
             avatar_url=avatar_url,
             github_access_token=encrypted_token,
         )
@@ -121,7 +121,7 @@ async def github_callback(code: str, state: str = "login", response: Response = 
 
     # 4. Create JWT tokens
     access_token = create_access_token(
-        data={"sub": str(db_user.id), "role": db_user.role.value},
+        data={"sub": str(db_user.id), "role": db_user.role.value if db_user.role else None},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
