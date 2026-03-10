@@ -245,12 +245,12 @@ const Login: React.FC = () => {
 
               <form className="lg-form" onSubmit={handleSubmit}>
                 <div className="lg-field">
-                  <label className="lg-field-label">Username</label>
+                  <label className="lg-field-label">Username or Email</label>
                   <div className={`lg-input-wrap ${usernameFocused ? 'focused' : ''}`}>
                     <span className="lg-input-icon">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
                     </span>
-                    <input className="lg-input-field" type="text" placeholder="your_username"
+                    <input className="lg-input-field" type="text" placeholder="Enter your username or email"
                       value={username}
                       onChange={e => setUsername(e.target.value)}
                       onFocus={() => setUsernameFocused(true)}
@@ -293,7 +293,7 @@ const Login: React.FC = () => {
 
               <div className="lg-footer">
                 Don't have an account?{' '}
-                <a href="/register" onClick={e => { e.preventDefault(); window.location.href = '/register'; }}>
+                <a href="/register" onClick={e => { e.preventDefault(); window.location.href = '/'; }}>
                   Create your profile
                 </a>
               </div>

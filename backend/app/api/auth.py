@@ -1,3 +1,5 @@
+from operator import or_
+import re
 from fastapi import APIRouter, Depends, HTTPException, Response, Cookie , status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
@@ -11,16 +13,35 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 from slowapi.util import get_remote_address
 from app.core.rate_limiter import limiter
+from pydantic import BaseModel, EmailStr, Field, validator
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 class UserRegister(BaseModel):
-    username: str
-    full_name: str
+    username: str = Field(..., min_length=3, max_length=20, pattern=r"^[a-zA-Z0-9_-]+$")
+    full_name: str = Field(..., min_length=3, max_length=100)
     work_email: EmailStr
     role: UserRole
-    password: str
     
+    password: str = Field(..., min_length=8)
+
+    
+    @validator('full_name')
+    def name_must_not_be_empty(cls, v):
+        if not v.strip():
+            raise ValueError('Full name cannot be empty spaces')
+        return v.title()
+    @validator('password')
+    def password_strength(cls, v):
+        if not re.search(r"\d", v):
+            raise ValueError('Password must contain at least one digit (0-9)')
+        if not re.search(r"[A-Z]", v):
+            raise ValueError('Password must contain at least one uppercase letter (A-Z)')
+        if not re.search(r"[a-z]", v):
+            raise ValueError('Password must contain at least one lowercase letter (a-z)')
+        if not re.search(r"[ !@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]", v):
+            raise ValueError('Password must contain at least one special character (@#$%...)')
+        return v
 class UserLogin(BaseModel):
     username: str
     password: str
@@ -48,7 +69,7 @@ def whoami_full(current_user=Depends(get_current_user)):
         "full_name": current_user.full_name,
         "work_email": current_user.work_email,
         "avatar_url": getattr(current_user, "avatar_url", None),
-        "role": current_user.role.value
+        "role": current_user.role.value if current_user.role else None 
     }
 
 
@@ -89,12 +110,11 @@ def login(
     response: Response,
     db: Session = Depends(get_db)
 ):
-    print(f"DEBUG — received: username='{user.username}' password='{user.password}'")  # ← add this
-    db_user = db.query(User).filter(User.username == user.username).first()
-    if not db_user:
-        raise HTTPException(status_code=400, detail="Invalid credentials")
-
-    if not verify_password(user.password, db_user.hashed_password):
+    db_user = db.query(User).filter(
+        or_(User.username == user.username, User.work_email.ilike( user.username))
+    ).first()
+    
+    if not db_user or not verify_password(user.password, db_user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credentials")
 
     access_token = create_access_token(
@@ -249,7 +269,7 @@ def who_am_i(current_user = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "username": current_user.username,
-        "role": current_user.role.value
+        "role": current_user.role.value if current_user.role else None
     }
     
     

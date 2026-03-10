@@ -91,13 +91,6 @@ async def github_callback(request: Request, code: str, state: str = "login", res
     from fastapi.responses import RedirectResponse
 
     # Register flow: reject if already registered
-    if state == "register":
-        if db_user:
-            return RedirectResponse(url="http://localhost:5173/register?error=already_registered")
-    # Login flow: reject if not registered
-    else:
-        if not db_user:
-            return RedirectResponse(url="http://localhost:5173?error=not_registered")
 
     if not db_user:
         if db.query(User).filter(User.username == username).first():

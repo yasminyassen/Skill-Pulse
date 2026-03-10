@@ -48,4 +48,4 @@ backend/venv/
 backend/.env
 
 Thumbs.db
-
+gitleaks.exe
