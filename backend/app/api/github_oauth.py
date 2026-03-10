@@ -6,6 +6,8 @@ from app.core.auth_utils import create_access_token, create_refresh_token, encry
 from app.core.config import settings
 from datetime import datetime, timedelta, timezone
 import httpx
+from fastapi import Request
+from app.core.rate_limiter import limiter
 
 router = APIRouter(prefix="/auth", tags=["github"])
 
@@ -14,7 +16,8 @@ GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_EMAIL_URL = "https://api.github.com/user/emails"
 
 @router.get("/github")
-def github_login(action: str = "login"):
+@limiter.limit("5/minute")
+def github_login(request: Request, action: str = "login"):
     """Redirect URL to send user to GitHub OAuth"""
     github_auth_url = (
         f"https://github.com/login/oauth/authorize"
@@ -27,7 +30,8 @@ def github_login(action: str = "login"):
 
 
 @router.get("/github/callback")
-async def github_callback(code: str, state: str = "login", response: Response = None, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+async def github_callback(request: Request, code: str, state: str = "login", response: Response = None, db: Session = Depends(get_db)):
     """Exchange GitHub code for access token and log user in"""
 
     # 1. Exchange code for GitHub access token

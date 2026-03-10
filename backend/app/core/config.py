@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     # Encryption for GitHub tokens
     ENCRYPTION_KEY: str = "V4b5gxkYREWRMc3NDzwbPzypjCtasGVSKzdNiSn8xSQ="
+    GITLEAKS_PATH: str = "C:\\Users\\AD\\Downloads\\gitleaks_8.29.1_windows_x64\\gitleaks.exe"
 
     class Config:
         env_file = ".env"

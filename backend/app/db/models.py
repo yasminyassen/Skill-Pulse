@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, JSON, Enum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, JSON, Enum,Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.database import Base
@@ -35,7 +35,7 @@ class Repository(Base):
     name = Column(String)
     full_name = Column(String)
     url = Column(String)
-    is_private = Column(Integer, default=0)
+    is_private = Column(Boolean, default=False)
     owner_id = Column(Integer, ForeignKey("users.id"))
     connected_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -75,11 +75,14 @@ class SecurityFinding(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"))
+    tool = Column(String)
+    rule = Column(String)
+    cwe = Column(String)
     file_path = Column(String)
-    owasp_category = Column(String)
     severity = Column(String)
     description = Column(Text)
     line_number = Column(Integer, nullable=True)
+    owasp_category = Column(String)
 
     analysis_run = relationship("AnalysisRun", back_populates="security_findings")
 

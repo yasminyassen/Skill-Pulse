@@ -8,6 +8,9 @@ from passlib.hash import argon2
 from app.db.models import UserRole
 from app.core.config import settings
 from datetime import datetime, timedelta, timezone
+from fastapi import Request
+from slowapi.util import get_remote_address
+from app.core.rate_limiter import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -50,7 +53,8 @@ def whoami_full(current_user=Depends(get_current_user)):
 
 
 @router.post("/register")
-def register(user: UserRegister, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def register(request: Request, user: UserRegister, db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == user.username).first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -78,7 +82,9 @@ def register(user: UserRegister, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
+@limiter.limit("5/minute")
 def login(
+    request: Request,
     user: UserLogin,
     response: Response,
     db: Session = Depends(get_db)
