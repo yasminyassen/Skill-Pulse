@@ -5,6 +5,7 @@ Revises: 30fd6911fbe9
 Create Date: 2026-03-03 00:18:39.824657
 
 """
+#upgrade migrations
 from typing import Sequence, Union
 
 from alembic import op
