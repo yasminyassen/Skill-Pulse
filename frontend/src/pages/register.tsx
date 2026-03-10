@@ -39,13 +39,37 @@ const Register: React.FC = () => {
       setGithubLoading(false);
     }
   };
-
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
-    if (form.password !== form.confirm_password) { setError("Passwords don't match."); return; }
-    if (!form.role) { setError("Please select an account type."); return; }
-    if (form.password.length < 8) { setError("Password must be at least 8 characters."); return; }
+
+    if (form.username.length < 3) {
+      setError("Username must be at least 3 characters.");
+      return;
+    }
+
+    if (form.full_name.trim().length < 3) {
+      setError("Please enter a valid full name.");
+      return;
+    }
+
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+
+    if (!passwordRegex.test(form.password)) {
+      setError("Password must be 8+ characters, include uppercase, lowercase, a number and a special character.");
+      return;
+    }
+
+    if (form.password !== form.confirm_password) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    if (!form.role) {
+      setError("Please select your primary role.");
+      return;
+    }
+
     setLoading(true);
     try {
       await register({
@@ -56,8 +80,24 @@ const Register: React.FC = () => {
         password: form.password,
       });
       setSuccess(true);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail ?? 'Registration failed. Please try again.');
+    } catch (err: unknown) {
+      const axiosError = err as {
+        response?: {
+          data?: {
+            detail?: string | Array<{ msg: string }>
+          }
+        }
+      };
+
+      const detail = axiosError.response?.data?.detail;
+
+      if (Array.isArray(detail)) {
+        setError(detail[0].msg);
+      } else if (typeof detail === 'string') {
+        setError(detail);
+      } else {
+        setError('Registration failed. Please check your connection.');
+      }
     } finally {
       setLoading(false);
     }
@@ -123,7 +163,7 @@ const Register: React.FC = () => {
           </div>
           <div className="sp-success-title">Account created!</div>
           <div className="sp-success-sub">Welcome to SkillPulse.<br/>Sign in to start your skill analysis.</div>
-          <button className="sp-signin-btn" onClick={() => window.location.href = '/'}>
+          <button className="sp-signin-btn" onClick={() => window.location.href = '/login'}>
             Sign in now
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M5 12h14M12 5l7 7-7 7"/>
@@ -545,7 +585,7 @@ const Register: React.FC = () => {
               </form>
 
               <div className="sp-signin">
-                Already have an account? <a href="/" onClick={e => { e.preventDefault(); window.location.href = '/'; }}>Sign in</a>
+                Already have an account? <a href="/" onClick={e => { e.preventDefault(); window.location.href = '/login'; }}>Sign in</a>
               </div>
 
             </div>

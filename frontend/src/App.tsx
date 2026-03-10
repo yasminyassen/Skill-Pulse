@@ -9,8 +9,8 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/" element={<Register />} />
+        <Route path="/login" element={<Login />} />
         <Route path="/auth/github/callback" element={<GitHubCallback />} />
         <Route path="/select-role" element={<RoleSelection />} />
         <Route path="*" element={<NotFound />} />
