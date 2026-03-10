@@ -2,67 +2,6 @@ import React, { useState } from "react";
 import type { FormEvent } from "react";
 import { register } from "../api/auth";
 
-const GitHubIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
-  </svg>
-);
-
-const ShieldIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-    <path d="m9 12 2 2 4-4"/>
-  </svg>
-);
-
-const NameIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-  </svg>
-);
-
-const UserIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
-  </svg>
-);
-
-const EnvelopeIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="2" y="4" width="20" height="16" rx="2"/>
-    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
-  </svg>
-);
-
-const LockIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-  </svg>
-);
-
-const ArrowRightIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M5 12h14M12 5l7 7-7 7"/>
-  </svg>
-);
-
-const SkillPulseLogo = () => (
-  <svg width="32" height="28" viewBox="0 0 36 32" fill="none">
-    <rect x="0" y="8" width="4" height="16" rx="2" fill="#6366f1"/>
-    <rect x="6" y="4" width="4" height="24" rx="2" fill="#6366f1"/>
-    <rect x="12" y="0" width="4" height="32" rx="2" fill="#6366f1"/>
-    <rect x="18" y="4" width="4" height="24" rx="2" fill="#818cf8"/>
-    <rect x="24" y="8" width="4" height="16" rx="2" fill="#a5b4fc"/>
-    <rect x="30" y="12" width="4" height="8" rx="2" fill="#c7d2fe"/>
-  </svg>
-);
-
-const roles = [
-  { value: 'developer', label: 'Developer', desc: 'Personal growth & analysis' },
-  { value: 'manager',   label: 'Engineering Manager', desc: 'Team intelligence & evaluation' },
-  { value: 'recruiter', label: 'Technical Recruiter', desc: 'Candidate screening & insights' },
-];
-
 const Register: React.FC = () => {
   const [form, setForm] = useState({ username: '', full_name: '', work_email: '', role: '', password: '', confirm_password: '' });
   const [focused, setFocused] = useState<string | null>(null);
@@ -71,7 +10,6 @@ const Register: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // Show error from redirect (e.g. already_registered)
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const err = params.get('error');
@@ -80,7 +18,8 @@ const Register: React.FC = () => {
     }
   }, []);
 
-  const update = (field: string, value: string) => setForm(prev => ({ ...prev, [field]: value }));
+  const update = (field: string, value: string) =>
+    setForm(prev => ({ ...prev, [field]: value }));
 
   const handleGitHubLogin = async () => {
     setError(null);
@@ -95,7 +34,7 @@ const Register: React.FC = () => {
       } else {
         throw new Error("No redirect URL received");
       }
-    } catch (err: any) {
+    } catch {
       setError("GitHub login failed. Please try again.");
       setGithubLoading(false);
     }
@@ -109,7 +48,13 @@ const Register: React.FC = () => {
     if (form.password.length < 8) { setError("Password must be at least 8 characters."); return; }
     setLoading(true);
     try {
-      await register({ username: form.username, full_name: form.full_name, work_email: form.work_email, role: form.role, password: form.password });
+      await register({
+        username: form.username,
+        full_name: form.full_name,
+        work_email: form.work_email,
+        role: form.role,
+        password: form.password,
+      });
       setSuccess(true);
     } catch (err: any) {
       setError(err?.response?.data?.detail ?? 'Registration failed. Please try again.');
@@ -118,413 +63,495 @@ const Register: React.FC = () => {
     }
   };
 
+  // ── Success screen ──────────────────────────────────────────────────
   if (success) return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        .reg-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(160deg, #eef0f9 0%, #f5f6fb 50%, #ece8f8 100%); font-family: 'DM Sans', sans-serif; padding: 24px; }
-        .success-card { background: white; border-radius: 24px; padding: 56px 48px; text-align: center; max-width: 440px; width: 100%; box-shadow: 0 8px 32px rgba(99,102,241,0.08); animation: popIn 0.4s cubic-bezier(0.22,1,0.36,1) both; }
+        body { background: #0f0c1a; }
+        .sp-success-page {
+          min-height: 100vh; display: flex; align-items: center; justify-content: center;
+          background: #0f0c1a; font-family: 'DM Sans', sans-serif; padding: 24px;
+          position: relative; overflow: hidden;
+        }
+        .sp-orb {
+          position: fixed; border-radius: 50%;
+          background: radial-gradient(circle, rgba(124,58,237,0.22) 0%, transparent 65%);
+          width: 700px; height: 700px; top: -200px; left: -150px; pointer-events: none;
+        }
+        .sp-grid {
+          position: fixed; inset: 0;
+          background-image: linear-gradient(rgba(167,139,250,0.04) 1px, transparent 1px),
+                            linear-gradient(90deg, rgba(167,139,250,0.04) 1px, transparent 1px);
+          background-size: 48px 48px; pointer-events: none;
+        }
+        .sp-success-card {
+          background: rgba(255,255,255,0.04); border: 1px solid rgba(167,139,250,0.15);
+          border-radius: 24px; padding: 56px 48px; text-align: center;
+          max-width: 420px; width: 100%; position: relative; z-index: 2;
+          animation: popIn 0.4s cubic-bezier(0.22,1,0.36,1) both;
+          backdrop-filter: blur(20px);
+        }
         @keyframes popIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        .success-icon { width: 64px; height: 64px; background: #f0fdf4; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; }
-        .success-title { font-size: 22px; font-weight: 700; color: #111827; margin-bottom: 8px; }
-        .success-sub { font-size: 14px; color: #6b7280; margin-bottom: 28px; line-height: 1.6; }
-        .signin-btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 28px; background: #6366f1; color: white; border: none; border-radius: 12px; font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-        .signin-btn:hover { background: #4f46e5; transform: translateY(-1px); }
+        .sp-success-icon {
+          width: 64px; height: 64px; background: rgba(167,139,250,0.1);
+          border-radius: 50%; display: flex; align-items: center; justify-content: center;
+          margin: 0 auto 20px; border: 1px solid rgba(167,139,250,0.2);
+        }
+        .sp-success-title { font-family: 'Syne', sans-serif; font-size: 24px; font-weight: 800; color: white; margin-bottom: 8px; letter-spacing: -0.5px; }
+        .sp-success-sub { font-size: 14px; color: rgba(196,181,253,0.5); margin-bottom: 28px; line-height: 1.7; }
+        .sp-signin-btn {
+          display: inline-flex; align-items: center; gap: 8px;
+          padding: 13px 28px;
+          background: linear-gradient(135deg, #7c3aed, #a855f7);
+          color: white; border: none; border-radius: 13px;
+          font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600;
+          cursor: pointer; transition: all 0.2s;
+          box-shadow: 0 6px 20px rgba(124,58,237,0.3);
+        }
+        .sp-signin-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(124,58,237,0.4); }
       `}</style>
-      <div className="reg-page">
-        <div className="success-card">
-          <div className="success-icon">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <div className="sp-success-page">
+        <div className="sp-orb" />
+        <div className="sp-grid" />
+        <div className="sp-success-card">
+          <div className="sp-success-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#c4b5fd" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
             </svg>
           </div>
-          <div className="success-title">Account created!</div>
-          <div className="success-sub">Welcome to SkillPulse. Your account is ready.<br/>Sign in to start your skill analysis.</div>
-          <button className="signin-btn" onClick={() => window.location.href = '/'}>
-            Sign in now <ArrowRightIcon />
+          <div className="sp-success-title">Account created!</div>
+          <div className="sp-success-sub">Welcome to SkillPulse.<br/>Sign in to start your skill analysis.</div>
+          <button className="sp-signin-btn" onClick={() => window.location.href = '/'}>
+            Sign in now
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
           </button>
         </div>
       </div>
     </>
   );
 
+  // ── Main register page ──────────────────────────────────────────────
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #0f0c1a; overflow: hidden; }
 
-        .reg-page {
-          min-height: 100vh;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          background: linear-gradient(160deg, #eef0f9 0%, #f5f6fb 50%, #ece8f8 100%);
-          padding: 48px 16px;
-          font-family: 'DM Sans', sans-serif;
-          position: relative;
-          overflow: hidden;
-        }
+        /* ── Layout ── */
+        .sp-reg { font-family: 'DM Sans', sans-serif; background: #0f0c1a; min-height: 100vh; display: flex; overflow: hidden; position: relative; }
 
-        .reg-page::before {
-          content: ''; position: absolute; top: -100px; right: -100px;
-          width: 380px; height: 380px;
-          background: radial-gradient(circle, rgba(99,102,241,0.07) 0%, transparent 70%);
-          border-radius: 50%; pointer-events: none;
-        }
+        /* Orbs */
+        .sp-orb1 { position: fixed; border-radius: 50%; z-index: 0; width: 700px; height: 700px; background: radial-gradient(circle, rgba(124,58,237,0.22) 0%, transparent 65%); top: -200px; left: -150px; animation: spDrift1 9s ease-in-out infinite alternate; }
+        .sp-orb2 { position: fixed; border-radius: 50%; z-index: 0; width: 500px; height: 500px; background: radial-gradient(circle, rgba(244,114,182,0.14) 0%, transparent 65%); bottom: -120px; right: 380px; animation: spDrift2 12s ease-in-out infinite alternate; }
+        .sp-orb3 { position: fixed; border-radius: 50%; z-index: 0; width: 320px; height: 320px; background: radial-gradient(circle, rgba(103,232,249,0.1) 0%, transparent 65%); top: 35%; right: -60px; animation: spDrift1 7s ease-in-out infinite alternate-reverse; }
+        @keyframes spDrift1 { from{transform:translate(0,0) scale(1)} to{transform:translate(40px,30px) scale(1.08)} }
+        @keyframes spDrift2 { from{transform:translate(0,0)} to{transform:translate(-30px,-20px) scale(1.1)} }
 
-        .reg-page::after {
-          content: ''; position: absolute; bottom: -60px; left: -60px;
-          width: 300px; height: 300px;
-          background: radial-gradient(circle, rgba(139,92,246,0.05) 0%, transparent 70%);
-          border-radius: 50%; pointer-events: none;
-        }
+        /* Grid */
+        .sp-grid { position: fixed; inset: 0; z-index: 1; background-image: linear-gradient(rgba(167,139,250,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(167,139,250,0.04) 1px, transparent 1px); background-size: 48px 48px; pointer-events: none; }
 
-        .reg-hero {
-          text-align: center;
-          margin-bottom: 32px;
-          position: relative; z-index: 1;
-        }
+        /* Two-column layout */
+        .sp-layout { position: relative; z-index: 2; display: grid; grid-template-columns: 1fr 560px; width: 100%; height: 100vh; overflow: hidden; }
 
-        .reg-logo-row {
-          display: flex; align-items: center; justify-content: center; gap: 8px;
-          margin-bottom: 20px;
-        }
+        /* ── LEFT ── */
+        .sp-left { display: flex; flex-direction: column; justify-content: space-between; padding: 36px 52px; overflow: hidden; }
 
-        .reg-logo-name {
-          font-size: 20px; font-weight: 700; color: #1e1b4b; letter-spacing: -0.3px;
-        }
+        /* Logo */
+        .sp-logo { display: flex; align-items: center; gap: 10px; }
+        .sp-logo-bars { display: flex; gap: 3px; align-items: flex-end; }
+        .sp-logo-bars span { display: block; width: 4px; border-radius: 2px; }
+        .sp-logo-name { font-family: 'Syne', sans-serif; font-size: 19px; font-weight: 800; color: white; letter-spacing: -0.3px; }
+        .sp-logo-name em { font-style: normal; color: #c4b5fd; }
 
-        .reg-logo-name span { color: #6366f1; }
+        /* Hero */
+        .sp-hero { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 20px 0; }
+        .sp-eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px; background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.22); border-radius: 100px; font-size: 10px; font-weight: 700; color: #c4b5fd; letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 16px; width: fit-content; }
+        .sp-pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: #f472b6; animation: spBlink 2s ease infinite; }
+        @keyframes spBlink { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.35;transform:scale(0.65)} }
+        .sp-hero-title { font-family: 'Syne', sans-serif; font-size: 42px; font-weight: 800; color: white; line-height: 1.08; letter-spacing: -2px; margin-bottom: 12px; }
+        .sp-grad { background: linear-gradient(135deg, #c4b5fd, #f472b6, #67e8f9, #a78bfa, #c4b5fd); background-size: 300%; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: spGrad 5s ease infinite; }
+        @keyframes spGrad { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
+        .sp-hero-sub { font-size: 13.5px; color: rgba(196,181,253,0.5); line-height: 1.65; max-width: 380px; font-weight: 300; margin-bottom: 0; }
 
-        .reg-title {
-          font-size: 32px; font-weight: 700; color: #111827;
-          letter-spacing: -0.6px; margin-bottom: 10px;
-        }
+        /* Feature cards */
+        .sp-features { display: flex; flex-direction: column; gap: 8px; margin: 18px 0 0 0; }
+        .sp-feat { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: rgba(167,139,250,0.05); border: 1px solid rgba(167,139,250,0.1); border-radius: 12px; transition: all 0.2s; }
+        .sp-feat:hover { background: rgba(167,139,250,0.09); border-color: rgba(167,139,250,0.2); }
+        .sp-feat-icon { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .sp-feat-label { font-size: 12.5px; font-weight: 700; color: rgba(233,213,255,0.8); margin-bottom: 1px; letter-spacing: -0.2px; }
+        .sp-feat-desc { font-size: 11px; color: rgba(167,139,250,0.4); font-weight: 300; line-height: 1.4; }
 
-        .reg-subtitle {
-          font-size: 15px; color: #6b7280; line-height: 1.6; max-width: 360px; margin: 0 auto;
-        }
+        /* Quote */
+        .sp-quote-wrap { position: relative; margin-top: 20px; }
+        .sp-quote-mark { font-family: 'Syne', sans-serif; font-size: 90px; font-weight: 800; line-height: 0.7; background: linear-gradient(135deg, #c4b5fd, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; opacity: 0.35; position: absolute; top: -12px; left: -6px; pointer-events: none; animation: spGrad 5s ease infinite; background-size: 300%; }
+        .sp-quote-inner { padding: 20px 22px 18px 22px; background: rgba(167,139,250,0.07); border: 1px solid rgba(167,139,250,0.15); border-radius: 18px; position: relative; overflow: hidden; }
+        .sp-quote-inner::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: linear-gradient(180deg, #c4b5fd, #f472b6, #67e8f9); border-radius: 3px; }
+        .sp-quote-inner::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(196,181,253,0.05) 0%, transparent 60%); pointer-events: none; }
+        .sp-quote-text { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: white; line-height: 1.25; letter-spacing: -0.8px; margin-bottom: 8px; position: relative; z-index: 1; }
+        .sp-quote-story { color: #c4b5fd; -webkit-text-fill-color: #c4b5fd; }
+        .sp-quote-sub { font-size: 12px; color: rgba(196,181,253,0.45); font-weight: 300; line-height: 1.6; position: relative; z-index: 1; }
 
-        .reg-card {
-          width: 100%; max-width: 520px;
-          background: #ffffff;
-          border-radius: 24px;
-          padding: 36px 40px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 8px 32px rgba(99,102,241,0.08);
-          border: 1px solid rgba(255,255,255,0.8);
-          position: relative; z-index: 1;
-          animation: slideUp 0.5s cubic-bezier(0.22,1,0.36,1) both;
-        }
+        /* Pills hidden */
+        .sp-pills { display: none; }
 
-        @keyframes slideUp {
-          from { opacity: 0; transform: translateY(20px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
+        /* ── RIGHT ── */
+        .sp-right { display: flex; align-items: center; justify-content: center; padding: 24px 36px; border-left: 1px solid rgba(167,139,250,0.1); background: rgba(255,255,255,0.022); backdrop-filter: blur(28px); height: 100vh; overflow: hidden; }
+        .sp-card { width: 100%; }
 
-        .github-btn {
-          width: 100%;
-          display: flex; align-items: center; justify-content: center; gap: 10px;
-          padding: 14px 20px;
-          background: #0f172a; color: #ffffff;
-          border: none; border-radius: 12px;
-          font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600;
-          cursor: pointer; transition: all 0.2s;
-          position: relative; overflow: hidden;
-        }
+        /* Card head */
+        .sp-card-head { margin-bottom: 16px; height: 70px; display: flex; flex-direction: column; justify-content: flex-start; }
+        .sp-card-title { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: white; letter-spacing: -0.8px; margin-bottom: 4px; line-height: 1.2; }
+        .sp-card-sub { font-size: 12px; color: rgba(196,181,253,0.45); font-weight: 300; }
 
-        .github-btn::after {
-          content: ''; position: absolute; inset: 0;
-          background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%);
-        }
+        /* GitHub btn */
+        .sp-gh-btn { width: 100%; height: 50px; display: flex; align-items: center; justify-content: center; gap: 10px; background: linear-gradient(135deg, #7c3aed, #a855f7, #ec4899); background-size: 200%; border: none; border-radius: 14px; font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600; color: white; cursor: pointer; transition: all 0.3s; box-shadow: 0 6px 22px rgba(124,58,237,0.3); margin-bottom: 8px; position: relative; overflow: hidden; }
+        .sp-gh-btn::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent 60%); }
+        .sp-gh-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(168,85,247,0.4); }
+        .sp-gh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-        .github-btn:hover:not(:disabled) { background: #1e293b; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(15,23,42,0.3); }
-        .github-btn:active:not(:disabled) { transform: translateY(0); }
-        .github-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .sp-secure { display: flex; align-items: center; justify-content: center; gap: 5px; margin-bottom: 12px; font-size: 10px; font-weight: 600; color: rgba(167,139,250,0.4); letter-spacing: 0.5px; }
 
-        .secure-badge {
-          display: flex; align-items: center; justify-content: center; gap: 5px;
-          margin-top: 10px;
-          font-size: 11px; font-weight: 600; color: #9ca3af;
-          letter-spacing: 0.8px; text-transform: uppercase;
-        }
+        /* Divider */
+        .sp-divider { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+        .sp-div-line { flex: 1; height: 1px; background: rgba(167,139,250,0.1); }
+        .sp-div-txt { font-size: 10px; color: rgba(167,139,250,0.35); font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; }
 
-        .divider {
-          display: flex; align-items: center; gap: 12px;
-          margin: 22px 0;
-        }
+        /* Fields */
+        .sp-form { display: flex; flex-direction: column; gap: 8px; }
+        .sp-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .sp-field { display: flex; flex-direction: column; gap: 4px; }
+        .sp-field-label { font-size: 10px; font-weight: 700; color: rgba(196,181,253,0.45); letter-spacing: 0.6px; text-transform: uppercase; }
+        .sp-input-wrap { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 40px; background: rgba(167,139,250,0.07); border: 1.5px solid rgba(167,139,250,0.14); border-radius: 11px; transition: all 0.25s; }
+        .sp-input-wrap.focused { border-color: rgba(196,181,253,0.45); background: rgba(167,139,250,0.11); box-shadow: 0 0 0 3px rgba(167,139,250,0.09); }
+        .sp-input-field { flex: 1; border: none; background: transparent !important; outline: none; font-family: 'DM Sans', sans-serif; font-size: 13px; color: white; -webkit-autofill: none; }
+        .sp-input-field:-webkit-autofill,
+        .sp-input-field:-webkit-autofill:hover,
+        .sp-input-field:-webkit-autofill:focus { -webkit-box-shadow: 0 0 0px 1000px rgba(30,20,51,0.95) inset !important; -webkit-text-fill-color: white !important; transition: background-color 5000s ease-in-out 0s; }
+        .sp-input-icon { color: rgba(167,139,250,0.4); flex-shrink: 0; display: flex; align-items: center; transition: color 0.2s; }
+        .sp-input-wrap.focused .sp-input-icon { color: #c4b5fd; }
+        .sp-input-field::placeholder { color: rgba(167,139,250,0.28); }
 
-        .divider-line { flex: 1; height: 1px; background: #e5e7eb; }
+        /* Role options */
+        .sp-role-group { display: flex; flex-direction: column; gap: 5px; }
+        .sp-role-option { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(167,139,250,0.04); border: 1.5px solid rgba(167,139,250,0.1); border-radius: 10px; cursor: pointer; transition: all 0.2s; }
+        .sp-role-option:hover { border-color: rgba(196,181,253,0.25); background: rgba(167,139,250,0.08); }
+        .sp-role-option.selected { border-color: rgba(196,181,253,0.4); background: rgba(167,139,250,0.12); }
+        .sp-role-radio { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(167,139,250,0.3); flex-shrink: 0; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
+        .sp-role-option.selected .sp-role-radio { border-color: #c4b5fd; background: #c4b5fd; }
+        .sp-role-option.selected .sp-role-radio::after { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #1e1433; }
+        .sp-role-label { font-size: 12px; font-weight: 600; color: rgba(233,213,255,0.8); }
+        .sp-role-desc { font-size: 10px; color: rgba(167,139,250,0.45); margin-top: 1px; }
 
-        .divider-text {
-          font-size: 11px; font-weight: 600; color: #9ca3af;
-          letter-spacing: 1.2px; text-transform: uppercase;
-        }
+        /* Error */
+        .sp-error-wrap { height: 36px; margin-top: 2px; }
+        .sp-error { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(244,114,182,0.08); border: 1px solid rgba(244,114,182,0.2); border-radius: 9px; font-size: 11px; color: #f472b6; font-weight: 500; animation: spFade 0.2s ease; height: 100%; }
+        @keyframes spFade { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
 
-        .form { display: flex; flex-direction: column; gap: 16px; }
+        /* Submit */
+        .sp-submit { width: 100%; height: 46px; margin-top: 2px; display: flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #c4b5fd, #f472b6, #67e8f9); background-size: 300%; border: none; border-radius: 13px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; color: #1e1433; cursor: pointer; transition: all 0.3s; box-shadow: 0 5px 18px rgba(196,181,253,0.2); animation: spGrad 4s ease infinite; }
+        .sp-submit:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(244,114,182,0.3); }
+        .sp-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 
-        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        /* Spinner */
+        .sp-spinner { width: 15px; height: 15px; border: 2px solid rgba(30,20,51,0.3); border-top-color: #1e1433; border-radius: 50%; animation: spSpin 0.7s linear infinite; }
+        @keyframes spSpin { to{transform:rotate(360deg)} }
 
-        .field { display: flex; flex-direction: column; gap: 6px; }
+        /* Sign in */
+        .sp-signin { text-align: center; margin-top: 10px; font-size: 12px; color: rgba(167,139,250,0.45); }
+        .sp-signin a { color: #c4b5fd; font-weight: 600; text-decoration: none; }
+        .sp-signin a:hover { color: #f472b6; }
 
-        .field-label { font-size: 13.5px; font-weight: 600; color: #374151; }
+        /* Password bars */
 
-        .input-wrap {
-          display: flex; align-items: center; gap: 10px;
-          padding: 0 14px; height: 48px;
-          background: #f9fafb; border: 1.5px solid #e5e7eb;
-          border-radius: 10px; transition: all 0.2s;
-        }
-
-        .input-wrap.focused {
-          border-color: #6366f1; background: #fafafe;
-          box-shadow: 0 0 0 3px rgba(99,102,241,0.08);
-        }
-
-        .input-icon { color: #9ca3af; flex-shrink: 0; display: flex; align-items: center; }
-        .input-wrap.focused .input-icon { color: #6366f1; }
-
-        .input-field {
-          flex: 1; border: none; background: transparent; outline: none;
-          font-family: 'DM Sans', sans-serif; font-size: 14px; color: #111827;
-        }
-
-        .input-field::placeholder { color: #c4c7ce; }
-
-        .role-group { display: flex; flex-direction: column; gap: 8px; }
-
-        .role-option {
-          display: flex; align-items: center; gap: 12px;
-          padding: 14px 16px;
-          background: #f9fafb; border: 1.5px solid #e5e7eb;
-          border-radius: 12px; cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .role-option:hover { border-color: #c7d2fe; background: #fafafe; }
-
-        .role-option.selected {
-          border-color: #6366f1; background: #eef2ff;
-        }
-
-        .role-radio {
-          width: 16px; height: 16px; border-radius: 50%;
-          border: 2px solid #d1d5db; background: white;
-          flex-shrink: 0; transition: all 0.2s;
-          display: flex; align-items: center; justify-content: center;
-        }
-
-        .role-option.selected .role-radio {
-          border-color: #6366f1; background: #6366f1;
-        }
-
-        .role-option.selected .role-radio::after {
-          content: ''; width: 6px; height: 6px;
-          border-radius: 50%; background: white;
-        }
-
-        .role-info { flex: 1; }
-        .role-label { font-size: 14px; font-weight: 600; color: #111827; }
-        .role-desc { font-size: 12px; color: #6b7280; margin-top: 1px; }
-
-        .error-msg {
-          display: flex; align-items: center; gap: 8px;
-          padding: 10px 14px;
-          background: #fef2f2; border: 1px solid #fecaca;
-          border-radius: 8px; font-size: 13px; color: #dc2626; font-weight: 500;
-          animation: fadeIn 0.2s ease;
-        }
-
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-
-        .create-btn {
-          width: 100%; height: 52px;
-          display: flex; align-items: center; justify-content: center; gap: 8px;
-          background: #6366f1; color: white;
-          border: none; border-radius: 12px;
-          font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600;
-          cursor: pointer; transition: all 0.2s;
-          margin-top: 4px;
-        }
-
-        .create-btn:hover:not(:disabled) { background: #4f46e5; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(99,102,241,0.35); }
-        .create-btn:active:not(:disabled) { transform: translateY(0); }
-        .create-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        .spinner {
-          width: 16px; height: 16px;
-          border: 2px solid rgba(255,255,255,0.3); border-top-color: white;
-          border-radius: 50%; animation: spin 0.7s linear infinite;
-        }
-
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        .footer-text {
-          text-align: center; margin-top: 24px;
-          font-size: 14px; color: #6b7280;
-          position: relative; z-index: 1;
-        }
-
-        .footer-text a { color: #6366f1; font-weight: 700; text-decoration: none; }
-        .footer-text a:hover { color: #4f46e5; }
-
-        .copyright {
-          text-align: center; margin-top: 32px;
-          font-size: 12px; color: #9ca3af;
-          position: relative; z-index: 1;
-        }
-
-        @media (max-width: 520px) {
-          .reg-card { padding: 28px 20px; }
-          .form-row { grid-template-columns: 1fr; }
-          .reg-title { font-size: 26px; }
-        }
       `}</style>
 
-      <div className="reg-page">
-        <div className="reg-hero">
-          <div className="reg-logo-row">
-            <SkillPulseLogo />
-            <span className="reg-logo-name"><span>Skill</span>Pulse</span>
-          </div>
-          <h1 className="reg-title">Create your account</h1>
-          <p className="reg-subtitle">Join the next generation of developer evaluation and growth tracking.</p>
-        </div>
+      <div className="sp-reg">
+        <div className="sp-orb1" />
+        <div className="sp-orb2" />
+        <div className="sp-orb3" />
+        <div className="sp-grid" />
 
-        <div className="reg-card">
-          <button
-            className="github-btn"
-            type="button"
-            disabled={githubLoading}
-            onClick={handleGitHubLogin}
-          >
-            {githubLoading ? (
-              <><div className="spinner" /> Redirecting to GitHub...</>
-            ) : (
-              <><GitHubIcon /> Recommended: Join with GitHub</>
-            )}
-          </button>
-          <div className="secure-badge">
-            <ShieldIcon /> Secure OAuth 2.0 Verification
-          </div>
+        <div className="sp-layout">
 
-          <div className="divider">
-            <div className="divider-line" />
-            <span className="divider-text">or use email</span>
-            <div className="divider-line" />
-          </div>
-
-          <form className="form" onSubmit={handleSubmit}>
-            <div className="form-row">
-              <div className="field">
-                <label className="field-label">Full Name</label>
-                <div className={`input-wrap ${focused === 'full_name' ? 'focused' : ''}`}>
-                  <span className="input-icon"><NameIcon /></span>
-                  <input className="input-field" type="text" placeholder="Jane Doe"
-                    value={form.full_name}
-                    onChange={e => update('full_name', e.target.value)}
-                    onFocus={() => setFocused('full_name')}
-                    onBlur={() => setFocused(null)}
-                    required />
-                </div>
+          {/* ── LEFT ── */}
+          <div className="sp-left">
+            <div className="sp-logo">
+              <div className="sp-logo-bars">
+                <span style={{height:'10px',background:'#7c3aed'}} />
+                <span style={{height:'16px',background:'#a855f7'}} />
+                <span style={{height:'24px',background:'#c4b5fd'}} />
+                <span style={{height:'18px',background:'#f472b6'}} />
+                <span style={{height:'12px',background:'#e879f9',opacity:0.7}} />
+                <span style={{height:'7px',background:'#c4b5fd',opacity:0.4}} />
               </div>
+              <span className="sp-logo-name"><em>Skill</em>Pulse</span>
+            </div>
 
-              <div className="field">
-                <label className="field-label">Username</label>
-                <div className={`input-wrap ${focused === 'username' ? 'focused' : ''}`}>
-                  <span className="input-icon"><UserIcon /></span>
-                  <input className="input-field" type="text" placeholder="jane_doe"
-                    value={form.username}
-                    onChange={e => update('username', e.target.value)}
-                    onFocus={() => setFocused('username')}
-                    onBlur={() => setFocused(null)}
-                    required />
+            <div className="sp-hero">
+              <div className="sp-eyebrow">
+                <div className="sp-pulse-dot" />
+                Developer Intelligence Platform
+              </div>
+              <h1 className="sp-hero-title">
+                Measure your<br/>
+                <span className="sp-grad">coding mastery.</span>
+              </h1>
+              <p className="sp-hero-sub">
+                Connect your GitHub and get AI-powered insights into your code quality, security awareness, and skill trajectory.
+              </p>
+
+              {/* Feature highlights */}
+              <div className="sp-features">
+                <div className="sp-feat">
+                  <div className="sp-feat-icon" style={{background:'rgba(196,181,253,0.12)'}}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c4b5fd" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="sp-feat-label">Deep Code Understanding</div>
+                    <div className="sp-feat-desc">Go beyond syntax — uncover the story your code tells</div>
+                  </div>
+                </div>
+                <div className="sp-feat">
+                  <div className="sp-feat-icon" style={{background:'rgba(244,114,182,0.12)'}}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f472b6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="sp-feat-label">Instant Actionable Insights</div>
+                    <div className="sp-feat-desc">Know exactly where to grow — no guesswork needed</div>
+                  </div>
+                </div>
+                <div className="sp-feat">
+                  <div className="sp-feat-icon" style={{background:'rgba(103,232,249,0.12)'}}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#67e8f9" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="sp-feat-label">Built for Every Role</div>
+                    <div className="sp-feat-desc">Developers, managers, and recruiters — one platform</div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="field">
-              <label className="field-label">Work Email</label>
-              <div className={`input-wrap ${focused === 'work_email' ? 'focused' : ''}`}>
-                <span className="input-icon"><EnvelopeIcon /></span>
-                <input className="input-field" type="email" placeholder="jane@company.com"
-                  value={form.work_email}
-                  onChange={e => update('work_email', e.target.value)}
-                  onFocus={() => setFocused('work_email')}
-                  onBlur={() => setFocused(null)}
-                  required />
-              </div>
-            </div>
-
-            <div className="form-row">
-              <div className="field">
-                <label className="field-label">Password</label>
-                <div className={`input-wrap ${focused === 'password' ? 'focused' : ''}`}>
-                  <span className="input-icon"><LockIcon /></span>
-                  <input className="input-field" type="password" placeholder="At least 8 characters"
-                    value={form.password}
-                    onChange={e => update('password', e.target.value)}
-                    onFocus={() => setFocused('password')}
-                    onBlur={() => setFocused(null)}
-                    required />
+            <div className="sp-quote-wrap">
+              <div className="sp-quote-mark">"</div>
+              <div className="sp-quote-inner">
+                <div className="sp-quote-text">
+                  Your code tells<br/>a <span className="sp-quote-story">story.</span>
                 </div>
-              </div>
-
-              <div className="field">
-                <label className="field-label">Confirm Password</label>
-                <div className={`input-wrap ${focused === 'confirm' ? 'focused' : ''}`}>
-                  <span className="input-icon"><LockIcon /></span>
-                  <input className="input-field" type="password" placeholder="Repeat password"
-                    value={form.confirm_password}
-                    onChange={e => update('confirm_password', e.target.value)}
-                    onFocus={() => setFocused('confirm')}
-                    onBlur={() => setFocused(null)}
-                    required />
+                <div className="sp-quote-sub">
+                  SkillPulse reads between the lines —<br/>turning commits into career intelligence.
                 </div>
               </div>
             </div>
 
-            <div className="field">
-              <label className="field-label">Account Type</label>
-              <div className="role-group">
-                {roles.map(r => (
-                  <div
-                    key={r.value}
-                    className={`role-option ${form.role === r.value ? 'selected' : ''}`}
-                    onClick={() => update('role', r.value)}
-                  >
-                    <div className="role-radio" />
-                    <div className="role-info">
-                      <div className="role-label">{r.label}</div>
-                      <div className="role-desc">{r.desc}</div>
+            <div className="sp-pills">
+              <div className="sp-pill">
+                <div className="sp-pill-dot" style={{background:'linear-gradient(135deg,#c4b5fd,#a78bfa)'}} />
+                <div>
+                  <div className="sp-pill-text">Code Quality Analysis</div>
+                  <div className="sp-pill-sub">Cyclomatic complexity · Maintainability index</div>
+                </div>
+              </div>
+              <div className="sp-pill">
+                <div className="sp-pill-dot" style={{background:'linear-gradient(135deg,#f472b6,#e879f9)'}} />
+                <div>
+                  <div className="sp-pill-text">Security Insights</div>
+                  <div className="sp-pill-sub">OWASP · Vulnerability detection</div>
+                </div>
+              </div>
+              <div className="sp-pill">
+                <div className="sp-pill-dot" style={{background:'linear-gradient(135deg,#67e8f9,#a5f3fc)'}} />
+                <div>
+                  <div className="sp-pill-text">Skill Progression</div>
+                  <div className="sp-pill-sub">Track your growth over time</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── RIGHT ── */}
+          <div className="sp-right">
+            <div className="sp-card">
+
+              <div className="sp-card-head">
+                <div className="sp-card-title">
+                  Start your<br/><span style={{color:'#c4b5fd'}}>dev journey.</span>
+                </div>
+                <div className="sp-card-sub">Join thousands of developers leveling up their craft.</div>
+              </div>
+
+              <button
+                className="sp-gh-btn"
+                type="button"
+                disabled={githubLoading}
+                onClick={handleGitHubLogin}
+              >
+                {githubLoading ? (
+                  <><div className="sp-spinner" /> Redirecting to GitHub...</>
+                ) : (
+                  <>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
+                      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+                    </svg>
+                    Continue with GitHub
+                  </>
+                )}
+              </button>
+
+              <div className="sp-secure">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                  <path d="m9 12 2 2 4-4"/>
+                </svg>
+                Secure OAuth 2.0
+              </div>
+
+              <div className="sp-divider">
+                <div className="sp-div-line" />
+                <span className="sp-div-txt">or register with email</span>
+                <div className="sp-div-line" />
+              </div>
+
+              <form className="sp-form" onSubmit={handleSubmit}>
+
+                <div className="sp-row2">
+                  <div className="sp-field">
+                    <label className="sp-field-label">Full Name</label>
+                    <div className={`sp-input-wrap ${focused === 'full_name' ? 'focused' : ''}`}>
+                      <span className="sp-input-icon">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                      </span>
+                      <input className="sp-input-field" type="text" placeholder="Your full name"
+                        value={form.full_name}
+                        onChange={e => update('full_name', e.target.value)}
+                        onFocus={() => setFocused('full_name')}
+                        onBlur={() => setFocused(null)}
+                        required />
                     </div>
                   </div>
-                ))}
+                  <div className="sp-field">
+                    <label className="sp-field-label">Username</label>
+                    <div className={`sp-input-wrap ${focused === 'username' ? 'focused' : ''}`}>
+                      <span className="sp-input-icon">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+                      </span>
+                      <input className="sp-input-field" type="text" placeholder="Choose a username"
+                        value={form.username}
+                        onChange={e => update('username', e.target.value)}
+                        onFocus={() => setFocused('username')}
+                        onBlur={() => setFocused(null)}
+                        required />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="sp-field">
+                  <label className="sp-field-label">Work Email</label>
+                  <div className={`sp-input-wrap ${focused === 'work_email' ? 'focused' : ''}`}>
+                    <span className="sp-input-icon">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                    </span>
+                    <input className="sp-input-field" type="email" placeholder="you@company.com"
+                      value={form.work_email}
+                      onChange={e => update('work_email', e.target.value)}
+                      onFocus={() => setFocused('work_email')}
+                      onBlur={() => setFocused(null)}
+                      required />
+                  </div>
+                </div>
+
+                <div className="sp-row2">
+                  <div className="sp-field">
+                    <label className="sp-field-label">Password</label>
+                    <div className={`sp-input-wrap ${focused === 'password' ? 'focused' : ''}`}>
+                      <span className="sp-input-icon">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      </span>
+                      <input className="sp-input-field" type="password" placeholder="••••••••"
+                        value={form.password}
+                        onChange={e => update('password', e.target.value)}
+                        onFocus={() => setFocused('password')}
+                        onBlur={() => setFocused(null)}
+                        required />
+                    </div>
+
+                  </div>
+                  <div className="sp-field">
+                    <label className="sp-field-label">Confirm Password</label>
+                    <div className={`sp-input-wrap ${focused === 'confirm' ? 'focused' : ''}`}>
+                      <span className="sp-input-icon">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      </span>
+                      <input className="sp-input-field" type="password" placeholder="Repeat password"
+                        value={form.confirm_password}
+                        onChange={e => update('confirm_password', e.target.value)}
+                        onFocus={() => setFocused('confirm')}
+                        onBlur={() => setFocused(null)}
+                        required />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="sp-field">
+                  <label className="sp-field-label">Account Type</label>
+                  <div className="sp-role-group">
+                    {[
+                      { value: 'developer', label: 'Developer', desc: 'Personal growth & analysis' },
+                      { value: 'manager',   label: 'Engineering Manager', desc: 'Team intelligence & evaluation' },
+                      { value: 'recruiter', label: 'Technical Recruiter', desc: 'Candidate screening & insights' },
+                    ].map(r => (
+                      <div
+                        key={r.value}
+                        className={`sp-role-option ${form.role === r.value ? 'selected' : ''}`}
+                        onClick={() => update('role', r.value)}
+                      >
+                        <div className="sp-role-radio" />
+                        <div>
+                          <div className="sp-role-label">{r.label}</div>
+                          <div className="sp-role-desc">{r.desc}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="sp-error-wrap">
+                  {error && (
+                    <div className="sp-error">
+                      <span>⚠</span> {error}
+                    </div>
+                  )}
+                </div>
+
+                <button className="sp-submit" type="submit" disabled={loading}>
+                  {loading ? (
+                    <><div className="sp-spinner" /> Creating account...</>
+                  ) : (
+                    <>Create Account ✦</>
+                  )}
+                </button>
+              </form>
+
+              <div className="sp-signin">
+                Already have an account? <a href="/" onClick={e => { e.preventDefault(); window.location.href = '/'; }}>Sign in</a>
               </div>
+
             </div>
+          </div>
 
-            {error && (
-              <div className="error-msg">
-                <span>⚠</span> {error}
-              </div>
-            )}
-
-            <button className="create-btn" type="submit" disabled={loading}>
-              {loading
-                ? <><div className="spinner" /> Creating account...</>
-                : <>Create Account <ArrowRightIcon /></>
-              }
-            </button>
-          </form>
         </div>
-
-        <p className="footer-text">
-          Already have an account? <a href="/" onClick={e => { e.preventDefault(); window.location.href = '/'; }}>Sign in instead</a>
-        </p>
-
-        <p className="copyright">© 2026 SkillPulse. Privacy focused, data driven.</p>
       </div>
     </>
   );
