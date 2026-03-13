@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import User, RefreshToken, UserRole
-from app.core.auth_utils import create_access_token, create_refresh_token, encrypt_github_token
+from app.core.auth_utils import create_access_token, create_refresh_token, encrypt_github_token, decode_access_token
 from app.core.config import settings
 from datetime import datetime, timedelta, timezone
 import httpx
 from fastapi import Request
 from app.core.rate_limiter import limiter
+from fastapi.responses import RedirectResponse
 
 router = APIRouter(prefix="/auth", tags=["github"])
 
@@ -17,21 +18,29 @@ GITHUB_EMAIL_URL = "https://api.github.com/user/emails"
 
 @router.get("/github")
 @limiter.limit("5/minute")
-def github_login(request: Request, action: str = "login"):
+def github_login(request: Request, action: str = "login", token: str | None = None):
     """Redirect URL to send user to GitHub OAuth"""
+    state = f"{action}:{token}" if token else action
     github_auth_url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={settings.GITHUB_CLIENT_ID}"
         f"&redirect_uri={settings.GITHUB_REDIRECT_URI}"
-        f"&scope=user:email"
-        f"&state={action}"
+        f"&scope=user:email,repo"
+        f"&state={state}"
     )
+    # return RedirectResponse(github_auth_url)
     return {"url": github_auth_url}
 
 
 @router.get("/github/callback")
 @limiter.limit("5/minute")
-async def github_callback(request: Request, code: str, state: str = "login", response: Response = None, db: Session = Depends(get_db)):
+async def github_callback(
+    request: Request,
+    code: str,
+    state: str = "login",
+    response: Response = None,
+    db: Session = Depends(get_db)
+):
     """Exchange GitHub code for access token and log user in"""
 
     # 1. Exchange code for GitHub access token
@@ -87,8 +96,40 @@ async def github_callback(request: Request, code: str, state: str = "login", res
 
     # 3. Find or create user
     db_user = db.query(User).filter(User.github_id == github_id).first()
+    # ── CONNECT FLOW ─────────────────────
+    if ":" in state:
+        action, token = state.split(":", 1)
+    else:
+        action = state
+        token = None
+    if action == "connect":
+        
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing token")
 
-    from fastapi.responses import RedirectResponse
+        payload = decode_access_token(token)
+
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        user_id = payload.get("sub")
+
+        current_user = db.query(User).filter(User.id == int(user_id)).first()
+
+        if not current_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        existing = db.query(User).filter(User.github_id == github_id).first()
+
+        if existing and existing.id != current_user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="This GitHub account is already linked to another user"
+            )
+        current_user.github_id = github_id
+        current_user.github_access_token = encrypted_token
+        db.commit()
+
+        return RedirectResponse(url="http://127.0.0.1:8000/docs")
 
     # Register flow: reject if already registered
 
@@ -142,7 +183,7 @@ async def github_callback(request: Request, code: str, state: str = "login", res
         samesite="lax",
         expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
-
+   
     # 6. Redirect to frontend
     frontend_url = f"http://localhost:5173/auth/github/callback?token={access_token}"
     return RedirectResponse(url=frontend_url)

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, JSON, Enum,Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, JSON, Enum, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.database import Base
@@ -38,7 +38,7 @@ class Repository(Base):
     is_private = Column(Boolean, default=False)
     owner_id = Column(Integer, ForeignKey("users.id"))
     connected_at = Column(DateTime(timezone=True), server_default=func.now())
-
+    
     owner = relationship("User", back_populates="repositories")
     analysis_runs = relationship("AnalysisRun", back_populates="repository")
 
@@ -47,6 +47,7 @@ class AnalysisRun(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     repository_id = Column(Integer, ForeignKey("repositories.id"))
+    branch = Column(String, default="main")
     status = Column(String, default="pending")
     triggered_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)

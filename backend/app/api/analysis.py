@@ -2,10 +2,10 @@ import sys
 import os
 import subprocess
 import uuid
-import shutil
 import tempfile
 import logging
-from datetime import datetime
+import re
+from datetime import datetime,timezone
 from fastapi import Request
 from app.core.rate_limiter import limiter
 
@@ -23,6 +23,8 @@ from app.core.auth_utils import get_current_user
 from app.db.models import User
 
 from app.services.security.pipeline import run_security_analysis
+from app.services.github_client import verify_repo_access
+from app.core.auth_utils import decrypt_github_token
 
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -30,166 +32,223 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 class RepoRequest(BaseModel):
     repo_url: str
+    branch: str = "main"
 
 
 @router.post("/run")
 @limiter.limit("2/minute")
-def run_analysis(
+async def run_analysis(
     request: Request,
     data: RepoRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-
     # -----------------------------
     # Validate repo URL
     # -----------------------------
 
-    if not data.repo_url.startswith("https://github.com/"):
+    if not re.match(r"^https://github\.com/[^/]+/[^/]+", data.repo_url):
         raise HTTPException(
             status_code=400,
-            detail="Only GitHub repositories are allowed"
+            detail="Invalid GitHub repository URL"
+        )
+    
+    full_name = data.repo_url.replace("https://github.com/", "").replace(".git", "")
+    repo_name = full_name.split("/")[-1]
+    
+    repo_url = data.repo_url
+    is_private = False
+    repo_data = None
+    token = None
+
+    if current_user.github_access_token:
+        token = decrypt_github_token(current_user.github_access_token)
+
+    try:
+        repo_data = await verify_repo_access(token, full_name)
+
+    except Exception as e:
+        if not token:
+            return {
+                "requires_github_auth": True,
+                "auth_url": f"http://127.0.0.1:8000/auth/github?action=connect&token={request.headers.get('authorization').split()[1]}"
+            }
+
+        raise HTTPException(
+            status_code=404,
+            detail="Repository not found or not accessible"
         )
 
-    repo_name = data.repo_url.split("/")[-1]
-    full_name = data.repo_url.replace("https://github.com/", "")
-
+    is_private = repo_data.get("private", False)
     # -----------------------------
     # Check if repo exists
     # -----------------------------
 
     repo = db.query(Repository).filter(
-        Repository.url == data.repo_url
+        Repository.github_repo_id == str(repo_data["id"])
     ).first()
+    
+    if repo:
+        last_run = db.query(AnalysisRun).filter(
+            AnalysisRun.repository_id == repo.id,
+            AnalysisRun.branch == data.branch
+        ).order_by(AnalysisRun.triggered_at.desc()).first()
 
-    if not repo:
-
-        repo = Repository(
-            name=repo_name,
-            full_name=full_name,
-            url=data.repo_url,
-            github_repo_id=None,
-            is_private=False,
-            owner_id=current_user.id
-        )
-
-        db.add(repo)
-        db.commit()
-        db.refresh(repo)
-
-    # -----------------------------
-    # Create analysis run
-    # -----------------------------
-
-    run = AnalysisRun(
-        repository_id=repo.id,
-        status="running",
-        triggered_at=datetime.utcnow()
-    )
-
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-
+        if last_run and last_run.status == "completed":
+            return {
+                "message": "Repository already analyzed for this branch",
+                "analysis_run_id": last_run.id,
+                "status": last_run.status
+            }
+    
     # -----------------------------
     # Create temp directory
     # -----------------------------
 
-    repo_path = tempfile.mkdtemp(prefix="repo_")
+    with tempfile.TemporaryDirectory(prefix="repo_") as repo_path:
 
-    try:
+        try: 
+            if is_private and current_user.role.value == "recruiter":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Recruiters cannot analyze private repositories."
+                )
+                
+            # -----------------------------
+            # Clone repository
+            # -----------------------------
+            
+            clone_path = os.path.join(repo_path, f"{repo_name}_{uuid.uuid4().hex}")
+            clone_cmd = [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--no-tags",
+                "--filter=blob:none",
+                "--branch", data.branch,
+                "--single-branch",
+                repo_url,
+                clone_path
+            ]
 
+            if is_private and token:
+                auth_repo_url = repo_url.replace(
+                    "https://",
+                    f"https://x-access-token:{token}@"
+                )
+
+                clone_cmd = [
+                    "git",
+                    "clone",
+                    "--depth", "1",
+                    "--no-tags",
+                    "--filter=blob:none",
+                    "--branch", data.branch,
+                    "--single-branch",
+                    auth_repo_url,
+                    clone_path
+                ]
+            # clone repository
+            subprocess.run(clone_cmd, check=True, timeout=120)
+            if is_private:
+                auth_repo_url = None
+            if not repo:
+                repo = Repository(
+                    name=repo_name,
+                    full_name=full_name,
+                    url=data.repo_url,
+                    github_repo_id=str(repo_data["id"]) if repo_data else None,
+                    is_private=is_private,
+                    owner_id=current_user.id
+                )
+
+                db.add(repo)
+                db.commit()
+                db.refresh(repo)
+            
+        except Exception as e:
+
+            logging.exception(f"Clone failed for {full_name}")
+
+            raise HTTPException(
+                status_code=400,
+                detail="Repository clone failed. Branch may not exist or repository is inaccessible."
+            )
+            
         # -----------------------------
-        # Clone repository
+        # Create analysis run
         # -----------------------------
 
-        subprocess.run(
-            ["git", "clone", "--depth", "1", data.repo_url, repo_path],
-            check=True,
-            timeout=60
+        run = AnalysisRun(
+            repository_id=repo.id,
+            branch=data.branch,
+            status="running",
+            triggered_at=datetime.now(timezone.utc)
         )
-        
-    except Exception as e:
 
-        logging.error(f"Clone failed: {str(e)}")
+        db.add(run)
+        db.commit()
+        db.refresh(run)
 
-        run.status = "failed"
-        run.completed_at = datetime.utcnow()
+        try:
+
+            # -----------------------------
+            # Run security analysis
+            # -----------------------------
+
+            findings = run_security_analysis(clone_path)
+
+        except Exception as e:
+
+            logging.error(f"Analysis failed: {str(e)}")
+
+            run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+
+            raise HTTPException(
+                status_code=500,
+                detail="Security analysis failed"
+            )
+
+        # -----------------------------
+        # Store findings
+        # -----------------------------
+
+        for f in findings:
+
+            finding = SecurityFinding(
+                analysis_run_id=run.id,
+                tool=f.get("tool"),
+                rule=f.get("rule"),
+                cwe=f.get("cwe"),
+                file_path=f.get("file_path"),
+                severity=f.get("severity", "MEDIUM"),
+                description=f.get("description"),
+                line_number=f.get("line_number", 0),
+                owasp_category=f.get("owasp_category")
+            )
+
+            db.add(finding)
+
         db.commit()
 
-        shutil.rmtree(repo_path, ignore_errors=True)
-
-        raise HTTPException(
-            status_code=400,
-            detail="Failed to clone repository"
-        )
-
-    try:
-
         # -----------------------------
-        # Run security analysis
+        # Update run status
         # -----------------------------
 
-        findings = run_security_analysis(repo_path)
+        run.status = "completed"
+        run.completed_at = datetime.now(timezone.utc)
 
-    except Exception as e:
-
-        logging.error(f"Analysis failed: {str(e)}")
-
-        run.status = "failed"
-        run.completed_at = datetime.utcnow()
         db.commit()
 
-        shutil.rmtree(repo_path, ignore_errors=True)
+        # -----------------------------
+        # Response
+        # -----------------------------
 
-        raise HTTPException(
-            status_code=500,
-            detail="Security analysis failed"
-        )
-
-    # -----------------------------
-    # Store findings
-    # -----------------------------
-
-    for f in findings:
-
-        finding = SecurityFinding(
-            analysis_run_id=run.id,
-            tool=f.get("tool"),
-            rule=f.get("rule"),
-            cwe=f.get("cwe"),
-            file_path=f.get("file_path"),
-            severity=f.get("severity", "MEDIUM"),
-            description=f.get("description"),
-            line_number=f.get("line_number", 0),
-            owasp_category=f.get("owasp_category")
-        )
-
-        db.add(finding)
-
-    db.commit()
-
-    # -----------------------------
-    # Update run status
-    # -----------------------------
-
-    run.status = "completed"
-    run.completed_at = datetime.utcnow()
-
-    db.commit()
-
-    # -----------------------------
-    # Cleanup
-    # -----------------------------
-
-    shutil.rmtree(repo_path, ignore_errors=True)
-
-    # -----------------------------
-    # Response
-    # -----------------------------
-
-    return {
-        "analysis_run_id": run.id,
-        "repository": repo_name,
-        "findings_count": len(findings)
-    }
+        return {
+            "analysis_run_id": run.id,
+            "repository": repo_name,
+            "findings_count": len(findings)
+        }

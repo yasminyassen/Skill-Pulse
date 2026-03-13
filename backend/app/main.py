@@ -4,6 +4,7 @@ from app.api import auth
 from app.api import github_oauth
 from app.api import analysis
 from app.api import security_report
+from app.api import repos
 
 # import SlowAPI rate limiting tools
 from app.core.rate_limiter import limiter
@@ -47,3 +48,4 @@ app.include_router(auth.router)
 app.include_router(github_oauth.router)
 app.include_router(analysis.router)
 app.include_router(security_report.router)
+app.include_router(repos.router)
