@@ -1,3 +1,6 @@
+import asyncio
+import base64
+
 import httpx
 from fastapi import HTTPException
 
@@ -48,6 +51,71 @@ async def verify_repo_access(github_token: str | None, full_name: str) -> dict:
 
     _raise_for_github_error(response, resource="repository")
     return response.json()
+
+
+async def fetch_repo_python_files(
+    github_token: str | None,
+    full_name: str,
+    branch: str,
+) -> list[dict]:
+    """Fetch repository tree and return Python files with raw content."""
+    headers = {**_GITHUB_HEADERS}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        tree_res = await client.get(
+            f"{GITHUB_API_BASE}/repos/{full_name}/git/trees/{branch}",
+            headers=headers,
+            params={"recursive": 1},
+        )
+        _raise_for_github_error(tree_res, resource="repository tree")
+        tree_data = tree_res.json()
+
+        tree_entries = tree_data.get("tree", [])
+        python_blobs = [
+            item
+            for item in tree_entries
+            if item.get("type") == "blob" and str(item.get("path", "")).endswith(".py")
+        ]
+
+        sem = asyncio.Semaphore(8)
+
+        async def _fetch_file(item: dict) -> dict | None:
+            path = item.get("path")
+            if not path:
+                return None
+
+            async with sem:
+                content_res = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{full_name}/contents/{path}",
+                    headers=headers,
+                    params={"ref": branch},
+                )
+                _raise_for_github_error(content_res, resource=f"file content '{path}'")
+                body = content_res.json()
+
+            content_text = ""
+            encoding = body.get("encoding")
+            if encoding == "base64" and body.get("content"):
+                raw = body["content"].replace("\n", "")
+                content_text = base64.b64decode(raw).decode("utf-8", errors="replace")
+            elif body.get("download_url"):
+                raw_res = await client.get(body["download_url"], headers=headers)
+                _raise_for_github_error(raw_res, resource=f"raw file '{path}'")
+                content_text = raw_res.text
+
+            filename = path.rsplit("/", 1)[-1]
+            return {
+                "filename": filename,
+                "path": path,
+                "content": content_text,
+                "size": int(item.get("size") or len(content_text.encode("utf-8"))),
+            }
+
+        files = await asyncio.gather(*[_fetch_file(item) for item in python_blobs])
+
+    return [f for f in files if f is not None]
 
 
 def _raise_for_github_error(response: httpx.Response, resource: str = "resource") -> None:

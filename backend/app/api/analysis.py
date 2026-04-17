@@ -18,12 +18,13 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.db.database import get_db
-from app.db.models import Repository, AnalysisRun, SecurityFinding
+from app.db.models import Repository, AnalysisRun, SecurityFinding, CodeMetrics, SkillScore
 from app.core.auth_utils import get_current_user
 from app.db.models import User
 
 from app.services.security.pipeline import run_security_analysis
-from app.services.github_client import verify_repo_access
+from app.services.github_client import verify_repo_access, fetch_repo_python_files
+from app.services.code_intelligence import analyze_python_files
 from app.core.auth_utils import decrypt_github_token
 
 
@@ -88,18 +89,33 @@ async def run_analysis(
         Repository.github_repo_id == str(repo_data["id"])
     ).first()
     
-    if repo:
-        last_run = db.query(AnalysisRun).filter(
-            AnalysisRun.repository_id == repo.id,
-            AnalysisRun.branch == data.branch
-        ).order_by(AnalysisRun.triggered_at.desc()).first()
+    code_intelligence_result = {
+        "files": [],
+        "aggregate_metrics": {},
+        "scores": {
+            "code_quality": 0,
+            "maintainability": 0,
+            "architecture": 0,
+            "problem_solving": 0,
+            "overall": 0,
+        },
+    }
 
-        if last_run and last_run.status == "completed":
-            return {
-                "message": "Repository already analyzed for this branch",
-                "analysis_run_id": last_run.id,
-                "status": last_run.status
-            }
+    try:
+        python_files = await fetch_repo_python_files(
+            github_token=token,
+            full_name=full_name,
+            branch=data.branch,
+        )
+        code_intelligence_result = analyze_python_files(python_files)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"Code intelligence fetch failed for {full_name}: {str(e)}")
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to retrieve repository file tree or Python file contents.",
+        )
     
     # -----------------------------
     # Create temp directory
@@ -232,6 +248,44 @@ async def run_analysis(
 
             db.add(finding)
 
+        for file_report in code_intelligence_result.get("files", []):
+            metrics = file_report.get("metrics", {})
+            maintainability_index = max(
+                0.0,
+                min(
+                    100.0,
+                    (metrics.get("docstring_coverage", 0.0) * 100)
+                    - (metrics.get("duplication_score", 0.0) * 50)
+                    - (metrics.get("style_violations", 0.0) * 2)
+                    - (metrics.get("avg_nesting_depth", 0.0) * 2),
+                ),
+            )
+
+            db.add(
+                CodeMetrics(
+                    analysis_run_id=run.id,
+                    file_path=file_report.get("path"),
+                    cyclomatic_complexity=float(metrics.get("cyclomatic_complexity", 0.0) or 0.0),
+                    lines_of_code=int(metrics.get("loc", 0) or 0),
+                    duplication_score=float(metrics.get("duplication_score", 0.0) or 0.0),
+                    maintainability_index=maintainability_index,
+                    raw_metrics=metrics,
+                )
+            )
+
+        scores = code_intelligence_result.get("scores", {})
+        new_skill_score = SkillScore(
+            analysis_run_id=run.id,
+            user_id=current_user.id,
+            code_quality_score=float(scores.get("code_quality", 0.0) or 0.0),
+            maintainability_score=float(scores.get("maintainability", 0.0) or 0.0),
+            architecture_score=float(scores.get("architecture", 0.0) or 0.0),
+            security_awareness_score=float(scores.get("architecture", 0.0) or 0.0),
+            problem_solving_score=float(scores.get("problem_solving", 0.0) or 0.0),
+            overall_score=float(scores.get("overall", 0.0) or 0.0),
+        )
+        db.add(new_skill_score)
+
         db.commit()
 
         # -----------------------------
@@ -247,8 +301,40 @@ async def run_analysis(
         # Response
         # -----------------------------
 
+        previous = (
+            db.query(SkillScore)
+            .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
+            .filter(
+                AnalysisRun.repository_id == repo.id,
+                AnalysisRun.id != run.id,
+            )
+            .order_by(AnalysisRun.triggered_at.desc())
+            .first()
+        )
+
+        current_overall = float(code_intelligence_result.get("scores", {}).get("overall", 0.0) or 0.0)
+        previous_overall = float(previous.overall_score) if previous else None
+        if previous_overall is None:
+            delta = {"previous_score": None, "change": "+0.00"}
+        else:
+            change = current_overall - previous_overall
+            delta = {
+                "previous_score": round(previous_overall, 2),
+                "change": f"{change:+.2f}",
+            }
+
         return {
             "analysis_run_id": run.id,
-            "repository": repo_name,
-            "findings_count": len(findings)
+            "repo": full_name,
+            "files": [
+                {
+                    "path": f.get("path"),
+                    "metrics": f.get("metrics", {}),
+                }
+                for f in code_intelligence_result.get("files", [])
+            ],
+            "aggregate_metrics": code_intelligence_result.get("aggregate_metrics", {}),
+            "scores": code_intelligence_result.get("scores", {}),
+            "delta": delta,
+            "security_findings_count": len(findings),
         }

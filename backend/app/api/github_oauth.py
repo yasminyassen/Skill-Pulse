@@ -28,8 +28,8 @@ def github_login(request: Request, action: str = "login", token: str | None = No
         f"&scope=user:email,repo"
         f"&state={state}"
     )
-    # return RedirectResponse(github_auth_url)
-    return {"url": github_auth_url}
+    return RedirectResponse(github_auth_url)
+    #return {"url": github_auth_url}
 
 
 @router.get("/github/callback")

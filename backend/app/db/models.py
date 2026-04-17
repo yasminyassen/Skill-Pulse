@@ -95,6 +95,7 @@ class SkillScore(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     code_quality_score = Column(Float)
     maintainability_score = Column(Float)
+    architecture_score = Column(Float, nullable=True)
     security_awareness_score = Column(Float)
     problem_solving_score = Column(Float)
     overall_score = Column(Float)
