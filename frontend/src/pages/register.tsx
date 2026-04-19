@@ -1,5 +1,5 @@
-import React, { useState } from "react";
 import type { FormEvent } from "react";
+import React, { useState } from "react";
 import { register } from "../api/auth";
 
 const Register: React.FC = () => {
@@ -21,23 +21,11 @@ const Register: React.FC = () => {
   const update = (field: string, value: string) =>
     setForm(prev => ({ ...prev, [field]: value }));
 
-  const handleGitHubLogin = async () => {
+  const handleGitHubLogin = () => {
     setError(null);
     setGithubLoading(true);
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
-      const res = await fetch(`${apiUrl}/auth/github?action=register`);
-      if (!res.ok) throw new Error("Server error");
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        throw new Error("No redirect URL received");
-      }
-    } catch {
-      setError("GitHub login failed. Please try again.");
-      setGithubLoading(false);
-    }
+    const apiUrl = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
+    window.location.href = `${apiUrl}/auth/github?action=register`;
   };
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
