@@ -56,7 +56,8 @@ class AnalysisRun(Base):
     code_metrics = relationship("CodeMetrics", back_populates="analysis_run")
     security_findings = relationship("SecurityFinding", back_populates="analysis_run")
     skill_scores = relationship("SkillScore", back_populates="analysis_run")
-
+    status = Column(String, default="pending") 
+    ai_insights = Column(JSON, nullable=True)
 class CodeMetrics(Base):
     __tablename__ = "code_metrics"
 

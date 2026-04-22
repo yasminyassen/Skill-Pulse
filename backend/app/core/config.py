@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = "V4b5gxkYREWRMc3NDzwbPzypjCtasGVSKzdNiSn8xSQ="
     GITLEAKS_PATH: str = "D:\Skillpulse Downloads\gitleaks_8.29.1_windows_x64"
 
+    ai_mode: str = "openrouter"
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_model: str = "qwen2.5-coder:7b"
+    openrouter_api_key: str = "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"
+    openrouter_model: str = "qwen/qwen3-14b"
     class Config:
         env_file = ".env"
      
