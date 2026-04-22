@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     ai_mode: str = "openrouter"
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "qwen2.5-coder:7b"
-    openrouter_api_key: str = "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"
+    openrouter_api_key: str = ""
     openrouter_model: str = "qwen/qwen3-14b"
     class Config:
         env_file = ".env"
