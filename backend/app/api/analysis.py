@@ -263,3 +263,77 @@ async def run_analysis(
         "analysis_run_id": run.id,
         "status": "running"
     }
+    
+@router.get("/history")
+async def get_analysis_history(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    past_runs = (
+        db.query(AnalysisRun)
+        .join(Repository, AnalysisRun.repository_id == Repository.id)
+        .filter(Repository.owner_id == current_user.id)
+        .order_by(AnalysisRun.triggered_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "history": [
+            {
+                "analysis_id": run.id,
+                "repo_name": run.repository.name,
+                "branch": run.branch,
+                "status": run.status,
+                "triggered_at": run.triggered_at,
+                "completed_at": run.completed_at
+            }
+            for run in past_runs
+        ]
+    }
+
+
+@router.get("/{analysis_id}")
+async def get_analysis_result(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    run = (
+        db.query(AnalysisRun)
+        .join(Repository, AnalysisRun.repository_id == Repository.id)
+        .filter(AnalysisRun.id == analysis_id)
+        .filter(Repository.owner_id == current_user.id)
+        .first()
+    )
+
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    if run.status != "completed":
+        return {
+            "analysis_id": run.id,
+            "status": run.status,
+            "message": "Analysis is still processing or failed."
+        }
+
+    scores = db.query(SkillScore).filter(SkillScore.analysis_run_id == run.id).first()
+    findings_count = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).count()
+
+    return {
+        "analysis_run_id": run.id,
+        "repo": run.repository.full_name,
+        "branch": run.branch,
+        "status": run.status,
+        "scores": {
+            "code_quality": scores.code_quality_score if scores else 0,
+            "maintainability": scores.maintainability_score if scores else 0,
+            "architecture": scores.architecture_score if scores else 0,
+            "problem_solving": scores.problem_solving_score if scores else 0,
+            "overall": scores.overall_score if scores else 0,
+        },
+        "security_findings_count": findings_count,
+        "ai_insights": run.ai_insights,
+        "completed_at": run.completed_at
+    }    
