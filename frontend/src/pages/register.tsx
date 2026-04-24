@@ -6,6 +6,8 @@ const Register: React.FC = () => {
   const [form, setForm] = useState({ username: '', full_name: '', work_email: '', role: '', password: '', confirm_password: '' });
   const [focused, setFocused] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -294,6 +296,8 @@ const Register: React.FC = () => {
         .sp-signin a:hover { color: #f472b6; }
 
         /* Password bars */
+        .sp-pwd-toggle { background: none; border: none; padding: 0; cursor: pointer; color: rgba(167,139,250,0.4); display: flex; align-items: center; transition: color 0.2s; outline: none; }
+        .sp-pwd-toggle:hover { color: #c4b5fd; }
 
       `}</style>
 
@@ -506,27 +510,47 @@ const Register: React.FC = () => {
                       <span className="sp-input-icon">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                       </span>
-                      <input className="sp-input-field" type="password" placeholder="••••••••"
+                      <input className="sp-input-field" 
+                        type={showPassword ? "text" : "password"} 
+                        placeholder="••••••••"
                         value={form.password}
                         onChange={e => update('password', e.target.value)}
                         onFocus={() => setFocused('password')}
                         onBlur={() => setFocused(null)}
-                        required />
+                        required 
+                      />
+                      <button type="button" className="sp-pwd-toggle" onClick={() => setShowPassword(!showPassword)}>
+                        {showPassword ? (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        )}
+                      </button>
                     </div>
-
                   </div>
+
                   <div className="sp-field">
                     <label className="sp-field-label">Confirm Password</label>
                     <div className={`sp-input-wrap ${focused === 'confirm' ? 'focused' : ''}`}>
                       <span className="sp-input-icon">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                       </span>
-                      <input className="sp-input-field" type="password" placeholder="Repeat password"
+                      <input className="sp-input-field" 
+                        type={showConfirm ? "text" : "password"} 
+                        placeholder="Repeat password"
                         value={form.confirm_password}
                         onChange={e => update('confirm_password', e.target.value)}
                         onFocus={() => setFocused('confirm')}
                         onBlur={() => setFocused(null)}
-                        required />
+                        required 
+                      />
+                      <button type="button" className="sp-pwd-toggle" onClick={() => setShowConfirm(!showConfirm)}>
+                        {showConfirm ? (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        )}
+                      </button>
                     </div>
                   </div>
                 </div>

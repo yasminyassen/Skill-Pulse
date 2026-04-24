@@ -8,6 +8,7 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
   const [usernameFocused, setUsernameFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
 
@@ -144,6 +145,8 @@ const Login: React.FC = () => {
         .lg-input-wrap.focused .lg-input-icon { color: #c4b5fd; }
         .lg-input-field { flex: 1; border: none; background: transparent; outline: none; font-family: 'DM Sans', sans-serif; font-size: 14px; color: white; }
         .lg-input-field::placeholder { color: rgba(167,139,250,0.28); }
+        .lg-pwd-toggle { background: none; border: none; padding: 0; cursor: pointer; color: rgba(167,139,250,0.4); display: flex; align-items: center; transition: color 0.2s; outline: none; }
+        .lg-pwd-toggle:hover { color: #c4b5fd; }
         .lg-input-field:-webkit-autofill,
         .lg-input-field:-webkit-autofill:hover,
         .lg-input-field:-webkit-autofill:focus { -webkit-box-shadow: 0 0 0px 1000px rgba(30,20,51,0.95) inset !important; -webkit-text-fill-color: white !important; transition: background-color 5000s ease-in-out 0s; }
@@ -275,12 +278,23 @@ const Login: React.FC = () => {
                     <span className="lg-input-icon">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                     </span>
-                    <input className="lg-input-field" type="password" placeholder="••••••••"
+                    <input className="lg-input-field" 
+                      type={showPassword ? "text" : "password"} 
+                      placeholder="••••••••"
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                       onFocus={() => setPasswordFocused(true)}
                       onBlur={() => setPasswordFocused(false)}
-                      required />
+                      required 
+                    />
+                    
+                    <button type="button" className="lg-pwd-toggle" onClick={() => setShowPassword(!showPassword)}>
+                      {showPassword ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      )}
+                    </button>
                   </div>
                 </div>
 
