@@ -23,6 +23,9 @@ class User(Base):
     role = Column(Enum(UserRole), nullable=True, default=None)
     avatar_url = Column(String, nullable=True)
     github_access_token = Column(String, nullable=True)  # stored encrypted
+    github_refresh_token = Column(String, nullable=True)  # stored encrypted
+    github_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    github_refresh_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     analysis_runs = relationship("AnalysisRun", back_populates="user")

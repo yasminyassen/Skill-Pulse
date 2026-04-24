@@ -90,6 +90,26 @@ def _build_security_summary(security_report: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_categorized_findings_summary(security_report: dict) -> str:
+    categorized = security_report.get("categorized_findings") or {}
+    if not categorized:
+        return "HIGH: none\nMEDIUM: none\nLOW: none"
+
+    lines: list[str] = []
+    for severity in ("HIGH", "MEDIUM", "LOW"):
+        per_file = categorized.get(severity, {}) or {}
+        if not per_file:
+            lines.append(f"{severity}: none")
+            continue
+
+        fragments = []
+        for file_path, issues in list(per_file.items())[:5]:
+            fragments.append(f"{file_path} ({len(issues)})")
+        lines.append(f"{severity}: " + ", ".join(fragments))
+
+    return "\n".join(lines)
+
+
 # ===================================================
 #  PROMPTS
 # ===================================================
@@ -106,11 +126,14 @@ HOW TO INTERPRET SCORES:
 - maintainability → driven by: docstring coverage, coupling, nesting depth, long functions
 - architecture → driven by: import coupling, inheritance depth, module separation
 - problem_solving → driven by: test files count, test function ratio, cyclomatic complexity, long functions
+- security_score → driven by: HIGH/MEDIUM/LOW security findings and affected files
 
 
 RULES:
 - Each skill: 2 bullet points — one explaining why the score is what it is (cite the actual metric), one concrete fix
 - security_insights: one paragraph — cite the exact OWASP categories and counts, name the top affected files, give 2-3 specific fix steps
+- Do NOT include raw per-file code metrics in your output
+- Include final_categorized_findings grouped by HIGH, MEDIUM, LOW with file paths
 - Do NOT write generic advice like 'keep up the good work' or 'invest in learning'
 - Use single quotes inside strings, never double quotes
 - Return ONLY valid JSON
@@ -135,7 +158,12 @@ JSON structure:
       "Fix: specific testing strategy or refactoring step for this project"
     ]
   },
-  "security_insights": "Paragraph citing exact OWASP categories with counts, affected files, and concrete patches."
+    "security_insights": "Paragraph citing exact OWASP categories with counts, affected files, and concrete patches.",
+    "final_categorized_findings": {
+        "HIGH": ["file_path: concise issue summary"],
+        "MEDIUM": ["file_path: concise issue summary"],
+        "LOW": ["file_path: concise issue summary"]
+    }
 }"""
 
 
@@ -220,6 +248,7 @@ def _developer_content(analysis: dict, security_report: dict) -> str:
 - Code Quality:    {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
 - Maintainability: {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
 - Architecture:    {scores.get('architecture')} — {_score_label(scores.get('architecture', 0))}
+- Security Score:  {scores.get('security_score')} — {_score_label(scores.get('security_score', 0))}
 - Problem Solving: {scores.get('problem_solving')} — {_score_label(scores.get('problem_solving', 0))}
 
 METRICS (use these to explain each score):
@@ -236,7 +265,10 @@ METRICS (use these to explain each score):
 - Unused variables: {m.get('unused_variables', 0)}
 
 SECURITY DATA:
-{_build_security_summary(security_report)}"""
+{_build_security_summary(security_report)}
+
+SECURITY FINDINGS GROUPED BY SEVERITY AND FILE:
+{_build_categorized_findings_summary(security_report)}"""
 
 
 def _manager_content(analysis: dict, security_report: dict) -> str:
@@ -246,6 +278,7 @@ def _manager_content(analysis: dict, security_report: dict) -> str:
 - Code Quality:    {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
 - Maintainability: {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
 - Architecture:    {scores.get('architecture')} — {_score_label(scores.get('architecture', 0))}
+- Security Score:  {scores.get('security_score')} — {_score_label(scores.get('security_score', 0))}
 - Problem Solving: {scores.get('problem_solving')} — {_score_label(scores.get('problem_solving', 0))}
 - Overall:         {scores.get('overall')} — {_score_label(scores.get('overall', 0))}
 
@@ -258,7 +291,10 @@ TEAM METRICS:
 - Total lines of code: {m.get('total_loc', 0)}
 
 SECURITY DATA:
-{_build_security_summary(security_report)}"""
+{_build_security_summary(security_report)}
+
+SECURITY FINDINGS GROUPED BY SEVERITY AND FILE:
+{_build_categorized_findings_summary(security_report)}"""
 
 
 def _recruiter_content(analysis: dict, security_report: dict) -> str:
@@ -269,6 +305,7 @@ def _recruiter_content(analysis: dict, security_report: dict) -> str:
 - Code Quality (cleanliness and consistency): {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
 - Maintainability (ease of collaboration):    {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
 - Architecture (project organization):        {scores.get('architecture')} — {_score_label(scores.get('architecture', 0))}
+- Security Score (safe coding awareness):     {scores.get('security_score')} — {_score_label(scores.get('security_score', 0))}
 - Problem Solving (testing and logic):        {scores.get('problem_solving')} — {_score_label(scores.get('problem_solving', 0))}
 - Overall Score:                              {scores.get('overall')} — {_score_label(scores.get('overall', 0))}
 

@@ -1,10 +1,47 @@
 import axios from "axios";
 
+const canonicalizeLoopbackUrl = (rawUrl?: string) => {
+  if (!rawUrl) return "http://localhost:8000";
+  try {
+    const url = new URL(rawUrl);
+    if (url.hostname === "127.0.0.1") {
+      url.hostname = "localhost";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return rawUrl.replace(/\/$/, "");
+  }
+};
+
+export const API_BASE_URL = canonicalizeLoopbackUrl(import.meta.env.VITE_API_URL);
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL, // ← from .env, never hardcoded
+  baseURL: API_BASE_URL,
   headers: { "Content-Type": "application/json" },
   withCredentials: true, // ← sends HttpOnly cookies automatically on every request
 });
+
+let refreshPromise: Promise<string> | null = null;
+let redirectingToLogin = false;
+
+const clearSessionAndRedirectToLogin = () => {
+  if (redirectingToLogin) return;
+  redirectingToLogin = true;
+  localStorage.removeItem("token");
+  localStorage.removeItem("role");
+  localStorage.removeItem("full_name");
+  window.location.href = "/login?session=expired";
+};
+
+const isRefreshableRequest = (url?: string) => {
+  if (!url) return false;
+  return !(
+    url.includes("/auth/login") ||
+    url.includes("/auth/register") ||
+    url.includes("/auth/refresh") ||
+    url.includes("/auth/github")
+  );
+};
 
 // ── Automatically attach access token from localStorage to every request ──────
 api.interceptors.request.use((config) => {
@@ -20,20 +57,39 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const original = error.config;
-    if (error.response?.status === 401 && !original._retry) {
-      original._retry = true;
-      try {
-        const res = await api.post("/auth/refresh");
-        const newToken = res.data.access_token;
-        localStorage.setItem("token", newToken);
-        original.headers.Authorization = `Bearer ${newToken}`;
-        return api(original); // retry original request
-      } catch {
-        // refresh failed → logout
-        localStorage.removeItem("token");
-        window.location.href = "/";
-      }
+    if (!original || error.response?.status !== 401) {
+      return Promise.reject(error);
     }
+
+    if (!isRefreshableRequest(original.url) || original._retry) {
+      return Promise.reject(error);
+    }
+
+    original._retry = true;
+
+    try {
+      if (!refreshPromise) {
+        refreshPromise = api.post("/auth/refresh")
+          .then((res) => {
+            const newToken = res.data?.access_token;
+            if (!newToken) throw new Error("No refreshed access token");
+            localStorage.setItem("token", newToken);
+            return newToken;
+          })
+          .finally(() => {
+            refreshPromise = null;
+          });
+      }
+
+      const newToken = await refreshPromise;
+      original.headers = original.headers || {};
+      original.headers.Authorization = `Bearer ${newToken}`;
+      return api(original); // retry original request once
+    } catch {
+      clearSessionAndRedirectToLogin();
+      return Promise.reject(error);
+    }
+
     return Promise.reject(error);
   }
 );
@@ -61,7 +117,9 @@ export const logout = async () => {
     // clear anyway
   } finally {
     localStorage.removeItem("token");
-    window.location.href = "/";
+    localStorage.removeItem("role");
+    localStorage.removeItem("full_name");
+    window.location.href = "/login";
   }
 };
 

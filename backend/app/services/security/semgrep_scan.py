@@ -1,14 +1,21 @@
 import subprocess
 import json
+import shutil
 
 from app.core.security_mapping import CWE_TO_OWASP
+from app.core.config import settings
 
 
 def run_semgrep(repo_path):
+    semgrep_cmd = (settings.SEMGREP_PATH or "semgrep").strip()
+    if not shutil.which(semgrep_cmd):
+        raise FileNotFoundError(
+            "semgrep executable not found. Install semgrep or set SEMGREP_PATH to the semgrep executable."
+        )
 
     result = subprocess.run(
     [
-        "semgrep",
+        semgrep_cmd,
         "--config",
         "p/security-audit",
         "--json",

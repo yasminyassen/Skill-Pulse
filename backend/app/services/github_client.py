@@ -1,16 +1,86 @@
 import asyncio
 import base64
 import os
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.core.auth_utils import decrypt_github_token, encrypt_github_token
+from app.core.config import settings
+from app.db.models import User
 
 GITHUB_API_BASE = "https://api.github.com"
+GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 
 _GITHUB_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+
+
+def _expires_at_from_seconds(seconds: int | None) -> datetime | None:
+    if seconds is None:
+        return None
+
+    # Apply small skew so we refresh slightly before hard expiry.
+    safe_seconds = max(int(seconds) - 30, 0)
+    return datetime.now(timezone.utc) + timedelta(seconds=safe_seconds)
+
+
+async def refresh_github_access_token_for_user(db: Session, user: User) -> str | None:
+    """
+    Refresh GitHub OAuth access token using stored encrypted refresh token.
+    Returns decrypted access token on success, else None.
+    """
+    if not user.github_refresh_token:
+        return None
+
+    now = datetime.now(timezone.utc)
+    if user.github_refresh_token_expires_at and user.github_refresh_token_expires_at <= now:
+        return None
+
+    try:
+        raw_refresh_token = decrypt_github_token(user.github_refresh_token)
+    except Exception:
+        return None
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            GITHUB_OAUTH_TOKEN_URL,
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": settings.GITHUB_CLIENT_ID,
+                "client_secret": settings.GITHUB_CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": raw_refresh_token,
+            },
+        )
+
+    if not response.is_success:
+        return None
+
+    token_data = response.json()
+    new_access_token = token_data.get("access_token")
+    if not new_access_token:
+        return None
+
+    user.github_access_token = encrypt_github_token(new_access_token)
+    user.github_token_expires_at = _expires_at_from_seconds(token_data.get("expires_in"))
+
+    new_refresh_token = token_data.get("refresh_token")
+    if new_refresh_token:
+        user.github_refresh_token = encrypt_github_token(new_refresh_token)
+
+    refresh_expires_in = token_data.get("refresh_token_expires_in")
+    if refresh_expires_in is not None:
+        user.github_refresh_token_expires_at = _expires_at_from_seconds(refresh_expires_in)
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return new_access_token
 
 
 # async def fetch_user_repos(github_token: str, page: int = 1, per_page: int = 50) -> list[dict]:

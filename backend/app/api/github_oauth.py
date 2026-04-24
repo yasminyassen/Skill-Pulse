@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import User, RefreshToken, UserRole
@@ -15,6 +15,27 @@ router = APIRouter(prefix="/auth", tags=["github"])
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_EMAIL_URL = "https://api.github.com/user/emails"
+
+
+def _cookie_samesite() -> str:
+    raw = (settings.COOKIE_SAMESITE or "lax").strip().lower()
+    return raw if raw in {"lax", "strict", "none"} else "lax"
+
+
+def _cookie_secure() -> bool:
+    return settings.ENVIRONMENT == "production" or bool(settings.COOKIE_SECURE)
+
+
+def _frontend_base_url() -> str:
+    return settings.FRONTEND_URL.rstrip("/")
+
+
+def _expires_at_from_seconds(seconds: int | None) -> datetime | None:
+    if seconds is None:
+        return None
+
+    safe_seconds = max(int(seconds) - 30, 0)
+    return datetime.now(timezone.utc) + timedelta(seconds=safe_seconds)
 
 @router.get("/github")
 @limiter.limit("5/minute")
@@ -38,7 +59,6 @@ async def github_callback(
     request: Request,
     code: str,
     state: str = "login",
-    response: Response = None,
     db: Session = Depends(get_db)
 ):
     """Exchange GitHub code for access token and log user in"""
@@ -60,6 +80,10 @@ async def github_callback(
     github_access_token = token_data.get("access_token")
     if not github_access_token:
         raise HTTPException(status_code=400, detail="GitHub OAuth failed")
+
+    github_refresh_token = token_data.get("refresh_token")
+    github_token_expires_at = _expires_at_from_seconds(token_data.get("expires_in"))
+    github_refresh_token_expires_at = _expires_at_from_seconds(token_data.get("refresh_token_expires_in"))
 
     # 2. Get GitHub user info
     async with httpx.AsyncClient() as client:
@@ -93,6 +117,7 @@ async def github_callback(
 
     # Encrypt token before storing
     encrypted_token = encrypt_github_token(github_access_token)
+    encrypted_refresh_token = encrypt_github_token(github_refresh_token) if github_refresh_token else None
 
     # 3. Find or create user
     db_user = db.query(User).filter(User.github_id == github_id).first()
@@ -129,13 +154,16 @@ async def github_callback(
 
         current_user.github_id = github_id
         current_user.github_access_token = encrypted_token
+        current_user.github_refresh_token = encrypted_refresh_token
+        current_user.github_token_expires_at = github_token_expires_at
+        current_user.github_refresh_token_expires_at = github_refresh_token_expires_at
         db.commit()
 
         #  NEW: redirect by role
         role = current_user.role.value if current_user.role else "developer"
 
         return RedirectResponse(
-            url=f"http://localhost:5173/dashboard/{role}?github_connected=true"
+            url=f"{_frontend_base_url()}/dashboard/{role}?github_connected=true"
         )
 
     # Register flow: reject if already registered
@@ -155,6 +183,9 @@ async def github_callback(
             role=None,
             avatar_url=avatar_url,
             github_access_token=encrypted_token,
+            github_refresh_token=encrypted_refresh_token,
+            github_token_expires_at=github_token_expires_at,
+            github_refresh_token_expires_at=github_refresh_token_expires_at,
         )
         db.add(db_user)
         db.commit()
@@ -162,6 +193,9 @@ async def github_callback(
     else:
         # Update token on every login
         db_user.github_access_token = encrypted_token
+        db_user.github_refresh_token = encrypted_refresh_token
+        db_user.github_token_expires_at = github_token_expires_at
+        db_user.github_refresh_token_expires_at = github_refresh_token_expires_at
         db.commit()
 
     # 4. Create JWT tokens
@@ -182,15 +216,17 @@ async def github_callback(
     db.commit()
 
     # 5. Set HttpOnly refresh token cookie
-    response.set_cookie(
+    frontend_url = f"{_frontend_base_url()}/auth/github/callback?token={access_token}"
+    redirect_response = RedirectResponse(url=frontend_url)
+    redirect_response.set_cookie(
         key="refresh_token",
         value=raw_refresh_token,
         httponly=True,
-        secure=settings.ENVIRONMENT == "production",
-        samesite="lax",
-        expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+        secure=_cookie_secure(),
+        samesite=_cookie_samesite(),
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        path="/",
     )
    
     # 6. Redirect to frontend
-    frontend_url = f"http://localhost:5173/auth/github/callback?token={access_token}"
-    return RedirectResponse(url=frontend_url)
+    return redirect_response

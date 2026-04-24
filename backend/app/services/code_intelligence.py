@@ -87,8 +87,17 @@ def _module_name_from_import(node: ast.AST) -> list[str]:
 
 
 def _is_test_file(path: str) -> bool:
-    lowered = path.lower()
-    return lowered.split("/")[-1].startswith("test_") or "/tests/" in lowered or lowered.endswith("_test.py")
+    lowered = path.replace("\\", "/").lower()
+    filename = lowered.rsplit("/", 1)[-1]
+    path_parts = lowered.split("/")
+
+    return (
+        "test" in filename
+        or filename.endswith("_test.py")
+        or filename.endswith(".test.py")
+        or "tests" in path_parts
+        or "test" in path_parts
+    )
 
 
 def _hash_windows(lines: list[str], window_size: int = 5) -> list[str]:
@@ -358,6 +367,7 @@ def _compute_scores(file_reports: list[dict]) -> dict:
             "maintainability": 0,
             "architecture": 0,
             "problem_solving": 0,
+            "security_score": 0,
             "overall": 0,
         }
 
@@ -409,12 +419,15 @@ def _compute_scores(file_reports: list[dict]) -> dict:
         {"complexity_distribution": 0.35, "nesting": 0.25, "modularity": 0.2, "logic_density": 0.2},
     )
 
-    overall = (code_quality + maintainability + architecture + problem_solving) / 4.0
+    security_component = 1.0
+    security_score = 100.0
+    overall = (code_quality + maintainability + architecture + problem_solving + security_component) / 5.0
 
     return {
         "code_quality": round(code_quality * 100, 2),
         "maintainability": round(maintainability * 100, 2),
         "architecture": round(architecture * 100, 2),
         "problem_solving": round(problem_solving * 100, 2),
+        "security_score": security_score,
         "overall": round(overall * 100, 2),
     }

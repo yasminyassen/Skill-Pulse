@@ -40,6 +40,8 @@ def run_migrations_offline() -> None:
 # --- Online migrations ---
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
+    # Keep Alembic and app runtime on the same database URL.
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

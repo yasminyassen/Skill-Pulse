@@ -5,6 +5,7 @@ import uuid
 import tempfile
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from fastapi import Request, APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
@@ -20,16 +21,102 @@ from app.core.auth_utils import get_current_user, decrypt_github_token
 from app.core.rate_limiter import limiter
 
 from app.services.security.pipeline import run_security_analysis
-from app.services.github_client import verify_repo_access, fetch_repo_python_files, read_local_repo_files
+from app.services.github_client import (
+    verify_repo_access,
+    fetch_repo_python_files,
+    read_local_repo_files,
+    refresh_github_access_token_for_user,
+)
 from app.services.code_intelligence import analyze_python_files
 from ai_services.insights.ai_insights import generate_insights
 
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
+
+def _normalize_severity(severity: str | None) -> str:
+    s = (severity or "MEDIUM").upper()
+    if s == "CRITICAL":
+        return "HIGH"
+    if s in {"HIGH", "MEDIUM", "LOW"}:
+        return s
+    return "MEDIUM"
+
+
+def _group_findings_by_severity_and_file(findings: list[dict]) -> dict:
+    grouped: dict[str, dict[str, list[dict]]] = {
+        "HIGH": {},
+        "MEDIUM": {},
+        "LOW": {},
+    }
+
+    for finding in findings:
+        sev = _normalize_severity(finding.get("severity"))
+        file_path = finding.get("file_path") or "unknown"
+        entry = {
+            "tool": finding.get("tool"),
+            "rule": finding.get("rule"),
+            "owasp_category": finding.get("owasp_category") or "Unknown",
+            "line_number": finding.get("line_number", 0),
+            "description": finding.get("description"),
+        }
+        grouped[sev].setdefault(file_path, []).append(entry)
+
+    return grouped
+
+
+def _compute_security_score(findings: list[dict]) -> float:
+    if not findings:
+        return 100.0
+
+    penalty_by_severity = {"HIGH": 12.0, "MEDIUM": 6.0, "LOW": 2.0}
+    penalty = 0.0
+
+    for finding in findings:
+        sev = _normalize_severity(finding.get("severity"))
+        penalty += penalty_by_severity.get(sev, 6.0)
+
+    return round(max(0.0, 100.0 - penalty), 2)
+
+
+def _compute_overall_score(scores: dict) -> float:
+    code_quality = float(scores.get("code_quality", 0.0) or 0.0)
+    maintainability = float(scores.get("maintainability", 0.0) or 0.0)
+    architecture = float(scores.get("architecture", 0.0) or 0.0)
+    problem_solving = float(scores.get("problem_solving", 0.0) or 0.0)
+    security_score = float(scores.get("security_score", 0.0) or 0.0)
+    return round((code_quality + maintainability + architecture + problem_solving + security_score) / 5.0, 2)
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
 class RepoRequest(BaseModel):
     repo_url: str
     branch: str = "main"
+
+
+def _build_github_connect_payload(request: Request, current_user: User) -> dict:
+    auth_header = request.headers.get("authorization")
+    if not auth_header or " " not in auth_header:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+    jwt_token = auth_header.split(" ", 1)[1]
+    base_url = str(request.base_url).rstrip("/")
+    return {
+        "requires_github_auth": True,
+        "auth_url": f"{base_url}/auth/github?action=connect&token={jwt_token}",
+    }
 
 
 async def background_analysis_task(
@@ -124,13 +211,17 @@ async def background_analysis_task(
 
         # 5. Store Skill Scores
         scores = code_intelligence_result.get("scores", {})
+        security_score = _compute_security_score(findings)
+        scores["security_score"] = security_score
+        scores["overall"] = _compute_overall_score(scores)
+
         new_skill_score = SkillScore(
             analysis_run_id=run.id,
             user_id=current_user_id,
             code_quality_score=float(scores.get("code_quality", 0.0) or 0.0),
             maintainability_score=float(scores.get("maintainability", 0.0) or 0.0),
             architecture_score=float(scores.get("architecture", 0.0) or 0.0),
-            security_awareness_score=float(scores.get("security", 0.0)),
+            security_awareness_score=float(scores.get("security_score", 0.0) or 0.0),
             problem_solving_score=float(scores.get("problem_solving", 0.0) or 0.0),
             overall_score=float(scores.get("overall", 0.0) or 0.0),
         )
@@ -152,6 +243,8 @@ async def background_analysis_task(
                 file_counts[fp] = file_counts.get(fp, 0) + 1
                 
             security_report["top_vulnerable_files"] = dict(sorted(file_counts.items(), key=lambda x: x[1], reverse=True)[:5])
+            security_report["categorized_findings"] = _group_findings_by_severity_and_file(findings)
+            security_report["security_score"] = security_score
             
             analysis_payload = {
                 "scores": scores,
@@ -215,11 +308,33 @@ async def run_analysis(
     repo_name = full_name.split("/")[-1]
     
     token = decrypt_github_token(current_user.github_access_token) if current_user.github_access_token else None
+
+    if (
+        token
+        and current_user.github_token_expires_at
+        and current_user.github_token_expires_at <= datetime.now(timezone.utc)
+    ):
+        refreshed_token = await refresh_github_access_token_for_user(db, current_user)
+        if refreshed_token:
+            token = refreshed_token
     
     repo_data = None
     
     if token:
-        repo_data = await verify_repo_access(token, full_name)
+        try:
+            repo_data = await verify_repo_access(token, full_name)
+        except HTTPException as e:
+            if e.status_code == 401:
+                refreshed_token = await refresh_github_access_token_for_user(db, current_user)
+                if refreshed_token:
+                    token = refreshed_token
+                    repo_data = await verify_repo_access(token, full_name)
+                else:
+                    payload = _build_github_connect_payload(request, current_user)
+                    payload["reason"] = "github_token_expired"
+                    raise HTTPException(status_code=403, detail=payload)
+            else:
+                raise
     else:
         try:
             repo_data = await verify_repo_access(None, full_name)
@@ -231,15 +346,9 @@ async def run_analysis(
                         detail={"recruiter_private_repo": True}
                     )
 
-                auth_header = request.headers.get("authorization")
-                jwt_token = auth_header.split(" ")[1]
-
                 raise HTTPException(
                     status_code=403,
-                    detail={
-                        "requires_github_auth": True,
-                        "auth_url": f"http://127.0.0.1:8000/auth/github?action=connect&token={jwt_token}"
-                    }
+                    detail=_build_github_connect_payload(request, current_user)
                 )
             raise
     # try:
@@ -363,6 +472,197 @@ async def get_analysis_history(
     return {"history": result}
 
 
+@router.get("/{analysis_run_id}/detailed-metrics")
+async def get_detailed_metrics_breakdown(
+    analysis_run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    run = (
+        db.query(AnalysisRun)
+        .filter(AnalysisRun.id == analysis_run_id)
+        .filter(AnalysisRun.user_id == current_user.id)
+        .first()
+    )
+
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+
+    if run.status != "completed":
+        raise HTTPException(status_code=400, detail="Analysis run is not completed")
+
+    score_row = (
+        db.query(SkillScore)
+        .filter(SkillScore.analysis_run_id == run.id)
+        .first()
+    )
+    metric_rows = (
+        db.query(CodeMetrics)
+        .filter(CodeMetrics.analysis_run_id == run.id)
+        .all()
+    )
+    findings = (
+        db.query(SecurityFinding)
+        .filter(SecurityFinding.analysis_run_id == run.id)
+        .all()
+    )
+
+    total_files = len(metric_rows)
+    total_loc = 0
+    cyclomatic_values: list[float] = []
+    duplication_values: list[float] = []
+    maintainability_index_values: list[float] = []
+    docstring_coverage_values: list[float] = []
+    test_ratio_values: list[float] = []
+    avg_nesting_values: list[float] = []
+    function_size_values: list[float] = []
+    comment_ratio_values: list[float] = []
+
+    style_violations_total = 0
+    missing_docstrings_total = 0
+    long_functions_total = 0
+    deep_nesting_total = 0
+    too_many_params_total = 0
+    unused_variables_total = 0
+    import_coupling_total = 0
+    test_files_total = 0
+    max_inheritance_depth = 0
+
+    for row in metric_rows:
+        raw = row.raw_metrics if isinstance(row.raw_metrics, dict) else {}
+
+        loc = row.lines_of_code if row.lines_of_code is not None else _safe_int(raw.get("loc"), 0)
+        total_loc += loc
+
+        cyclomatic = (
+            row.cyclomatic_complexity
+            if row.cyclomatic_complexity is not None
+            else _safe_float(raw.get("cyclomatic_complexity"), 0.0)
+        )
+        cyclomatic_values.append(cyclomatic)
+
+        duplication = (
+            row.duplication_score
+            if row.duplication_score is not None
+            else _safe_float(raw.get("duplication_score"), 0.0)
+        )
+        duplication_values.append(duplication)
+
+        if row.maintainability_index is not None:
+            maintainability_index_values.append(_safe_float(row.maintainability_index, 0.0))
+
+        if raw.get("docstring_coverage") is not None:
+            docstring_coverage_values.append(_safe_float(raw.get("docstring_coverage"), 0.0))
+        if raw.get("test_function_ratio") is not None:
+            test_ratio_values.append(_safe_float(raw.get("test_function_ratio"), 0.0))
+        if raw.get("avg_nesting_depth") is not None:
+            avg_nesting_values.append(_safe_float(raw.get("avg_nesting_depth"), 0.0))
+        if raw.get("avg_function_size") is not None:
+            function_size_values.append(_safe_float(raw.get("avg_function_size"), 0.0))
+        if raw.get("comment_ratio") is not None:
+            comment_ratio_values.append(_safe_float(raw.get("comment_ratio"), 0.0))
+
+        style_violations_total += _safe_int(raw.get("style_violations"), 0)
+        missing_docstrings_total += _safe_int(raw.get("missing_docstrings"), 0)
+        long_functions_total += _safe_int(raw.get("long_functions"), 0)
+        deep_nesting_total += _safe_int(raw.get("deep_nesting"), 0)
+        too_many_params_total += _safe_int(raw.get("too_many_params"), 0)
+        unused_variables_total += _safe_int(raw.get("unused_variables"), 0)
+        import_coupling_total += _safe_int(raw.get("import_coupling"), 0)
+
+        if bool(raw.get("is_test_file")):
+            test_files_total += 1
+
+        max_inheritance_depth = max(
+            max_inheritance_depth,
+            _safe_int(raw.get("max_inheritance_depth"), 0),
+        )
+
+    findings_by_severity = Counter(_normalize_severity(f.severity) for f in findings)
+    findings_by_owasp = Counter((f.owasp_category or "Unknown") for f in findings)
+    findings_by_file = Counter(
+        (os.path.basename((f.file_path or "unknown").replace("\\", "/")) or "unknown")
+        for f in findings
+    )
+
+    def _avg(values: list[float]) -> float:
+        return round(sum(values) / len(values), 4) if values else 0.0
+
+    code_quality_score = _safe_float(score_row.code_quality_score, 0.0) if score_row else 0.0
+    maintainability_score = _safe_float(score_row.maintainability_score, 0.0) if score_row else 0.0
+    architecture_score = _safe_float(score_row.architecture_score, 0.0) if score_row else 0.0
+    problem_solving_score = _safe_float(score_row.problem_solving_score, 0.0) if score_row else 0.0
+    security_score = _safe_float(score_row.security_awareness_score, 0.0) if score_row else _compute_security_score(
+        [{"severity": f.severity} for f in findings]
+    )
+    overall_score = _safe_float(score_row.overall_score, 0.0) if score_row else _compute_overall_score(
+        {
+            "code_quality": code_quality_score,
+            "maintainability": maintainability_score,
+            "architecture": architecture_score,
+            "problem_solving": problem_solving_score,
+            "security_score": security_score,
+        }
+    )
+
+    return {
+        "analysis_run_id": run.id,
+        "repo": run.repository.full_name,
+        "branch": run.branch,
+        "status": run.status,
+        "scores": {
+            "code_quality": round(code_quality_score, 2),
+            "maintainability": round(maintainability_score, 2),
+            "architecture": round(architecture_score, 2),
+            "security_score": round(security_score, 2),
+            "problem_solving": round(problem_solving_score, 2),
+            "overall": round(overall_score, 2),
+        },
+        "detailed_metrics": {
+            "code_quality": {
+                "python_files": total_files,
+                "total_loc": total_loc,
+                "avg_cyclomatic_complexity": _avg(cyclomatic_values),
+                "avg_duplication_score": _avg(duplication_values),
+                "style_violations": style_violations_total,
+                "unused_variables": unused_variables_total,
+            },
+            "maintainability": {
+                "avg_docstring_coverage": _avg(docstring_coverage_values),
+                "missing_docstrings": missing_docstrings_total,
+                "avg_maintainability_index": _avg(maintainability_index_values),
+                "avg_comment_ratio": _avg(comment_ratio_values),
+                "long_functions": long_functions_total,
+                "too_many_params": too_many_params_total,
+            },
+            "architecture": {
+                "import_coupling_total": import_coupling_total,
+                "max_inheritance_depth": max_inheritance_depth,
+                "avg_nesting_depth": _avg(avg_nesting_values),
+                "avg_function_size": _avg(function_size_values),
+                "deep_nesting": deep_nesting_total,
+            },
+            "problem_solving": {
+                "test_files": test_files_total,
+                "avg_test_function_ratio": _avg(test_ratio_values),
+                "avg_cyclomatic_complexity": _avg(cyclomatic_values),
+                "long_functions": long_functions_total,
+            },
+        },
+        "security": {
+            "findings_count": len(findings),
+            "severity_distribution": {
+                "HIGH": findings_by_severity.get("HIGH", 0),
+                "MEDIUM": findings_by_severity.get("MEDIUM", 0),
+                "LOW": findings_by_severity.get("LOW", 0),
+            },
+            "owasp_distribution": dict(findings_by_owasp),
+            "top_vulnerable_files": dict(findings_by_file.most_common(5)),
+        },
+        "completed_at": run.completed_at,
+    }
+
+
 @router.get("/{analysis_id}")
 async def get_analysis_result(
     analysis_id: int,
@@ -392,6 +692,10 @@ async def get_analysis_result(
 
     scores = db.query(SkillScore).filter(SkillScore.analysis_run_id == run.id).first()
     findings_count = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).count()
+    ai_insights = run.ai_insights or {}
+    if isinstance(ai_insights, dict):
+        ai_insights = dict(ai_insights)
+        ai_insights.pop("final_categorized_findings", None)
 
     return {
         "analysis_run_id": run.id,
@@ -402,10 +706,11 @@ async def get_analysis_result(
             "code_quality": scores.code_quality_score if scores else 0,
             "maintainability": scores.maintainability_score if scores else 0,
             "architecture": scores.architecture_score if scores else 0,
+            "security_score": scores.security_awareness_score if scores else 0,
             "problem_solving": scores.problem_solving_score if scores else 0,
             "overall": scores.overall_score if scores else 0,
         },
         "security_findings_count": findings_count,
-        "ai_insights": run.ai_insights,
+        "ai_insights": ai_insights,
         "completed_at": run.completed_at
     }

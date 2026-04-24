@@ -17,6 +17,16 @@ from pydantic import BaseModel, EmailStr, Field, validator
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+
+def _cookie_samesite() -> str:
+    raw = (settings.COOKIE_SAMESITE or "lax").strip().lower()
+    return raw if raw in {"lax", "strict", "none"} else "lax"
+
+
+def _cookie_secure() -> bool:
+    # In production, always use secure cookies unless explicitly overridden.
+    return settings.ENVIRONMENT == "production" or bool(settings.COOKIE_SECURE)
+
 class UserRegister(BaseModel):
     username: str = Field(..., min_length=3, max_length=20, pattern=r"^[a-zA-Z0-9_-]+$")
     full_name: str = Field(..., min_length=3, max_length=100)
@@ -145,9 +155,9 @@ def login(
         key="refresh_token",
         value=raw_refresh_token,
         httponly=True,
-        secure=settings.ENVIRONMENT == "production",        
-        samesite="strict",
-        expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+        secure=_cookie_secure(),
+        samesite=_cookie_samesite(),
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
 
     return {
@@ -226,9 +236,9 @@ def refresh(
         key="refresh_token",
         value=new_raw_refresh_token,
         httponly=True,
-        secure=settings.ENVIRONMENT == "production",
-        samesite="strict",
-        expires=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+        secure=_cookie_secure(),
+        samesite=_cookie_samesite(),
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
 
     return {
@@ -257,8 +267,8 @@ def logout(
     response.delete_cookie(
         key="refresh_token",
         httponly=True,
-        secure=settings.ENVIRONMENT == "production",
-        samesite="strict"
+        secure=_cookie_secure(),
+        samesite=_cookie_samesite()
     )
 
     return {"message": "Logged out successfully"}

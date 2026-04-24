@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { API_BASE_URL } from "../api/auth";
 
 const GitHubCallback: React.FC = () => {
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
@@ -20,8 +21,9 @@ const GitHubCallback: React.FC = () => {
 
     setTimeout(async () => {
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/whoami-full`, {
-          headers: { Authorization: `Bearer ${token}` }
+        const res = await fetch(`${API_BASE_URL}/auth/whoami-full`, {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: "include",
         });
         const user = await res.json();
         localStorage.setItem("role", user.role);

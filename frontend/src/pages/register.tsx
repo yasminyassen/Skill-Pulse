@@ -1,6 +1,6 @@
 import type { FormEvent } from "react";
 import React, { useState } from "react";
-import { register } from "../api/auth";
+import { API_BASE_URL, register } from "../api/auth";
 
 const Register: React.FC = () => {
   const [form, setForm] = useState({ username: '', full_name: '', work_email: '', role: '', password: '', confirm_password: '' });
@@ -24,8 +24,7 @@ const Register: React.FC = () => {
   const handleGitHubLogin = () => {
     setError(null);
     setGithubLoading(true);
-    const apiUrl = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
-    window.location.href = `${apiUrl}/auth/github?action=register`;
+    window.location.href = `${API_BASE_URL}/auth/github?action=register`;
   };
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();

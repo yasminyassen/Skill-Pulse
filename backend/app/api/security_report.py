@@ -13,6 +13,15 @@ from app.core.rate_limiter import limiter
 router = APIRouter(prefix="/security-report", tags=["security"])
 
 
+def _severity_bucket(severity: str | None) -> str:
+    s = (severity or "MEDIUM").upper()
+    if s == "CRITICAL":
+        return "HIGH"
+    if s in {"HIGH", "MEDIUM", "LOW"}:
+        return s
+    return "MEDIUM"
+
+
 @router.get("/{analysis_id}")
 @limiter.limit("20/minute")
 def get_security_report(
@@ -32,7 +41,12 @@ def get_security_report(
             "total_findings": 0,
             "severity_distribution": {},
             "tool_distribution": {},
-            "owasp_distribution": {}
+            "owasp_distribution": {},
+            "categorized_findings": {
+                "HIGH": {},
+                "MEDIUM": {},
+                "LOW": {},
+            },
         }
 
     total = len(findings)
@@ -67,6 +81,25 @@ def get_security_report(
     .all()
     )
 
+    categorized_findings = {
+        "HIGH": {},
+        "MEDIUM": {},
+        "LOW": {},
+    }
+
+    for f in findings:
+        severity = _severity_bucket(f.severity)
+        file_path = f.file_path or "unknown"
+        categorized_findings[severity].setdefault(file_path, []).append(
+            {
+                "tool": f.tool,
+                "rule": f.rule,
+                "owasp_category": f.owasp_category or "Unknown",
+                "line_number": f.line_number or 0,
+                "description": f.description,
+            }
+        )
+
     return {
 
         "analysis_id": analysis_id,
@@ -87,6 +120,7 @@ def get_security_report(
         
         "top_vulnerable_files": {
             k: v for k, v in file_stats
-        }
+        },
+        "categorized_findings": categorized_findings,
 
     }
