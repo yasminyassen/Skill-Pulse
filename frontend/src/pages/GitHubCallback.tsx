@@ -20,10 +20,12 @@ const GitHubCallback: React.FC = () => {
 
     setTimeout(async () => {
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/whoami`, {
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/whoami-full`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         const user = await res.json();
+        localStorage.setItem("role", user.role);
+        localStorage.setItem("full_name", user.full_name || user.username || "User");
 
         if (user.role === 'developer') window.location.href = '/dashboard/developer';
         else if (user.role === 'manager') window.location.href = '/dashboard/manager';

@@ -1,6 +1,7 @@
 import type { FormEvent } from "react";
 import React, { useState } from "react";
-import { login, whoami } from '../api/auth';
+import { login } from '../api/auth';
+import api from '../api/auth';
 
 const Login: React.FC = () => {
   const [username, setUsername] = useState<string>('');
@@ -29,8 +30,11 @@ const Login: React.FC = () => {
       if (response.access_token) {
         localStorage.setItem('token', response.access_token);
       }
-      const user = await whoami();
-      setSuccess(`Welcome back, ${user.username}!`);
+      const userRes = await api.get("/auth/whoami-full");
+      const user = userRes.data;
+      localStorage.setItem("role", user.role);
+      localStorage.setItem("full_name", user.full_name || user.username || "User");
+      setSuccess(`Welcome back, ${user.full_name || user.username}!`);
       setTimeout(() => {
         if (user.role === 'developer')       window.location.href = '/dashboard/developer';
         else if (user.role === 'manager')    window.location.href = '/dashboard/manager';

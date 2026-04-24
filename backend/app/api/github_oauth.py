@@ -103,7 +103,7 @@ async def github_callback(
         action = state
         token = None
     if action == "connect":
-        
+
         if not token:
             raise HTTPException(status_code=401, detail="Missing token")
 
@@ -118,6 +118,7 @@ async def github_callback(
 
         if not current_user:
             raise HTTPException(status_code=404, detail="User not found")
+
         existing = db.query(User).filter(User.github_id == github_id).first()
 
         if existing and existing.id != current_user.id:
@@ -125,11 +126,17 @@ async def github_callback(
                 status_code=400,
                 detail="This GitHub account is already linked to another user"
             )
+
         current_user.github_id = github_id
         current_user.github_access_token = encrypted_token
         db.commit()
 
-        return RedirectResponse(url="http://127.0.0.1:8000/docs")
+        #  NEW: redirect by role
+        role = current_user.role.value if current_user.role else "developer"
+
+        return RedirectResponse(
+            url=f"http://localhost:5173/dashboard/{role}?github_connected=true"
+        )
 
     # Register flow: reject if already registered
 

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from app.db.database import get_db
-from app.db.models import User, Repository
+from app.db.models import User, Repository, AnalysisRun
 from app.core.auth_utils import get_current_user, decrypt_github_token
 from app.services.github_client import verify_repo_access
 
@@ -149,9 +149,9 @@ def list_connected_repos(
     """
     repos = (
         db.query(Repository)
-        .filter(Repository.owner_id == current_user.id)
-        .order_by(Repository.connected_at.desc())
-        .all()
+        .join(AnalysisRun)
+        .filter(AnalysisRun.user_id == current_user.id)
+        .distinct()
     )
     return [_serialize_repo(r) for r in repos]
 
@@ -165,15 +165,17 @@ def disconnect_repository(
     """
     Disconnect a repository from the user's SkillPulse account.
 
-    Security: the owner_id filter ensures users can only disconnect their
-    own repositories — not those belonging to other users.
+    Security: ensure the user has at least one analysis run for this repository
+    
     """
     repo = (
         db.query(Repository)
+        .join(AnalysisRun)
         .filter(
             Repository.id == repo_id,
-            Repository.owner_id == current_user.id,  # ownership enforced
+            AnalysisRun.user_id == current_user.id
         )
+        .distinct()
         .first()
     )
     if not repo:
@@ -183,7 +185,18 @@ def disconnect_repository(
         )
 
     full_name = repo.full_name
-    db.delete(repo)
+    db.query(AnalysisRun).filter(
+        AnalysisRun.repository_id == repo_id,
+        AnalysisRun.user_id == current_user.id
+    ).delete(synchronize_session=False)
+    
+    remaining = db.query(AnalysisRun).filter(
+        AnalysisRun.repository_id == repo_id
+    ).first()
+
+    if not remaining:
+        db.delete(repo)
+        
     db.commit()
 
     return {"message": f"Repository '{full_name}' disconnected successfully."}

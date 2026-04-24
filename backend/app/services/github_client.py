@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import os
 
 import httpx
 from fastapi import HTTPException
@@ -79,7 +80,7 @@ async def fetch_repo_python_files(
             if item.get("type") == "blob" and str(item.get("path", "")).endswith(".py")
         ]
 
-        sem = asyncio.Semaphore(8)
+        sem = asyncio.Semaphore(2)
 
         async def _fetch_file(item: dict) -> dict | None:
             path = item.get("path")
@@ -118,6 +119,20 @@ async def fetch_repo_python_files(
     return [f for f in files if f is not None]
 
 
+def read_local_repo_files(repo_path):
+    python_files = []
+    for root, _, files in os.walk(repo_path):
+        for f in files:
+            if f.endswith(".py"):
+                full_path = os.path.join(root, f)
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as file:
+                    python_files.append({
+                        "filename": f,
+                        "path": full_path,
+                        "content": file.read()
+                    })
+    return python_files
+
 def _raise_for_github_error(response: httpx.Response, resource: str = "resource") -> None:
     """Translate GitHub API error responses into clean HTTPExceptions."""
     if response.is_success:
@@ -128,10 +143,9 @@ def _raise_for_github_error(response: httpx.Response, resource: str = "resource"
             detail="GitHub token is invalid or expired. Please re-authenticate with GitHub.",
         )
     if response.status_code == 403:
-        raise HTTPException(
-            status_code=403,
-            detail="GitHub API rate limit exceeded or your token lacks the required permissions.",
-        )
+        if "rate limit" in response.text.lower():
+            raise HTTPException(status_code=429, detail="rate_limit")
+        raise HTTPException(status_code=403, detail="github_forbidden")
     if response.status_code == 404:
         raise HTTPException(
             status_code=404,

@@ -20,7 +20,7 @@ from app.core.auth_utils import get_current_user, decrypt_github_token
 from app.core.rate_limiter import limiter
 
 from app.services.security.pipeline import run_security_analysis
-from app.services.github_client import verify_repo_access, fetch_repo_python_files
+from app.services.github_client import verify_repo_access, fetch_repo_python_files, read_local_repo_files
 from app.services.code_intelligence import analyze_python_files
 from ai_services.insights.ai_insights import generate_insights
 
@@ -49,20 +49,9 @@ async def background_analysis_task(
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
         if not run:
             return
-
-        # 1. Fetch & Analyze Python Files
-        try:
-            python_files = await fetch_repo_python_files(
-                github_token=token,
-                full_name=full_name,
-                branch=branch,
-            )
-            code_intelligence_result = analyze_python_files(python_files)
-        except Exception as e:
-            logging.exception(f"Code intelligence fetch failed for {full_name}: {str(e)}")
-            raise Exception("Failed to retrieve repository file tree or Python file contents.")
-
-        # 2. Clone Repository & Run Security Analysis
+        
+        # 1. Clone Repository & Run Security Analysis
+        # 2. Clone & Analyze Python Files
         with tempfile.TemporaryDirectory(prefix="repo_") as repo_path:
             clone_path = os.path.join(repo_path, f"{repo_name}_{uuid.uuid4().hex}")
             
@@ -76,8 +65,23 @@ async def background_analysis_task(
                 clone_cmd[-2] = auth_repo_url # Update URL in command
 
             subprocess.run(clone_cmd, check=True, timeout=120)
+            
+            python_files = read_local_repo_files(clone_path)
+            code_intelligence_result = analyze_python_files(python_files)
 
             findings = run_security_analysis(clone_path)
+        
+        # 2. Fetch & Analyze Python Files
+        # try:
+        #     # python_files = await fetch_repo_python_files(
+        #     #     github_token=token,
+        #     #     full_name=full_name,
+        #     #     branch=branch,
+        #     # )
+        #     code_intelligence_result = analyze_python_files(python_files)
+        # except Exception as e:
+        #     logging.exception(f"Code intelligence fetch failed for {full_name}: {str(e)}")
+        #     raise Exception("Failed to retrieve repository file tree or Python file contents.")
 
         # 3. Store Findings
         for f in findings:
@@ -126,7 +130,7 @@ async def background_analysis_task(
             code_quality_score=float(scores.get("code_quality", 0.0) or 0.0),
             maintainability_score=float(scores.get("maintainability", 0.0) or 0.0),
             architecture_score=float(scores.get("architecture", 0.0) or 0.0),
-            security_awareness_score=float(scores.get("architecture", 0.0) or 0.0),
+            security_awareness_score=float(scores.get("security", 0.0)),
             problem_solving_score=float(scores.get("problem_solving", 0.0) or 0.0),
             overall_score=float(scores.get("overall", 0.0) or 0.0),
         )
@@ -173,11 +177,22 @@ async def background_analysis_task(
 
     except Exception as e:
         import traceback
+        error_text = str(e)
+
         logging.error(f">>> BACKGROUND TASK ERROR: {traceback.format_exc()}")
+
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
         if run:
             run.status = "failed"
             run.completed_at = datetime.now(timezone.utc)
+
+            if "rate" in error_text.lower():
+                run.ai_insights = {"error_reason": "rate_limit"}
+            elif "not found" in error_text.lower():
+                run.ai_insights = {"error_reason": "not_found"}
+            else:
+                run.ai_insights = {"error_reason": "unknown"}
+
             db.commit()
     finally:
         db.close() 
@@ -200,21 +215,71 @@ async def run_analysis(
     repo_name = full_name.split("/")[-1]
     
     token = decrypt_github_token(current_user.github_access_token) if current_user.github_access_token else None
-
-    try:
+    
+    repo_data = None
+    
+    if token:
         repo_data = await verify_repo_access(token, full_name)
-    except Exception:
-        if not token:
-            return {
-                "requires_github_auth": True,
-                "auth_url": f"http://127.0.0.1:8000/auth/github?action=connect&token={request.headers.get('authorization').split()[1]}"
-            }
-        raise HTTPException(status_code=404, detail="Repository not found or not accessible")
+    else:
+        try:
+            repo_data = await verify_repo_access(None, full_name)
+        except HTTPException as e:
+            if e.status_code == 404:
+                if current_user.role.value == "recruiter":
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"recruiter_private_repo": True}
+                    )
+
+                auth_header = request.headers.get("authorization")
+                jwt_token = auth_header.split(" ")[1]
+
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "requires_github_auth": True,
+                        "auth_url": f"http://127.0.0.1:8000/auth/github?action=connect&token={jwt_token}"
+                    }
+                )
+            raise
+    # try:
+    #     repo_data = await verify_repo_access(token, full_name)
+    # except HTTPException as e:
+    #     if e.status_code == 404 and not token:
+    #         # Recruiters can't access private repos — show specific message
+    #         if current_user.role.value == "recruiter":
+    #             raise HTTPException(
+    #                 status_code=403,
+    #                 detail={"recruiter_private_repo": True}
+    #             )
+    #         # Other users without token — prompt GitHub connect
+    #         auth_header = request.headers.get("authorization")
+    #         if not auth_header:
+    #             raise HTTPException(status_code=401, detail="Missing Authorization header")
+    #         jwt_token = auth_header.split(" ")[1]
+    #         raise HTTPException(
+    #             status_code=403,
+    #             detail={
+    #                 "requires_github_auth": True,
+    #                 "auth_url": f"http://127.0.0.1:8000/auth/github?action=connect&token={jwt_token}"
+    #             }
+    #         )
+    #     if e.status_code == 403:
+    #         raise HTTPException(
+    #             status_code=503,
+    #             detail="GitHub API rate limit reached. Connect your GitHub account or wait a moment and try again."
+    #         )
+    #     if e.status_code == 404:
+    #         raise HTTPException(status_code=404, detail="Repository not found or inaccessible")
+    #     raise
 
     is_private = repo_data.get("private", False)
-    
+
     if is_private and current_user.role.value == "recruiter":
-        raise HTTPException(status_code=403, detail="Recruiters cannot analyze private repositories.")
+        raise HTTPException(
+            status_code=403,
+            detail={"recruiter_private_repo": True}
+        )
 
     # Get or Create Repo
     repo = db.query(Repository).filter(Repository.github_repo_id == str(repo_data["id"])).first()
@@ -225,7 +290,6 @@ async def run_analysis(
             url=data.repo_url,
             github_repo_id=str(repo_data["id"]) if repo_data else None,
             is_private=is_private,
-            owner_id=current_user.id
         )
         db.add(repo)
         db.commit()
@@ -236,6 +300,7 @@ async def run_analysis(
         repository_id=repo.id,
         branch=data.branch,
         status="running",
+        user_id=current_user.id,
         triggered_at=datetime.now(timezone.utc)
     )
     db.add(run)
@@ -272,26 +337,30 @@ async def get_analysis_history(
 ):
     past_runs = (
         db.query(AnalysisRun)
-        .join(Repository, AnalysisRun.repository_id == Repository.id)
-        .filter(Repository.owner_id == current_user.id)
+        .filter(AnalysisRun.user_id == current_user.id)
         .order_by(AnalysisRun.triggered_at.desc())
         .limit(limit)
         .all()
     )
 
-    return {
-        "history": [
-            {
-                "analysis_id": run.id,
-                "repo_name": run.repository.name,
-                "branch": run.branch,
-                "status": run.status,
-                "triggered_at": run.triggered_at,
-                "completed_at": run.completed_at
-            }
-            for run in past_runs
-        ]
-    }
+    result = []
+
+    for run in past_runs:
+        score = db.query(SkillScore).filter(
+            SkillScore.analysis_run_id == run.id
+        ).first()
+
+        result.append({
+            "analysis_id": run.id,
+            "repo_name": run.repository.name,
+            "branch": run.branch,
+            "status": run.status,
+            "triggered_at": run.triggered_at,
+            "completed_at": run.completed_at,
+            "score": score.overall_score if score else None
+        })
+
+    return {"history": result}
 
 
 @router.get("/{analysis_id}")
@@ -302,19 +371,22 @@ async def get_analysis_result(
 ):
     run = (
         db.query(AnalysisRun)
-        .join(Repository, AnalysisRun.repository_id == Repository.id)
         .filter(AnalysisRun.id == analysis_id)
-        .filter(Repository.owner_id == current_user.id)
+        .filter(AnalysisRun.user_id == current_user.id)
         .first()
     )
 
     if not run:
-        raise HTTPException(status_code=404, detail="Analysis not found")
+        return {
+            "analysis_id": analysis_id,
+            "status": "pending",
+        }
 
     if run.status != "completed":
         return {
             "analysis_id": run.id,
             "status": run.status,
+            "error_reason": (run.ai_insights or {}).get("error_reason"),
             "message": "Analysis is still processing or failed."
         }
 
@@ -336,4 +408,4 @@ async def get_analysis_result(
         "security_findings_count": findings_count,
         "ai_insights": run.ai_insights,
         "completed_at": run.completed_at
-    }    
+    }

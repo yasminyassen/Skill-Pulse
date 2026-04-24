@@ -25,7 +25,7 @@ class User(Base):
     github_access_token = Column(String, nullable=True)  # stored encrypted
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    repositories = relationship("Repository", back_populates="owner")
+    analysis_runs = relationship("AnalysisRun", back_populates="user")
 
 class Repository(Base):
     __tablename__ = "repositories"
@@ -36,10 +36,8 @@ class Repository(Base):
     full_name = Column(String)
     url = Column(String)
     is_private = Column(Boolean, default=False)
-    owner_id = Column(Integer, ForeignKey("users.id"))
     connected_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    owner = relationship("User", back_populates="repositories")
     analysis_runs = relationship("AnalysisRun", back_populates="repository")
 
 class AnalysisRun(Base):
@@ -47,6 +45,7 @@ class AnalysisRun(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     repository_id = Column(Integer, ForeignKey("repositories.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
     branch = Column(String, default="main")
     status = Column(String, default="pending")
     triggered_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -56,7 +55,7 @@ class AnalysisRun(Base):
     code_metrics = relationship("CodeMetrics", back_populates="analysis_run")
     security_findings = relationship("SecurityFinding", back_populates="analysis_run")
     skill_scores = relationship("SkillScore", back_populates="analysis_run")
-    status = Column(String, default="pending") 
+    user = relationship("User", back_populates="analysis_runs")
     ai_insights = Column(JSON, nullable=True)
 class CodeMetrics(Base):
     __tablename__ = "code_metrics"
@@ -102,6 +101,7 @@ class SkillScore(Base):
     overall_score = Column(Float)
 
     analysis_run = relationship("AnalysisRun", back_populates="skill_scores")
+    user = relationship("User")
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
