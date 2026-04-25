@@ -711,7 +711,11 @@ async def get_detailed_metrics_breakdown(
             "security_score": security_score,
         }
     )
-
+    
+    ai_insights = run.ai_insights or {}
+    if isinstance(ai_insights, dict):
+        ai_insights = dict(ai_insights)
+        ai_insights.pop("final_categorized_findings", None)
     return {
         "analysis_run_id": run.id,
         "repo": run.repository.full_name,
@@ -767,6 +771,7 @@ async def get_detailed_metrics_breakdown(
             "top_vulnerable_files": dict(findings_by_file.most_common(5)),
         },
         "completed_at": run.completed_at,
+        "ai_insights": ai_insights,
     }
 
 
@@ -820,4 +825,123 @@ async def get_analysis_result(
         "security_findings_count": findings_count,
         "ai_insights": ai_insights,
         "completed_at": run.completed_at
+    }
+    
+
+@router.get("/skills/summary")
+async def get_skills_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Returns aggregated skill scores across all completed analysis runs
+    for the current user, plus a list of completed repos (with their
+    latest analysis_run_id) to populate the repository dropdown.
+
+    Response shape:
+    {
+        "overall": float,
+        "delta": float,                # overall change vs previous run
+        "scores": {
+            "code_quality":    float,
+            "maintainability": float,
+            "architecture":    float,
+            "problem_solving": float,
+        },
+        "deltas": {                    # change vs previous run per dimension
+            "code_quality":    float,
+            "maintainability": float,
+            "architecture":    float,
+            "problem_solving": float,
+        },
+        "repos": [
+            {
+                "analysis_id": int,
+                "repo_name":   str,
+                "full_name":   str,
+                "branch":      str,
+                "completed_at": str,
+            }, ...
+        ]
+    }
+    """
+
+    # 1. Pull all completed skill score rows for this user, newest first
+    score_rows = (
+        db.query(SkillScore, AnalysisRun, Repository)
+        .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
+        .join(Repository,  AnalysisRun.repository_id == Repository.id)
+        .filter(
+            SkillScore.user_id    == current_user.id,
+            AnalysisRun.status    == "completed",
+        )
+        .order_by(AnalysisRun.triggered_at.desc())
+        .all()
+    )
+
+    if not score_rows:
+        return {
+            "overall":  0.0,
+            "delta":    0.0,
+            "scores":   {"code_quality": 0.0, "maintainability": 0.0, "architecture": 0.0, "problem_solving": 0.0},
+            "deltas":   {"code_quality": 0.0, "maintainability": 0.0, "architecture": 0.0, "problem_solving": 0.0},
+            "repos":    [],
+        }
+
+    # 2. Build repo list (de-duplicate: keep only the latest run per repo)
+    seen_repos: set[tuple] = set()
+    repos_list: list[dict] = []
+    for skill_score, run, repo in score_rows:
+        key = (repo.id, run.branch)  
+        if key not in seen_repos:
+            seen_repos.add(key)
+            repos_list.append({
+                "analysis_id":  run.id,
+                "repo_name":    repo.name,
+                "full_name":    repo.full_name,
+                "branch":       run.branch,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            })
+
+    # 3. Aggregate scores across ALL completed runs (average)
+    def _avg_scores(rows):
+        if not rows:
+            return {"code_quality": 0.0, "maintainability": 0.0, "architecture": 0.0, "problem_solving": 0.0, "overall": 0.0}
+        n = len(rows)
+        return {
+            "code_quality":    round(sum(_safe_float(r.SkillScore.code_quality_score)    for r in rows) / n, 2),
+            "maintainability": round(sum(_safe_float(r.SkillScore.maintainability_score) for r in rows) / n, 2),
+            "architecture":    round(sum(_safe_float(r.SkillScore.architecture_score)    for r in rows) / n, 2),
+            "problem_solving": round(sum(_safe_float(r.SkillScore.problem_solving_score) for r in rows) / n, 2),
+            "overall":         round(sum(_safe_float(r.SkillScore.overall_score)         for r in rows) / n, 2),
+        }
+
+    # Latest run vs previous run for deltas
+    latest_run_id  = score_rows[0].AnalysisRun.id
+    previous_run_id = score_rows[1].AnalysisRun.id if len(score_rows) > 1 else None
+
+    latest_row   = score_rows[0].SkillScore
+    previous_row = score_rows[1].SkillScore if previous_run_id else None
+
+    def _delta(latest_val, prev_val):
+        if prev_val is None:
+            return 0.0
+        return round(_safe_float(latest_val) - _safe_float(prev_val), 2)
+
+    aggregated = _avg_scores(score_rows)
+
+    deltas = {
+        "code_quality":    _delta(latest_row.code_quality_score,    previous_row.code_quality_score    if previous_row else None),
+        "maintainability": _delta(latest_row.maintainability_score, previous_row.maintainability_score if previous_row else None),
+        "architecture":    _delta(latest_row.architecture_score,    previous_row.architecture_score    if previous_row else None),
+        "problem_solving": _delta(latest_row.problem_solving_score, previous_row.problem_solving_score if previous_row else None),
+    }
+    overall_delta = _delta(latest_row.overall_score, previous_row.overall_score if previous_row else None)
+
+    return {
+        "overall":  aggregated["overall"],
+        "delta":    overall_delta,
+        "scores":   {k: aggregated[k] for k in ("code_quality", "maintainability", "architecture", "problem_solving")},
+        "deltas":   deltas,
+        "repos":    repos_list,
     }

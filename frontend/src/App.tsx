@@ -10,6 +10,7 @@ import RepositoryAnalysis from "./pages/RepositoryAnalysis";
 import DeveloperDashboard from './pages/Dashboard/DeveloperDashboard';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
 import RecruiterDashboard from './pages/Dashboard/RecruiterDashboard';
+import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
         {/* First page shown after login → analysis page */}
         <Route path="/dashboard/developer" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/developer/analysis" element={<RepositoryAnalysis />} />
+        <Route path="/dashboard/developer/skills" element={<DeveloperSkills />} />
         {/* Future pages — each will get its own component */}
         <Route path="/dashboard/developer/skills" element={<DeveloperDashboard />} />
         <Route path="/dashboard/developer/security" element={<DeveloperDashboard />} />
