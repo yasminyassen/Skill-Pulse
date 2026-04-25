@@ -6,6 +6,12 @@ from app.core.security_mapping import CWE_TO_OWASP
 from app.core.config import settings
 
 
+SEMGREP_TO_CWE = {
+    "python.lang.security.audit.eval": "CWE-94",
+    "python.lang.security.audit.exec": "CWE-94",
+    "python.lang.security.audit.subprocess": "CWE-78",
+}
+
 def run_semgrep(repo_path):
     semgrep_cmd = (settings.SEMGREP_PATH or "semgrep").strip()
     if not shutil.which(semgrep_cmd):
@@ -43,13 +49,23 @@ def run_semgrep(repo_path):
 
         cwe = metadata.get("cwe")
 
+        # normalize
         if isinstance(cwe, list) and cwe:
             cwe = cwe[0]
 
         if isinstance(cwe, str) and ":" in cwe:
             cwe = cwe.split(":")[0]
 
-        owasp = CWE_TO_OWASP.get(cwe, "A02")
+        # fallback if missing
+        if not cwe:
+            # fallback by rule (optional dict)
+            cwe = SEMGREP_TO_CWE.get(issue["check_id"])
+
+        # final fallback
+        if not cwe:
+            cwe = "CWE-703"
+
+        owasp = CWE_TO_OWASP.get(cwe, "A10")
 
         findings.append({
 

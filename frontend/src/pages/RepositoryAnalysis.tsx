@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import api, { API_BASE_URL } from "../api/auth";
+import { useState, useEffect, useRef } from "react";
+import api from "../api/auth";
 import DashboardLayout from "./DashboardLayout";
 
 interface Analysis {
@@ -71,7 +71,6 @@ export default function RepositoryAnalysis() {
         setRepoUrl(savedUrl);
         setBranch(savedBranch);
         localStorage.removeItem("pending_repo");
-        localStorage.removeItem("github_reauth_attempted");
         window.history.replaceState({}, document.title, window.location.pathname);
         setPendingAutoRun({ url: savedUrl, branch: savedBranch });
       }
@@ -92,15 +91,20 @@ export default function RepositoryAnalysis() {
     try {
       const res = await api.get("/analysis/history");
       setAnalyses(res.data.history);
-    } catch (_) {
-      // Silent here — global interceptor handles session expiry and redirect.
+    } catch (err: any) {
+      // If 401, token expired — clear and redirect to login
+      if (err.response?.status === 401) {
+        localStorage.clear();
+        window.location.href = "/login";
+      }
+      // else: silent (network error etc.)
     } finally {
       setHistoryLoading(false);
     }
   };
 
   /* ── start analysis ── */
-  const startAnalysis = async (url: string, br: string) => {
+  const startAnalysis = async (url: string, br: string, f?: File | null) => {
     if (!url) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!/^https:\/\/github\.com\/.+/.test(url)) {
       setUrlError("URL must start with https://github.com/…");
@@ -110,9 +114,18 @@ export default function RepositoryAnalysis() {
     setUrlError("");
     setGithubAuthUrl(null);
     setFailedMsg(null);
+    setCachedMsg(null);
     setLoading(true);
     try {
       const res = await api.post("/analysis/run", { repo_url: url, branch: br });
+      if (res.data.cached) {
+        // Repository hasn't changed — results already exist, no polling needed
+        setLoading(false);
+        const repoName = url.replace("https://github.com/", "").split("/").pop() || url;
+        setCachedMsg({ runId: res.data.analysis_run_id, repoName });
+        fetchHistory();
+        return;
+      }
       setRunId(res.data.analysis_run_id);
     } catch (err: any) {
       setLoading(false);
@@ -135,24 +148,7 @@ export default function RepositoryAnalysis() {
         const authUrl =
           (typeof detail === "object" ? detail?.auth_url : null) ??
           err.response?.data?.auth_url;
-
-        const isExpiredGithubToken =
-          typeof detail === "object" && detail?.reason === "github_token_expired";
-
         localStorage.setItem("pending_repo", JSON.stringify({ repoUrl: url, branch: br }));
-
-        if (isExpiredGithubToken && authUrl) {
-          const reauthAttempted = localStorage.getItem("github_reauth_attempted") === "1";
-          if (!reauthAttempted) {
-            localStorage.setItem("github_reauth_attempted", "1");
-            window.location.href = authUrl;
-            return;
-          }
-
-          setUrlError("GitHub session expired. Please reconnect your GitHub account and try again.");
-          return;
-        }
-
         setGithubAuthUrl(authUrl);
         return;
       }
@@ -191,6 +187,7 @@ export default function RepositoryAnalysis() {
   };
 
   const [failedMsg, setFailedMsg] = useState<string | null>(null);
+  const [cachedMsg, setCachedMsg] = useState<{ runId: number; repoName: string } | null>(null);
 
   /* ── polling ── */
   useEffect(() => {
@@ -596,7 +593,7 @@ export default function RepositoryAnalysis() {
             <button
               className="sp-btn-primary"
               disabled={loading}
-              onClick={() => startAnalysis(repoUrl, branch)}
+              onClick={() => startAnalysis(repoUrl, branch, file)}
             >
               {loading ? (
                 <>
@@ -655,7 +652,7 @@ export default function RepositoryAnalysis() {
                 <button
                   onClick={() => {
                     const token = localStorage.getItem("token");
-                    if (token) window.location.href = `${API_BASE_URL}/auth/github?action=connect&token=${token}`;
+                    if (token) window.location.href = `http://127.0.0.1:8000/auth/github?action=connect&token=${token}`;
                   }}
                   style={{
                     padding: "9px 18px",
@@ -691,9 +688,41 @@ export default function RepositoryAnalysis() {
               >✕</button>
             </div>
           )}
+          {/* Cached result banner */}
+          {cachedMsg && (
+            <div style={{
+              marginTop: "16px", padding: "16px 18px",
+              background: "rgba(52,211,153,0.07)",
+              border: "1px solid rgba(52,211,153,0.2)",
+              borderRadius: "12px",
+              display: "flex", alignItems: "center", gap: "14px",
+            }}>
+              <div style={{
+                width: "36px", height: "36px", borderRadius: "10px", flexShrink: 0,
+                background: "rgba(52,211,153,0.12)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "13.5px", fontWeight: 600, color: "#34d399", marginBottom: "3px" }}>
+                  Up to date — no re-analysis needed
+                </div>
+                <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
+                  <strong style={{ color: "rgba(255,255,255,0.6)" }}>{cachedMsg.repoName}</strong> hasn't changed since the last analysis. The existing results are shown below.
+                </div>
+              </div>
+              <button
+                onClick={() => setCachedMsg(null)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.2)", flexShrink: 0, padding: "0", fontSize: "16px" }}
+              >✕</button>
+            </div>
+          )}
         </div>
 
-        {/* ── Recent Analyses card ── */}
         <div className="sp-card" style={{ marginBottom: "24px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>

@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from datetime import datetime, timezone
 from fastapi import Request, APIRouter, Depends, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -26,6 +26,7 @@ from app.services.github_client import (
     fetch_repo_python_files,
     read_local_repo_files,
     refresh_github_access_token_for_user,
+    get_branch_head_sha,
 )
 from app.services.code_intelligence import analyze_python_files
 from ai_services.insights.ai_insights import generate_insights
@@ -65,18 +66,46 @@ def _group_findings_by_severity_and_file(findings: list[dict]) -> dict:
     return grouped
 
 
-def _compute_security_score(findings: list[dict]) -> float:
+def _compute_security_score(findings, total_loc: int = 1000):
+    #  PATCH: DevSecOps-level scoring
+
     if not findings:
         return 100.0
 
-    penalty_by_severity = {"HIGH": 12.0, "MEDIUM": 6.0, "LOW": 2.0}
+    SEVERITY_WEIGHT = {
+        "HIGH": 10,
+        "MEDIUM": 5,
+        "LOW": 2
+    }
+
+    CWE_WEIGHT = {
+        "CWE-79": 1.5,
+        "CWE-89": 1.8,
+        "CWE-94": 2.2,
+    }
+
     penalty = 0.0
 
-    for finding in findings:
-        sev = _normalize_severity(finding.get("severity"))
-        penalty += penalty_by_severity.get(sev, 6.0)
+    # STEP 1: base score
+    for f in findings:
+        sev = _normalize_severity(f.get("severity"))
+        sev_score = SEVERITY_WEIGHT.get(sev, 5)
 
-    return round(max(0.0, 100.0 - penalty), 2)
+        cwe_weight = CWE_WEIGHT.get(f.get("cwe"), 1.0)
+
+        penalty += sev_score * cwe_weight
+
+    # STEP 2: density
+    density = len(findings) / max(total_loc, 1)
+    density_factor = min(2.0, 1 + density * 50)
+
+    # STEP 3: repetition
+    unique_files = len(set(f.get("file_path") for f in findings))
+    repetition_factor = 1 + (len(findings) - unique_files) * 0.05
+
+    final_penalty = penalty * density_factor * repetition_factor
+
+    return round(max(0.0, 100.0 - final_penalty), 2)
 
 
 def _compute_overall_score(scores: dict) -> float:
@@ -100,7 +129,17 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
-
+    
+class FindingModel(BaseModel):
+    tool: str
+    rule: str
+    file_path: str
+    severity: str
+    description: str
+    line_number: int
+    cwe: str
+    owasp_category: str
+    
 class RepoRequest(BaseModel):
     repo_url: str
     branch: str = "main"
@@ -151,12 +190,17 @@ async def background_analysis_task(
                 auth_repo_url = repo_url.replace("https://", f"https://x-access-token:{token}@")
                 clone_cmd[-2] = auth_repo_url # Update URL in command
 
-            subprocess.run(clone_cmd, check=True, timeout=120)
+            subprocess.run(clone_cmd, check=True, timeout=300)
             
             python_files = read_local_repo_files(clone_path)
             code_intelligence_result = analyze_python_files(python_files)
 
-            findings = run_security_analysis(clone_path)
+            #  PATCH: handle structured pipeline output
+            pipeline_result = run_security_analysis(clone_path)
+
+            findings = pipeline_result.get("findings", [])
+            failed_tools = pipeline_result.get("failed_tools", [])
+            #  REASON: pipeline now returns structured data
         
         # 2. Fetch & Analyze Python Files
         # try:
@@ -168,20 +212,33 @@ async def background_analysis_task(
         #     code_intelligence_result = analyze_python_files(python_files)
         # except Exception as e:
         #     logging.exception(f"Code intelligence fetch failed for {full_name}: {str(e)}")
-        #     raise Exception("Failed to retrieve repository file tree or Python file contents.")
-
+        #     raise Exception("Failed to retrieve repository file tree or Python file contents.")       
+        
         # 3. Store Findings
+        
+        IGNORED = ["venv", ".venv", "__pycache__", "migrations"]
+
+        findings = [
+            f for f in findings
+            if not any(p in f.get("file_path", "") for p in IGNORED)
+        ]
+        
         for f in findings:
+            try:
+                validated = FindingModel(**f)  #  PATCH
+            except ValidationError:
+                continue  #  REASON: skip corrupted scanner output
+            
             finding = SecurityFinding(
                 analysis_run_id=run.id,
-                tool=f.get("tool"),
-                rule=f.get("rule"),
-                cwe=f.get("cwe"),
-                file_path=f.get("file_path"),
-                severity=f.get("severity", "MEDIUM"),
-                description=f.get("description"),
-                line_number=f.get("line_number", 0),
-                owasp_category=f.get("owasp_category")
+                tool=validated.tool,
+                rule=validated.rule,
+                cwe=validated.cwe,
+                file_path=validated.file_path,
+                severity=validated.severity,
+                description=validated.description,
+                line_number=validated.line_number,
+                owasp_category=validated.owasp_category
             )
             db.add(finding)
 
@@ -211,7 +268,20 @@ async def background_analysis_task(
 
         # 5. Store Skill Scores
         scores = code_intelligence_result.get("scores", {})
-        security_score = _compute_security_score(findings)
+        # PATCH: pass LOC for better scoring
+        total_loc = code_intelligence_result.get("aggregate_metrics", {}).get("total_loc", 1000)
+        
+        security_score = _compute_security_score(
+            [
+                {
+                    "severity": f.get("severity"),
+                    "cwe": f.get("cwe"),
+                    "file_path": f.get("file_path")
+                }
+                for f in findings
+            ],
+            total_loc
+        )
         scores["security_score"] = security_score
         scores["overall"] = _compute_overall_score(scores)
 
@@ -245,6 +315,8 @@ async def background_analysis_task(
             security_report["top_vulnerable_files"] = dict(sorted(file_counts.items(), key=lambda x: x[1], reverse=True)[:5])
             security_report["categorized_findings"] = _group_findings_by_severity_and_file(findings)
             security_report["security_score"] = security_score
+            security_report["failed_tools"] = failed_tools
+            #  REASON: user must know scan was incomplete
             
             analysis_payload = {
                 "scores": scores,
@@ -404,12 +476,37 @@ async def run_analysis(
         db.commit()
         db.refresh(repo)
 
+    # ── Incremental analysis: skip re-analysis if commit hasn't changed ──
+    head_sha = await get_branch_head_sha(token, full_name, data.branch)
+    if not head_sha:
+        logging.warning("Could not fetch commit SHA — caching disabled")
+    if head_sha:
+        existing_run = (
+            db.query(AnalysisRun)
+            .filter(
+                AnalysisRun.repository_id == repo.id,
+                AnalysisRun.branch == data.branch,
+                AnalysisRun.commit_sha == head_sha,
+                AnalysisRun.status == "completed",
+            )
+            .order_by(AnalysisRun.triggered_at.desc())
+            .first()
+        )
+        if existing_run:
+            return {
+                "message": "Repository unchanged since last analysis. Returning cached results.",
+                "analysis_run_id": existing_run.id,
+                "status": "completed",
+                "cached": True,
+            }
+
     # Create Analysis Run (Pending/Running)
     run = AnalysisRun(
         repository_id=repo.id,
         branch=data.branch,
         status="running",
         user_id=current_user.id,
+        commit_sha=head_sha,
         triggered_at=datetime.now(timezone.utc)
     )
     db.add(run)
@@ -587,13 +684,23 @@ async def get_detailed_metrics_breakdown(
 
     def _avg(values: list[float]) -> float:
         return round(sum(values) / len(values), 4) if values else 0.0
-
+    
+    total_loc = sum(row.lines_of_code or 0 for row in metric_rows)
+    
     code_quality_score = _safe_float(score_row.code_quality_score, 0.0) if score_row else 0.0
     maintainability_score = _safe_float(score_row.maintainability_score, 0.0) if score_row else 0.0
     architecture_score = _safe_float(score_row.architecture_score, 0.0) if score_row else 0.0
     problem_solving_score = _safe_float(score_row.problem_solving_score, 0.0) if score_row else 0.0
     security_score = _safe_float(score_row.security_awareness_score, 0.0) if score_row else _compute_security_score(
-        [{"severity": f.severity} for f in findings]
+        [
+            {
+                "severity": f.severity,
+                "cwe": f.cwe,
+                "file_path": f.file_path
+            }
+            for f in findings
+        ],
+        total_loc
     )
     overall_score = _safe_float(score_row.overall_score, 0.0) if score_row else _compute_overall_score(
         {

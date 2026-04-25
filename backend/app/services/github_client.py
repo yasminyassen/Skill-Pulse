@@ -124,6 +124,27 @@ async def verify_repo_access(github_token: str | None, full_name: str) -> dict:
     return response.json()
 
 
+async def get_branch_head_sha(
+    github_token: str | None,
+    full_name: str,
+    branch: str,
+) -> str | None:
+    headers = {**_GITHUB_HEADERS}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
+                f"{GITHUB_API_BASE}/repos/{full_name}/commits/{branch}",
+                headers=headers,
+                params={"per_page": 1},
+            )
+        if response.is_success:
+            return response.json().get("sha")
+    except Exception:
+        pass
+    return None
+
 async def fetch_repo_python_files(
     github_token: str | None,
     full_name: str,

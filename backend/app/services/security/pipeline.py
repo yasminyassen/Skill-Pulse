@@ -6,6 +6,20 @@ from app.services.security.safety_scan import run_safety
 from app.services.security.gitleaks_scan import run_gitleaks
 from app.services.security.post_processing import deduplicate_findings
 
+#  PATCH: centralized normalization
+def _normalize_finding(f: dict) -> dict:
+    return {
+        "tool": str(f.get("tool") or "unknown"),
+        "rule": str(f.get("rule") or "unknown"),
+        "file_path": (f.get("file_path") or "unknown").replace("\\", "/"),
+        "severity": (f.get("severity") or "MEDIUM").upper(),
+        "description": str(f.get("description") or ""),
+        "line_number": int(f.get("line_number") or 0),
+        "cwe": f.get("cwe") or "CWE-703",
+        "owasp_category": f.get("owasp_category") or "A10",
+    }
+#  REASON: enforce strict schema before anything else touches the data
+
 
 def run_security_analysis(repo_path):
 
@@ -17,6 +31,7 @@ def run_security_analysis(repo_path):
     }
 
     findings = []
+    failed_tools = []  #  PATCH
 
     with ThreadPoolExecutor(max_workers=len(scanners)) as executor:
 
@@ -30,22 +45,23 @@ def run_security_analysis(repo_path):
             tool_name = futures[future]
 
             try:
-
                 results = future.result(timeout=400)
 
                 if results:
-
-                    print(f"{tool_name} completed with {len(results)} findings")
-
-                    findings.extend(results)
-
+                    #  PATCH: normalize here
+                    normalized = [_normalize_finding(f) for f in results]
+                    findings.extend(normalized)
                 else:
-
                     print(f"{tool_name} completed with 0 findings")
 
             except Exception as e:
-
                 print(f"{tool_name} failed:", e)
-                
+                failed_tools.append(tool_name)  #  PATCH
+                #  REASON: NEVER silently ignore scanner failure
+
     findings = deduplicate_findings(findings)
-    return findings
+
+    return {
+        "findings": findings,
+        "failed_tools": failed_tools  #  PATCH
+    }

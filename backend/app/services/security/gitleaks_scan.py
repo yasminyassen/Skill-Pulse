@@ -7,6 +7,12 @@ from pathlib import Path
 from app.core.security_mapping import CWE_TO_OWASP
 from app.core.config import settings
 
+GITLEAKS_TO_CWE = {
+    "generic-api-key": "CWE-798",
+    "github-token": "CWE-522",
+    "private-key": "CWE-522",
+    "password": "CWE-798",
+}
 
 def run_gitleaks(repo_path):
     configured = (settings.GITLEAKS_PATH or "").strip()
@@ -56,17 +62,21 @@ def run_gitleaks(repo_path):
             data = json.load(f)
     except:
         return findings
-
+    
     for issue in data:
+        rule = (issue.get("RuleID") or "").lower().replace(" ", "-")
+
+        cwe = GITLEAKS_TO_CWE.get(rule, "CWE-798")
+        owasp = CWE_TO_OWASP.get(cwe, "A07")
         findings.append({
             "tool": "gitleaks",
-            "rule": issue.get("RuleID"),
+            "rule": rule,
             "file_path": issue.get("File"),
             "severity": "HIGH",
             "description": issue.get("Description"),
             "line_number": issue.get("StartLine"),
-            "cwe": "CWE-798",
-            "owasp_category": CWE_TO_OWASP.get("CWE-798")
+            "cwe": cwe,
+            "owasp_category": owasp
         })
 
     return findings
