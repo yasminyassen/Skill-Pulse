@@ -30,6 +30,7 @@ from app.services.github_client import (
 )
 from app.services.code_intelligence import analyze_python_files
 from ai_services.insights.ai_insights import generate_insights
+from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
 
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -327,6 +328,7 @@ async def background_analysis_task(
                 role=user_role,
                 analysis_result=analysis_payload,
                 security_report=security_report,
+                 doc_id=STANDARDS_DOC_ID,
             )
             print(f">>> AI Engine: done!")
         except Exception as e:

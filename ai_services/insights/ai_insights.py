@@ -1,12 +1,12 @@
-# ai_services/insights/ai_engine.py
+# ai_services/insights/ai_insights.py
 # ===================================================
-# SkillPulse AI Engine — Role-Based Insights
+# SkillPulse AI Engine — Role-Based Insights + RAG
 # ===================================================
 
 import os
 import json
 import logging
-from dotenv import load_dotenv  
+from dotenv import load_dotenv
 
 load_dotenv()
 from openai import AsyncOpenAI
@@ -38,9 +38,7 @@ async def _call_llm(system_prompt: str, user_content: str) -> dict:
     full_prompt = f"{system_prompt}\n\n=== REPOSITORY DATA TO ANALYZE ===\n{user_content}"
     response = await client.chat.completions.create(
         model=model,
-        messages=[
-            {"role": "user", "content": full_prompt},
-        ],
+        messages=[{"role": "user", "content": full_prompt}],
         temperature=0.4,
         max_tokens=2000,
     )
@@ -81,12 +79,12 @@ def _build_security_summary(security_report: dict) -> str:
     files    = security_report.get("top_vulnerable_files", {})
     lines = [f"Total: {total} findings"]
     if severity:
-        lines.append("Severity → " + ", ".join(f"{k}: {v}" for k, v in sorted(severity.items())))
+        lines.append("Severity -> " + ", ".join(f"{k}: {v}" for k, v in sorted(severity.items())))
     if owasp:
         top = sorted(owasp.items(), key=lambda x: x[1], reverse=True)[:4]
-        lines.append("OWASP → " + ", ".join(f"{k} ({v})" for k, v in top))
+        lines.append("OWASP -> " + ", ".join(f"{k} ({v})" for k, v in top))
     if files:
-        lines.append("Top affected files → " + ", ".join(list(files.keys())[:3]))
+        lines.append("Top affected files -> " + ", ".join(list(files.keys())[:3]))
     return "\n".join(lines)
 
 
@@ -101,13 +99,27 @@ def _build_categorized_findings_summary(security_report: dict) -> str:
         if not per_file:
             lines.append(f"{severity}: none")
             continue
-
         fragments = []
         for file_path, issues in list(per_file.items())[:5]:
             fragments.append(f"{file_path} ({len(issues)})")
         lines.append(f"{severity}: " + ", ".join(fragments))
 
     return "\n".join(lines)
+
+
+# ===================================================
+#  RAG CONTEXT BUILDER
+# ===================================================
+
+def _get_rag_context(doc_id, analysis_result: dict, security_report: dict) -> str:
+    if not doc_id:
+        return ""
+    try:
+        from ai_services.rag.rag_retriever import build_rag_context
+        return build_rag_context(doc_id, analysis_result, security_report)
+    except Exception as e:
+        logger.warning(f"[RAG] Could not build RAG context: {e}")
+        return ""
 
 
 # ===================================================
@@ -118,23 +130,26 @@ _DEVELOPER_PROMPT = """You are SkillPulse AI — a senior software engineer givi
 
 AUDIENCE: The developer who wrote this code.
 
-TASK: Generate specific, honest, and actionable insights based ONLY on the metrics provided.
-Do NOT give generic advice. Every point must reference actual numbers or facts from the data.
+TASK: Generate specific, honest, and actionable insights based on the metrics AND the CODING STANDARDS CONTEXT provided below.
 
 HOW TO INTERPRET SCORES:
-- code_quality → driven by: style violations, duplication, function size, complexity
-- maintainability → driven by: docstring coverage, coupling, nesting depth, long functions
-- architecture → driven by: import coupling, inheritance depth, module separation
-- problem_solving → driven by: test files count, test function ratio, cyclomatic complexity, long functions
-- security_score → driven by: HIGH/MEDIUM/LOW security findings and affected files
+- code_quality -> driven by: style violations, duplication, function size, complexity
+- maintainability -> driven by: docstring coverage, coupling, nesting depth, long functions
+- architecture -> driven by: import coupling, inheritance depth, module separation
+- problem_solving -> driven by: test files count, test function ratio, cyclomatic complexity, long functions
+- security_score -> driven by: HIGH/MEDIUM/LOW security findings and affected files
 
-
-RULES:
-- Each skill: 2 bullet points — one explaining why the score is what it is (cite the actual metric), one concrete fix
-- security_insights: one paragraph — cite the exact OWASP categories and counts, name the top affected files, give 2-3 specific fix steps
-- Do NOT include raw per-file code metrics in your output
+CRITICAL RULES:
+- You MUST use the CODING STANDARDS CONTEXT section to write your Fix points
+- Every Fix must explicitly name the standard it comes from, for example:
+  'per Clean Code: functions should do one thing'
+  'per SOLID SRP: each module should have one responsibility'
+  'per OWASP A08: validate all deserialized data'
+  'per Google Python Style Guide: all public functions require docstrings'
+- Why: cite the actual metric value
+- Fix: cite the metric AND the specific standard/rule from the context
+- Do NOT write generic advice. Every fix must reference a standard by name.
 - Include final_categorized_findings grouped by HIGH, MEDIUM, LOW with file paths
-- Do NOT write generic advice like 'keep up the good work' or 'invest in learning'
 - Use single quotes inside strings, never double quotes
 - Return ONLY valid JSON
 
@@ -143,27 +158,27 @@ JSON structure:
   "skills_insights": {
     "code_quality": [
       "Why: reference the actual metric value that drives this score",
-      "Fix: one specific actionable step"
+      "Fix: specific fix citing the standard name (e.g. per Clean Code: ...)"
     ],
     "maintainability": [
       "Why: reference the actual metric value",
-      "Fix: one specific actionable step"
+      "Fix: specific fix citing the standard name"
     ],
     "architecture": [
       "Why: reference the actual metric value",
-      "Fix: one specific actionable step"
+      "Fix: specific fix citing the standard name (e.g. per SOLID SRP: ...)"
     ],
     "problem_solving": [
       "Why: cite the actual drivers (test files count, complexity, etc.)",
-      "Fix: specific testing strategy or refactoring step for this project"
+      "Fix: specific fix citing the standard name (e.g. per TDD: ...)"
     ]
   },
-    "security_insights": "Paragraph citing exact OWASP categories with counts, affected files, and concrete patches.",
-    "final_categorized_findings": {
-        "HIGH": ["file_path: concise issue summary"],
-        "MEDIUM": ["file_path: concise issue summary"],
-        "LOW": ["file_path: concise issue summary"]
-    }
+  "security_insights": "Paragraph citing exact OWASP categories with counts, affected files, and the specific OWASP mitigation rule that applies from the context.",
+  "final_categorized_findings": {
+    "HIGH": ["file_path: concise issue summary"],
+    "MEDIUM": ["file_path: concise issue summary"],
+    "LOW": ["file_path: concise issue summary"]
+  }
 }"""
 
 
@@ -241,10 +256,11 @@ JSON structure:
 #  CONTENT BUILDERS
 # ===================================================
 
-def _developer_content(analysis: dict, security_report: dict) -> str:
-    scores  = analysis.get("scores", {})
-    m       = analysis.get("aggregate_metrics", {})
-    return f"""SCORES (out of 100):
+def _developer_content(analysis: dict, security_report: dict, rag_context: str = "") -> str:
+    scores = analysis.get("scores", {})
+    m      = analysis.get("aggregate_metrics", {})
+
+    base = f"""SCORES (out of 100):
 - Code Quality:    {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
 - Maintainability: {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
 - Architecture:    {scores.get('architecture')} — {_score_label(scores.get('architecture', 0))}
@@ -255,7 +271,7 @@ METRICS (use these to explain each score):
 - Total files: {m.get('total_files')} | Test files: {_test_label(m.get('test_files', 0))}
 - Avg test function ratio: {m.get('avg_test_function_ratio', 0)}
 - Avg cyclomatic complexity: {m.get('avg_cyclomatic_complexity')} (healthy < 5, warning > 10)
-- Avg function size: {m.get('avg_function_size'):.1f} lines (healthy < 20)
+- Avg function size: {m.get('avg_function_size', 0):.1f} lines (healthy < 20)
 - Long functions: {m.get('long_functions', 0)}
 - Deep nesting instances: {m.get('deep_nesting', 0)} | Avg nesting depth: {m.get('avg_nesting_depth', 0):.2f}
 - Docstring coverage: {m.get('avg_docstring_coverage', 0)*100:.0f}% (ideal > 80%)
@@ -270,11 +286,17 @@ SECURITY DATA:
 SECURITY FINDINGS GROUPED BY SEVERITY AND FILE:
 {_build_categorized_findings_summary(security_report)}"""
 
+    if rag_context:
+        base += f"\n\nCODING STANDARDS CONTEXT (you MUST cite these standards in your Fix points):\n{rag_context}"
 
-def _manager_content(analysis: dict, security_report: dict) -> str:
-    scores  = analysis.get("scores", {})
-    m       = analysis.get("aggregate_metrics", {})
-    return f"""SCORES (out of 100):
+    return base
+
+
+def _manager_content(analysis: dict, security_report: dict, rag_context: str = "") -> str:
+    scores = analysis.get("scores", {})
+    m      = analysis.get("aggregate_metrics", {})
+
+    base = f"""SCORES (out of 100):
 - Code Quality:    {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
 - Maintainability: {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
 - Architecture:    {scores.get('architecture')} — {_score_label(scores.get('architecture', 0))}
@@ -296,11 +318,17 @@ SECURITY DATA:
 SECURITY FINDINGS GROUPED BY SEVERITY AND FILE:
 {_build_categorized_findings_summary(security_report)}"""
 
+    if rag_context:
+        base += f"\n\nCODING STANDARDS CONTEXT:\n{rag_context}"
 
-def _recruiter_content(analysis: dict, security_report: dict) -> str:
-    scores  = analysis.get("scores", {})
-    m       = analysis.get("aggregate_metrics", {})
+    return base
+
+
+def _recruiter_content(analysis: dict, security_report: dict, rag_context: str = "") -> str:
+    scores    = analysis.get("scores", {})
+    m         = analysis.get("aggregate_metrics", {})
     total_sec = security_report.get("total_findings", 0) if security_report else 0
+
     return f"""PERFORMANCE SCORES (out of 100):
 - Code Quality (cleanliness and consistency): {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
 - Maintainability (ease of collaboration):    {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
@@ -331,23 +359,29 @@ async def generate_insights(
     role: str,
     analysis_result: dict,
     security_report: dict = None,
+    doc_id: str = None,
 ) -> dict:
-    """
-    Args:
-        role:            current_user.role.value → "developer" | "manager" | "recruiter"
-        analysis_result: الـ response من /analysis/run
-        security_report: الـ response من /security-report/{id}
-    """
     security_report = security_report or {}
     role = role.lower()
+    print(f"[RAG DEBUG] doc_id received = {doc_id}")
+    print(f"[RAG DEBUG] role = {role}")
 
     if role not in _ROLE_MAP:
         logger.warning(f"Unknown role '{role}' — defaulting to developer")
         role = "developer"
 
     prompt, content_fn = _ROLE_MAP[role]
+
+    rag_context = _get_rag_context(doc_id, analysis_result, security_report)
+    print(f"[RAG DEBUG] rag_context length = {len(rag_context)}")
+
+    if rag_context:
+        logger.info(f"[RAG] Context injected into prompt ({len(rag_context)} chars)")
+    else:
+        logger.info("[RAG] No context available — running without RAG")
+
     logger.info(f"Generating insights | role={role} | mode={os.getenv('AI_MODE')}")
 
-    result =await _call_llm(prompt, content_fn(analysis_result, security_report))
+    result = await _call_llm(prompt, content_fn(analysis_result, security_report, rag_context))
     logger.info("Insights generated.")
     return result
