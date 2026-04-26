@@ -488,6 +488,7 @@ async def run_analysis(
                 AnalysisRun.branch == data.branch,
                 AnalysisRun.commit_sha == head_sha,
                 AnalysisRun.status == "completed",
+                AnalysisRun.user_id == current_user.id,
             )
             .order_by(AnalysisRun.triggered_at.desc())
             .first()
