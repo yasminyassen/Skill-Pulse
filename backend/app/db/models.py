@@ -51,6 +51,8 @@ class AnalysisRun(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     branch = Column(String, default="main")
     commit_sha = Column(String, nullable=True)   
+    analysis_scope = Column(String, default="repository")
+    contributor_login = Column(String, nullable=True)
     status = Column(String, default="pending")
     triggered_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)

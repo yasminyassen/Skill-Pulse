@@ -8,6 +8,14 @@ const GitHubCallback: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token');
+    const error = params.get('error');
+    const errorMessage = params.get('message');
+
+    if (error) {
+      setStatus('error');
+      setMessage(errorMessage || 'GitHub authorization could not be completed.');
+      return;
+    }
 
     if (!token) {
       setStatus('error');
@@ -225,7 +233,7 @@ const GitHubCallback: React.FC = () => {
 
           {/* Error retry */}
           {status === 'error' && (
-            <button className="cb-retry" onClick={() => window.location.href = '/'}>
+            <button className="cb-retry" onClick={() => window.location.href = '/login'}>
               Back to Login
             </button>
           )}

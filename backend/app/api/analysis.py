@@ -27,6 +27,9 @@ from app.services.github_client import (
     read_local_repo_files,
     refresh_github_access_token_for_user,
     get_branch_head_sha,
+    get_files_fingerprint,
+    fetch_authenticated_github_user,
+    fetch_user_repo_contribution_summary,
 )
 from app.services.code_intelligence import analyze_python_files
 from ai_services.insights.ai_insights import generate_insights
@@ -130,6 +133,87 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _score_belongs_to_user(db: Session, run_id: int, user_id: int) -> bool:
+    return (
+        db.query(SkillScore)
+        .filter(
+            SkillScore.analysis_run_id == run_id,
+            SkillScore.user_id == user_id,
+        )
+        .first()
+        is not None
+    )
+
+
+def _link_existing_run_to_user(db: Session, run: AnalysisRun, user_id: int) -> bool:
+    existing = (
+        db.query(SkillScore)
+        .filter(
+            SkillScore.analysis_run_id == run.id,
+            SkillScore.user_id == user_id,
+        )
+        .first()
+    )
+    if existing:
+        return True
+
+    source_score = (
+        db.query(SkillScore)
+        .filter(SkillScore.analysis_run_id == run.id)
+        .first()
+    )
+    if not source_score:
+        return False
+
+    db.add(SkillScore(
+        analysis_run_id=run.id,
+        user_id=user_id,
+        code_quality_score=source_score.code_quality_score,
+        maintainability_score=source_score.maintainability_score,
+        architecture_score=source_score.architecture_score,
+        security_awareness_score=source_score.security_awareness_score,
+        problem_solving_score=source_score.problem_solving_score,
+        overall_score=source_score.overall_score,
+    ))
+    db.commit()
+    return True
+
+
+async def _resolve_github_identity(db: Session, user: User) -> tuple[str | None, str | None]:
+    if not user.github_access_token:
+        return None, None
+
+    token = decrypt_github_token(user.github_access_token)
+    if (
+        user.github_token_expires_at
+        and user.github_token_expires_at <= datetime.now(timezone.utc)
+    ):
+        refreshed_token = await refresh_github_access_token_for_user(db, user)
+        if refreshed_token:
+            token = refreshed_token
+
+    github_user = await fetch_authenticated_github_user(token)
+    github_login = github_user.get("login") if github_user else None
+    return token, github_login
+
+
+async def _build_personal_repo_context(
+    db: Session,
+    user: User,
+    repo: Repository,
+    branch: str,
+) -> dict:
+    _, github_login = await _resolve_github_identity(db, user) if user.github_access_token else (None, None)
+    return {
+        "has_github_identity": bool(github_login),
+        "github_login": github_login,
+        "is_private": bool(repo.is_private),
+        "user_contributed": True,
+        "commit_count_sample": 0,
+        "latest_commit_at": None,
+    }
     
 class FindingModel(BaseModel):
     tool: str
@@ -169,7 +253,10 @@ async def background_analysis_task(
     token: str, 
     is_private: bool, 
     current_user_id: int, 
-    user_role: str
+    user_role: str,
+    analysis_scope: str = "repository",
+    contributor_login: str | None = None,
+    touched_files: list[str] | None = None,
 ):
     db = SessionLocal() 
     try:
@@ -194,6 +281,14 @@ async def background_analysis_task(
             subprocess.run(clone_cmd, check=True, timeout=300)
             
             python_files = read_local_repo_files(clone_path)
+            touched_set = {p.replace("\\", "/") for p in (touched_files or [])}
+            if analysis_scope == "contribution":
+                python_files = [
+                    f for f in python_files
+                    if f.get("path", "").replace("\\", "/") in touched_set
+                ]
+                if not python_files:
+                    raise Exception("No Python files were found in your contributions for this repository.")
             code_intelligence_result = analyze_python_files(python_files)
 
             #  PATCH: handle structured pipeline output
@@ -223,6 +318,12 @@ async def background_analysis_task(
             f for f in findings
             if not any(p in f.get("file_path", "") for p in IGNORED)
         ]
+        if analysis_scope == "contribution":
+            touched_set = {p.replace("\\", "/") for p in (touched_files or [])}
+            findings = [
+                f for f in findings
+                if f.get("file_path", "").replace("\\", "/") in touched_set
+            ]
         
         for f in findings:
             try:
@@ -382,6 +483,13 @@ async def run_analysis(
     repo_name = full_name.split("/")[-1]
     
     token = decrypt_github_token(current_user.github_access_token) if current_user.github_access_token else None
+    is_developer = current_user.role.value == "developer"
+
+    if is_developer and not token:
+        raise HTTPException(
+            status_code=403,
+            detail=_build_github_connect_payload(request, current_user)
+        )
 
     if (
         token
@@ -464,6 +572,80 @@ async def run_analysis(
             detail={"recruiter_private_repo": True}
         )
 
+    head_sha = await get_branch_head_sha(token, full_name, data.branch)
+    if not head_sha:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "branch_not_found": True,
+                "message": "Repository found, but this branch does not exist or is not accessible.",
+            },
+        )
+
+    contributor_login = None
+    contribution_context = None
+    analysis_scope = "repository"
+    touched_files: list[str] = []
+    cache_sha = head_sha
+
+    if is_developer:
+        _, contributor_login = await _resolve_github_identity(db, current_user)
+        try:
+            contribution_context = await fetch_user_repo_contribution_summary(
+                token,
+                full_name,
+                contributor_login,
+                data.branch,
+            )
+        except HTTPException as e:
+            if e.status_code in {404, 422, 502}:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "branch_not_found": True,
+                        "message": "Repository found, but this branch does not exist or is not accessible.",
+                    },
+                )
+            raise
+        touched_files = contribution_context.get("touched_files", [])
+        python_touched_files = [p for p in touched_files if p.endswith(".py")]
+
+        if not contribution_context.get("user_contributed"):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "no_developer_contributions": True,
+                    "message": "SkillPulse analyzes your own GitHub contributions. We could not find commits from your GitHub account in this repository.",
+                },
+            )
+
+        if not python_touched_files:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "no_python_contributions": True,
+                    "message": "We found your commits, but none of the touched files are Python files that SkillPulse can analyze yet.",
+                },
+            )
+
+        analysis_scope = "contribution"
+        touched_files = python_touched_files
+        contribution_fingerprint = await get_files_fingerprint(
+            token,
+            full_name,
+            data.branch,
+            touched_files,
+        )
+        if not contribution_fingerprint:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "no_python_contributions": True,
+                    "message": "We found your commits, but none of the touched Python files are present on this branch anymore.",
+                },
+            )
+        cache_sha = contribution_fingerprint
+
     # Get or Create Repo
     repo = db.query(Repository).filter(Repository.github_repo_id == str(repo_data["id"])).first()
     if not repo:
@@ -478,30 +660,29 @@ async def run_analysis(
         db.commit()
         db.refresh(repo)
 
-    # ── Incremental analysis: skip re-analysis if commit hasn't changed ──
-    head_sha = await get_branch_head_sha(token, full_name, data.branch)
-    if not head_sha:
-        logging.warning("Could not fetch commit SHA — caching disabled")
-    if head_sha:
+    # ── Incremental analysis: skip re-analysis if the relevant snapshot has not changed ──
+    if cache_sha:
         existing_run = (
             db.query(AnalysisRun)
             .filter(
                 AnalysisRun.repository_id == repo.id,
                 AnalysisRun.branch == data.branch,
-                AnalysisRun.commit_sha == head_sha,
+                AnalysisRun.commit_sha == cache_sha,
                 AnalysisRun.status == "completed",
-                AnalysisRun.user_id == current_user.id,
+                AnalysisRun.analysis_scope == analysis_scope,
             )
             .order_by(AnalysisRun.triggered_at.desc())
             .first()
         )
         if existing_run:
-            return {
-                "message": "Repository unchanged since last analysis. Returning cached results.",
-                "analysis_run_id": existing_run.id,
-                "status": "completed",
-                "cached": True,
-            }
+            if _link_existing_run_to_user(db, existing_run, current_user.id):
+                return {
+                    "message": "Your contribution scope is up to date. Returning cached results.",
+                    "analysis_run_id": existing_run.id,
+                    "status": "completed",
+                    "cached": True,
+                    "cached_scope": analysis_scope,
+                }
 
     # Create Analysis Run (Pending/Running)
     run = AnalysisRun(
@@ -509,7 +690,9 @@ async def run_analysis(
         branch=data.branch,
         status="running",
         user_id=current_user.id,
-        commit_sha=head_sha,
+        commit_sha=cache_sha,
+        analysis_scope=analysis_scope,
+        contributor_login=contributor_login,
         triggered_at=datetime.now(timezone.utc)
     )
     db.add(run)
@@ -528,7 +711,10 @@ async def run_analysis(
         token=token,
         is_private=is_private,
         current_user_id=current_user.id,
-        user_role=current_user.role.value
+        user_role=current_user.role.value,
+        analysis_scope=analysis_scope,
+        contributor_login=contributor_login,
+        touched_files=touched_files,
     )
 
     # Return Immediately
@@ -544,19 +730,34 @@ async def get_analysis_history(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    past_runs = (
+    linked_completed_runs = (
         db.query(AnalysisRun)
-        .filter(AnalysisRun.user_id == current_user.id)
-        .order_by(AnalysisRun.triggered_at.desc())
-        .limit(limit)
+        .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
+        .filter(SkillScore.user_id == current_user.id)
         .all()
     )
+    own_active_runs = (
+        db.query(AnalysisRun)
+        .filter(
+            AnalysisRun.user_id == current_user.id,
+            AnalysisRun.status != "completed",
+        )
+        .all()
+    )
+
+    unique_runs = {run.id: run for run in linked_completed_runs + own_active_runs}
+    past_runs = sorted(
+        unique_runs.values(),
+        key=lambda run: run.triggered_at or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )[:limit]
 
     result = []
 
     for run in past_runs:
         score = db.query(SkillScore).filter(
-            SkillScore.analysis_run_id == run.id
+            SkillScore.analysis_run_id == run.id,
+            SkillScore.user_id == current_user.id,
         ).first()
 
         result.append({
@@ -566,7 +767,8 @@ async def get_analysis_history(
             "status": run.status,
             "triggered_at": run.triggered_at,
             "completed_at": run.completed_at,
-            "score": score.overall_score if score else None
+            "score": score.overall_score if score else None,
+            "repo_id": run.repository.id,
         })
 
     return {"history": result}
@@ -581,11 +783,10 @@ async def get_detailed_metrics_breakdown(
     run = (
         db.query(AnalysisRun)
         .filter(AnalysisRun.id == analysis_run_id)
-        .filter(AnalysisRun.user_id == current_user.id)
         .first()
     )
 
-    if not run:
+    if not run or (run.status == "completed" and not _score_belongs_to_user(db, run.id, current_user.id)) or (run.status != "completed" and run.user_id != current_user.id):
         raise HTTPException(status_code=404, detail="Analysis run not found")
 
     if run.status != "completed":
@@ -593,7 +794,10 @@ async def get_detailed_metrics_breakdown(
 
     score_row = (
         db.query(SkillScore)
-        .filter(SkillScore.analysis_run_id == run.id)
+        .filter(
+            SkillScore.analysis_run_id == run.id,
+            SkillScore.user_id == current_user.id,
+        )
         .first()
     )
     metric_rows = (
@@ -719,11 +923,20 @@ async def get_detailed_metrics_breakdown(
     if isinstance(ai_insights, dict):
         ai_insights = dict(ai_insights)
         ai_insights.pop("final_categorized_findings", None)
+
+    analysis_context = await _build_personal_repo_context(
+        db,
+        current_user,
+        run.repository,
+        run.branch,
+    )
+
     return {
         "analysis_run_id": run.id,
         "repo": run.repository.full_name,
         "branch": run.branch,
         "status": run.status,
+        "analysis_context": analysis_context,
         "scores": {
             "code_quality": round(code_quality_score, 2),
             "maintainability": round(maintainability_score, 2),
@@ -787,11 +1000,10 @@ async def get_analysis_result(
     run = (
         db.query(AnalysisRun)
         .filter(AnalysisRun.id == analysis_id)
-        .filter(AnalysisRun.user_id == current_user.id)
         .first()
     )
 
-    if not run:
+    if not run or (run.status == "completed" and not _score_belongs_to_user(db, run.id, current_user.id)) or (run.status != "completed" and run.user_id != current_user.id):
         return {
             "analysis_id": analysis_id,
             "status": "pending",
@@ -805,7 +1017,10 @@ async def get_analysis_result(
             "message": "Analysis is still processing or failed."
         }
 
-    scores = db.query(SkillScore).filter(SkillScore.analysis_run_id == run.id).first()
+    scores = db.query(SkillScore).filter(
+        SkillScore.analysis_run_id == run.id,
+        SkillScore.user_id == current_user.id,
+    ).first()
     findings_count = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).count()
     ai_insights = run.ai_insights or {}
     if isinstance(ai_insights, dict):
@@ -879,32 +1094,48 @@ async def get_skills_summary(
             AnalysisRun.status    == "completed",
         )
         .order_by(AnalysisRun.triggered_at.desc())
-        .all()
     )
+    if current_user.role.value == "developer":
+        score_rows = score_rows.filter(AnalysisRun.analysis_scope == "contribution")
+    score_rows = score_rows.all()
 
     if not score_rows:
+        empty_context = {
+            "has_github_identity": bool(current_user.github_access_token),
+            "github_login": None,
+        }
+        if current_user.github_access_token:
+            try:
+                _, github_login = await _resolve_github_identity(db, current_user)
+                empty_context["has_github_identity"] = bool(github_login)
+                empty_context["github_login"] = github_login
+            except Exception:
+                pass
+
         return {
             "overall":  0.0,
             "delta":    0.0,
             "scores":   {"code_quality": 0.0, "maintainability": 0.0, "architecture": 0.0, "problem_solving": 0.0},
             "deltas":   {"code_quality": 0.0, "maintainability": 0.0, "architecture": 0.0, "problem_solving": 0.0},
             "repos":    [],
+            "viewer":   empty_context,
         }
 
-    # 2. Build repo list (de-duplicate: keep only the latest run per repo)
-    seen_repos: set[tuple] = set()
+    # 2. Build analysis list. Keep each run visible so users can inspect
+    # older contribution snapshots or disconnect only one instance.
     repos_list: list[dict] = []
     for skill_score, run, repo in score_rows:
-        key = (repo.id, run.branch)  
-        if key not in seen_repos:
-            seen_repos.add(key)
-            repos_list.append({
-                "analysis_id":  run.id,
-                "repo_name":    repo.name,
-                "full_name":    repo.full_name,
-                "branch":       run.branch,
-                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-            })
+        context = await _build_personal_repo_context(db, current_user, repo, run.branch)
+        repos_list.append({
+            "analysis_id":  run.id,
+            "repo_name":    repo.name,
+            "full_name":    repo.full_name,
+            "branch":       run.branch,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "is_private":   bool(repo.is_private),
+            "analysis_context": context,
+            "contributor_login": run.contributor_login,
+        })
 
     # 3. Aggregate scores across ALL completed runs (average)
     def _avg_scores(rows):
@@ -947,4 +1178,8 @@ async def get_skills_summary(
         "scores":   {k: aggregated[k] for k in ("code_quality", "maintainability", "architecture", "problem_solving")},
         "deltas":   deltas,
         "repos":    repos_list,
+        "viewer": {
+            "has_github_identity": bool(repos_list[0]["analysis_context"].get("has_github_identity")) if repos_list else bool(current_user.github_access_token),
+            "github_login": repos_list[0]["analysis_context"].get("github_login") if repos_list else None,
+        },
     }

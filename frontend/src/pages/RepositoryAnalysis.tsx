@@ -4,6 +4,7 @@ import DashboardLayout from "./DashboardLayout";
 
 interface Analysis {
   analysis_id: number;
+  repo_id: number;
   repo_name: string;
   branch: string;
   status: string;
@@ -104,7 +105,7 @@ export default function RepositoryAnalysis() {
   };
 
   /* ── start analysis ── */
-  const startAnalysis = async (url: string, br: string, f?: File | null) => {
+  const startAnalysis = async (url: string, br: string, _f?: File | null) => {
     if (!url) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!/^https:\/\/github\.com\/.+/.test(url)) {
       setUrlError("URL must start with https://github.com/…");
@@ -119,10 +120,10 @@ export default function RepositoryAnalysis() {
     try {
       const res = await api.post("/analysis/run", { repo_url: url, branch: br });
       if (res.data.cached) {
-        // Repository hasn't changed — results already exist, no polling needed
+        // Relevant analysis scope has not changed — results already exist.
         setLoading(false);
         const repoName = url.replace("https://github.com/", "").split("/").pop() || url;
-        setCachedMsg({ runId: res.data.analysis_run_id, repoName });
+        setCachedMsg({ runId: res.data.analysis_run_id, repoName, scope: res.data.cached_scope });
         fetchHistory();
         return;
       }
@@ -153,9 +154,24 @@ export default function RepositoryAnalysis() {
         return;
       }
 
+      if (status === 403 && detail?.no_developer_contributions) {
+        setUrlError(detail.message || "SkillPulse analyzes your own GitHub contributions. No commits were found from your GitHub account in this repository.");
+        return;
+      }
+
+      if (status === 400 && detail?.no_python_contributions) {
+        setUrlError(detail.message || "We found your commits, but none of the touched files are Python files that SkillPulse can analyze yet.");
+        return;
+      }
+
+      if (status === 404 && detail?.branch_not_found) {
+        setUrlError(detail.message || "Repository found, but this branch does not exist or is not accessible.");
+        return;
+      }
+
       // Case 3: repo not found or branch doesn't exist
       if (status === 404) {
-        setUrlError("Repository not found. Check the URL is correct.");
+        setUrlError("Repository or branch not found. Check the URL and branch name.");
         return;
       }
 
@@ -187,7 +203,18 @@ export default function RepositoryAnalysis() {
   };
 
   const [failedMsg, setFailedMsg] = useState<string | null>(null);
-  const [cachedMsg, setCachedMsg] = useState<{ runId: number; repoName: string } | null>(null);
+  const [cachedMsg, setCachedMsg] = useState<{ runId: number; repoName: string; scope?: string } | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+
+  const disconnectAnalysis = async (analysisId: number) => {
+    setOpenMenuId(null);
+    try {
+      await api.delete(`/repos/disconnect-analysis/${analysisId}`);
+      await fetchHistory();
+    } catch {
+      setFailedMsg("Could not disconnect this analysis. Please try again.");
+    }
+  };
 
   /* ── polling ── */
   useEffect(() => {
@@ -443,10 +470,10 @@ export default function RepositoryAnalysis() {
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: "13.5px", fontWeight: 600, color: "#fbbf24", marginBottom: "3px" }}>
-                  GitHub Authorization Required
+                  GitHub Connection Required
                 </div>
                 <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
-                  This is a private repository. Connect your GitHub account to allow SkillPulse to access it. You'll be redirected back automatically after authorization.
+                  Developer analysis is based on your own GitHub contributions. Connect GitHub so SkillPulse can verify access and find your commits in this repository.
                 </div>
               </div>
               <button
@@ -709,10 +736,20 @@ export default function RepositoryAnalysis() {
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: "13.5px", fontWeight: 600, color: "#34d399", marginBottom: "3px" }}>
-                  Up to date — no re-analysis needed
+                  {cachedMsg.scope === "contribution"
+                    ? "Your contributions are up to date"
+                    : "Up to date — no re-analysis needed"}
                 </div>
                 <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
-                  <strong style={{ color: "rgba(255,255,255,0.6)" }}>{cachedMsg.repoName}</strong> hasn't changed since the last analysis. The existing results are shown below.
+                  {cachedMsg.scope === "contribution" ? (
+                    <>
+                      Your analyzed contribution files in <strong style={{ color: "rgba(255,255,255,0.6)" }}>{cachedMsg.repoName}</strong> have not changed since the last analysis. Repository changes outside your contribution scope do not trigger a new analysis.
+                    </>
+                  ) : (
+                    <>
+                      <strong style={{ color: "rgba(255,255,255,0.6)" }}>{cachedMsg.repoName}</strong> hasn't changed since the last analysis. The existing results are shown below.
+                    </>
+                  )}
                 </div>
               </div>
               <button
@@ -798,7 +835,7 @@ export default function RepositoryAnalysis() {
             const sc = a.score;
             const sColor = scoreColor(sc);
             return (
-              <div key={a.analysis_id} className="analysis-row" style={{ padding: "14px 8px" }}>
+              <div key={a.analysis_id} className="analysis-row" style={{ padding: "14px 8px", position: "relative" }}>
                 {/* Repo icon */}
                 <div style={{
                   width: "44px", height: "44px", borderRadius: "12px", flexShrink: 0,
@@ -850,6 +887,62 @@ export default function RepositoryAnalysis() {
                     <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.2)" }}>—</div>
                   )}
                 </div>
+                {a.repo_id && (
+                  <div style={{ position: "relative", flexShrink: 0 }}>
+                    <button
+                      onClick={() => setOpenMenuId(openMenuId === a.analysis_id ? null : a.analysis_id)}
+                      aria-label="Repository actions"
+                      style={{
+                        width: "30px",
+                        height: "30px",
+                        borderRadius: "8px",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        background: "rgba(255,255,255,0.03)",
+                        color: "rgba(255,255,255,0.45)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" />
+                      </svg>
+                    </button>
+                    {openMenuId === a.analysis_id && (
+                      <div style={{
+                        position: "absolute",
+                        right: 0,
+                        top: "36px",
+                        minWidth: "190px",
+                        zIndex: 20,
+                        background: "#171725",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: "10px",
+                        padding: "6px",
+                        boxShadow: "0 14px 32px rgba(0,0,0,0.35)",
+                      }}>
+                        <button
+                          onClick={() => disconnectAnalysis(a.analysis_id)}
+                          style={{
+                            width: "100%",
+                            padding: "9px 10px",
+                            border: "none",
+                            borderRadius: "8px",
+                            background: "transparent",
+                            color: "#f87171",
+                            cursor: "pointer",
+                            textAlign: "left",
+                            fontSize: "12.5px",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Disconnect this analysis
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
             </div>
           );
         })}

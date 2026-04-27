@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -124,6 +125,84 @@ async def verify_repo_access(github_token: str | None, full_name: str) -> dict:
     return response.json()
 
 
+async def fetch_authenticated_github_user(github_token: str) -> dict | None:
+    headers = {**_GITHUB_HEADERS, "Authorization": f"Bearer {github_token}"}
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(f"{GITHUB_API_BASE}/user", headers=headers)
+
+    if response.status_code == 401:
+        return None
+
+    _raise_for_github_error(response, resource="GitHub user")
+    return response.json()
+
+
+async def fetch_user_repo_contribution_summary(
+    github_token: str | None,
+    full_name: str,
+    github_login: str | None,
+    branch: str,
+) -> dict:
+    if not github_login:
+        return {
+            "user_contributed": False,
+            "commit_count_sample": 0,
+            "latest_commit_at": None,
+            "touched_files": [],
+        }
+
+    headers = {**_GITHUB_HEADERS}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    touched_files: set[str] = set()
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{full_name}/commits",
+            headers=headers,
+            params={
+                "author": github_login,
+                "sha": branch,
+                "per_page": 100,
+            },
+        )
+
+        _raise_for_github_error(response, resource="repository commits")
+        commits = response.json() if isinstance(response.json(), list) else []
+
+        for commit in commits:
+            sha = commit.get("sha")
+            if not sha:
+                continue
+            detail_res = await client.get(
+                f"{GITHUB_API_BASE}/repos/{full_name}/commits/{sha}",
+                headers=headers,
+            )
+            _raise_for_github_error(detail_res, resource="repository commit")
+            detail = detail_res.json()
+            for file_info in detail.get("files", []) or []:
+                filename = file_info.get("filename")
+                if filename:
+                    touched_files.add(filename.replace("\\", "/"))
+
+    latest_commit_at = None
+    if commits:
+        latest_commit_at = (
+            commits[0]
+            .get("commit", {})
+            .get("author", {})
+            .get("date")
+        )
+
+    return {
+        "user_contributed": len(commits) > 0,
+        "commit_count_sample": len(commits),
+        "latest_commit_at": latest_commit_at,
+        "touched_files": sorted(touched_files),
+    }
+
+
 async def get_branch_head_sha(
     github_token: str | None,
     full_name: str,
@@ -144,6 +223,46 @@ async def get_branch_head_sha(
     except Exception:
         pass
     return None
+
+
+async def get_files_fingerprint(
+    github_token: str | None,
+    full_name: str,
+    branch: str,
+    file_paths: list[str],
+) -> str | None:
+    if not file_paths:
+        return None
+
+    headers = {**_GITHUB_HEADERS}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{full_name}/git/trees/{branch}",
+            headers=headers,
+            params={"recursive": 1},
+        )
+
+    _raise_for_github_error(response, resource="repository tree")
+    wanted = {path.replace("\\", "/") for path in file_paths}
+    tree = response.json().get("tree", [])
+    blob_shas = {
+        item.get("path"): item.get("sha")
+        for item in tree
+        if item.get("type") == "blob" and item.get("path") in wanted
+    }
+
+    if not blob_shas:
+        return None
+
+    raw = "|".join(
+        f"{path}:{blob_shas[path]}"
+        for path in sorted(blob_shas)
+        if blob_shas.get(path)
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 async def fetch_repo_python_files(
     github_token: str | None,
@@ -216,10 +335,11 @@ def read_local_repo_files(repo_path):
         for f in files:
             if f.endswith(".py"):
                 full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path, repo_path).replace("\\", "/")
                 with open(full_path, "r", encoding="utf-8", errors="ignore") as file:
                     python_files.append({
                         "filename": f,
-                        "path": full_path,
+                        "path": rel_path,
                         "content": file.read()
                     })
     return python_files

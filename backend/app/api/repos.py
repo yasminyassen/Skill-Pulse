@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from app.db.database import get_db
-from app.db.models import User, Repository, AnalysisRun
+from app.db.models import User, Repository, AnalysisRun, SkillScore
 from app.core.auth_utils import get_current_user, decrypt_github_token
 from app.services.github_client import verify_repo_access
 
@@ -150,7 +150,8 @@ def list_connected_repos(
     repos = (
         db.query(Repository)
         .join(AnalysisRun)
-        .filter(AnalysisRun.user_id == current_user.id)
+        .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
+        .filter(SkillScore.user_id == current_user.id)
         .distinct()
     )
     return [_serialize_repo(r) for r in repos]
@@ -171,9 +172,10 @@ def disconnect_repository(
     repo = (
         db.query(Repository)
         .join(AnalysisRun)
+        .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
         .filter(
             Repository.id == repo_id,
-            AnalysisRun.user_id == current_user.id
+            SkillScore.user_id == current_user.id
         )
         .distinct()
         .first()
@@ -185,18 +187,54 @@ def disconnect_repository(
         )
 
     full_name = repo.full_name
-    db.query(AnalysisRun).filter(
-        AnalysisRun.repository_id == repo_id,
-        AnalysisRun.user_id == current_user.id
-    ).delete(synchronize_session=False)
-    
-    remaining = db.query(AnalysisRun).filter(
-        AnalysisRun.repository_id == repo_id
-    ).first()
-
-    if not remaining:
-        db.delete(repo)
+    linked_scores = (
+        db.query(SkillScore)
+        .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
+        .filter(
+            AnalysisRun.repository_id == repo_id,
+            SkillScore.user_id == current_user.id,
+        )
+        .all()
+    )
+    for score in linked_scores:
+        db.delete(score)
         
     db.commit()
 
     return {"message": f"Repository '{full_name}' disconnected successfully."}
+
+
+@router.delete("/disconnect-analysis/{analysis_id}")
+def disconnect_analysis_instance(
+    analysis_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    run = (
+        db.query(AnalysisRun)
+        .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
+        .filter(
+            AnalysisRun.id == analysis_id,
+            SkillScore.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not run:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis instance not found or you do not have permission to disconnect it.",
+        )
+
+    score = (
+        db.query(SkillScore)
+        .filter(
+            SkillScore.analysis_run_id == analysis_id,
+            SkillScore.user_id == current_user.id,
+        )
+        .first()
+    )
+    if score:
+        db.delete(score)
+        db.commit()
+
+    return {"message": f"Analysis for '{run.repository.full_name}' disconnected successfully."}

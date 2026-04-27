@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import User, RefreshToken, UserRole
@@ -9,6 +9,7 @@ import httpx
 from fastapi import Request
 from app.core.rate_limiter import limiter
 from fastapi.responses import RedirectResponse
+from urllib.parse import urlencode
 
 router = APIRouter(prefix="/auth", tags=["github"])
 
@@ -28,6 +29,11 @@ def _cookie_secure() -> bool:
 
 def _frontend_base_url() -> str:
     return settings.FRONTEND_URL.rstrip("/")
+
+
+def _frontend_oauth_error(code: str, message: str) -> RedirectResponse:
+    query = urlencode({"error": code, "message": message})
+    return RedirectResponse(url=f"{_frontend_base_url()}/auth/github/callback?{query}")
 
 
 def _expires_at_from_seconds(seconds: int | None) -> datetime | None:
@@ -79,7 +85,7 @@ async def github_callback(
 
     github_access_token = token_data.get("access_token")
     if not github_access_token:
-        raise HTTPException(status_code=400, detail="GitHub OAuth failed")
+        return _frontend_oauth_error("github_oauth_failed", "GitHub authorization failed. Please try again.")
 
     github_refresh_token = token_data.get("refresh_token")
     github_token_expires_at = _expires_at_from_seconds(token_data.get("expires_in"))
@@ -113,7 +119,7 @@ async def github_callback(
                 break
 
     if not work_email:
-        raise HTTPException(status_code=400, detail="No verified email found on GitHub account")
+        return _frontend_oauth_error("no_verified_email", "No verified email was found on this GitHub account.")
 
     # Encrypt token before storing
     encrypted_token = encrypt_github_token(github_access_token)
@@ -130,26 +136,26 @@ async def github_callback(
     if action == "connect":
 
         if not token:
-            raise HTTPException(status_code=401, detail="Missing token")
+            return _frontend_oauth_error("missing_session", "Your session expired before GitHub could be connected. Please sign in and try again.")
 
         payload = decode_access_token(token)
 
         if not payload:
-            raise HTTPException(status_code=401, detail="Invalid token")
+            return _frontend_oauth_error("invalid_session", "Your session expired before GitHub could be connected. Please sign in and try again.")
 
         user_id = payload.get("sub")
 
         current_user = db.query(User).filter(User.id == int(user_id)).first()
 
         if not current_user:
-            raise HTTPException(status_code=404, detail="User not found")
+            return _frontend_oauth_error("user_not_found", "We could not find your SkillPulse account. Please sign in again.")
 
         existing = db.query(User).filter(User.github_id == github_id).first()
 
         if existing and existing.id != current_user.id:
-            raise HTTPException(
-                status_code=400,
-                detail="This GitHub account is already linked to another user"
+            return _frontend_oauth_error(
+                "github_already_linked",
+                "This GitHub account is already linked to another SkillPulse user."
             )
 
         current_user.github_id = github_id
@@ -172,7 +178,7 @@ async def github_callback(
         if db.query(User).filter(User.username == username).first():
             username = f"{username}_gh"
         if db.query(User).filter(User.work_email == work_email).first():
-            raise HTTPException(status_code=400, detail="Email already registered with a different account")
+            return _frontend_oauth_error("email_already_registered", "This email is already registered with a different SkillPulse account.")
 
         db_user = User(
             github_id=github_id,

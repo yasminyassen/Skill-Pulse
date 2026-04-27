@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.db.database import get_db
-from app.db.models import SecurityFinding
+from app.db.models import SecurityFinding, SkillScore
 from app.core.auth_utils import get_current_user
 from app.db.models import User
 from fastapi import Request
@@ -30,6 +30,16 @@ def get_security_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    has_access = (
+        db.query(SkillScore)
+        .filter(
+            SkillScore.analysis_run_id == analysis_id,
+            SkillScore.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not has_access:
+        raise HTTPException(status_code=404, detail="Analysis report not found")
 
     findings = db.query(SecurityFinding).filter(
         SecurityFinding.analysis_run_id == analysis_id

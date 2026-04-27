@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import api from "../../api/auth";
+import { useState, useEffect } from "react";
+import api, { API_BASE_URL } from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -7,6 +7,10 @@ import DashboardLayout from "../DashboardLayout";
 interface SkillsSummary {
   overall: number;
   delta: number;
+  viewer?: {
+    has_github_identity: boolean;
+    github_login: string | null;
+  };
   scores: {
     code_quality: number;
     maintainability: number;
@@ -25,7 +29,18 @@ interface SkillsSummary {
     full_name: string;
     branch: string;
     completed_at: string | null;
+    is_private: boolean;
+    analysis_context?: AnalysisContext;
   }>;
+}
+
+interface AnalysisContext {
+  has_github_identity: boolean;
+  github_login: string | null;
+  is_private: boolean;
+  user_contributed: boolean;
+  commit_count_sample: number;
+  latest_commit_at: string | null;
 }
 
 interface DetailedAnalysis {
@@ -86,6 +101,7 @@ interface DetailedAnalysis {
     security_insights?: string;
   };
   completed_at: string | null;
+  analysis_context?: AnalysisContext;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -184,7 +200,6 @@ function MetricBar({
   max = 100,
 }: { label: string; value: number; sub?: string; max?: number }) {
   const pctVal = Math.min(100, (value / max) * 100);
-  const color = scoreColor(value);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -219,7 +234,7 @@ function InsightBox({ lines }: { lines: string[] }) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
         </svg>
-        <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#818cf8", letterSpacing: "0.4px" }}>AI-Generated Insights</span>
+        <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#818cf8", letterSpacing: "0.4px" }}>AI Contribution Guidance</span>
       </div>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "6px" }}>
         {lines.map((l, i) => (
@@ -253,13 +268,111 @@ function SkeletonCard() {
   );
 }
 
+function connectGithub() {
+  const token = localStorage.getItem("token");
+  if (token) {
+    window.location.href = `${API_BASE_URL}/auth/github?action=connect&token=${token}`;
+  }
+}
+
+function ModeNotice({
+  hasGithubIdentity,
+  context,
+  selected,
+  accent,
+}: {
+  hasGithubIdentity: boolean;
+  context?: AnalysisContext;
+  selected: boolean;
+  accent: string;
+}) {
+  const contributed = Boolean(context?.user_contributed);
+  const githubLogin = context?.github_login;
+
+  let title = "Connect GitHub to Start";
+  let body = "Developer skills are calculated only from your own GitHub contributions. Connect GitHub, then analyze a repository where your account has commits.";
+  let tone = accent;
+
+  if (hasGithubIdentity && selected && contributed) {
+    title = "Developer Contribution Analysis";
+    body = `Connected as ${githubLogin}. These results are based on Python files touched by your commits in this repository.`;
+    tone = "#34d399";
+  } else if (hasGithubIdentity && selected) {
+    title = "No Contribution Analysis Available";
+    body = `Connected as ${githubLogin || "GitHub user"}. This repository will only appear here when SkillPulse finds analyzable commits from this account.`;
+    tone = "#fbbf24";
+  } else if (hasGithubIdentity) {
+    title = "Select a Contribution Analysis";
+    body = `Connected as ${summaryGithubName(githubLogin)}. Only repositories with your contribution analysis are listed here.`;
+  }
+
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "14px",
+      padding: "18px 20px",
+      background: `${tone}0F`,
+      border: `1px solid ${tone}35`,
+      borderRadius: "14px",
+      marginBottom: "24px",
+    }}>
+      <div style={{
+        width: "34px",
+        height: "34px",
+        borderRadius: "10px",
+        background: `${tone}18`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: tone,
+      }}>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </svg>
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: "14px", fontWeight: 700, color: "white", marginBottom: "4px" }}>
+          {title}
+        </div>
+        <div style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.45)", lineHeight: 1.6 }}>
+          {body}
+        </div>
+        {!hasGithubIdentity && (
+          <button
+            onClick={connectGithub}
+            style={{
+              marginTop: "12px",
+              padding: "8px 14px",
+              border: "none",
+              borderRadius: "9px",
+              background: `linear-gradient(135deg, ${accent}, #ec4899)`,
+              color: "white",
+              fontSize: "12px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Connect GitHub
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function summaryGithubName(login?: string | null) {
+  return login ? login : "your GitHub account";
+}
+
 // ─── Dimension configs ────────────────────────────────────────────────────────
 
 const DIMENSIONS = [
   {
     key: "code_quality" as const,
     label: "Code Quality",
-    desc: "Measures code cleanliness, adherence to standards, and best practices",
+    desc: "Measures quality signals in the Python files touched by your commits",
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
@@ -280,7 +393,7 @@ const DIMENSIONS = [
   {
     key: "maintainability" as const,
     label: "Maintainability",
-    desc: "Evaluates how easy it is to maintain, update, and extend the code",
+    desc: "Evaluates maintainability of the contribution-affected code",
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
@@ -300,7 +413,7 @@ const DIMENSIONS = [
   {
     key: "architecture" as const,
     label: "Architecture",
-    desc: "Assesses structural design, modularity, and system organization",
+    desc: "Assesses structure and coupling around the files you contributed to",
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" />
@@ -324,7 +437,7 @@ const DIMENSIONS = [
   {
     key: "problem_solving" as const,
     label: "Problem Solving",
-    desc: "Analyzes algorithmic efficiency and logical complexity",
+    desc: "Analyzes complexity and problem-solving signals in your contribution area",
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><line x1="12" y1="17" x2="12.01" y2="17" />
@@ -392,6 +505,13 @@ export default function DeveloperSkills() {
   const scores  = summary?.scores;
   const deltas  = summary?.deltas;
   const overall = summary?.overall ?? 0;
+  const selectedRepo = summary?.repos.find(r => r.analysis_id === selectedId);
+  const activeContext = detail?.analysis_context || selectedRepo?.analysis_context;
+  const hasGithubIdentity = Boolean(summary?.viewer?.has_github_identity || activeContext?.has_github_identity);
+  const scoreTitle = "Overall Contribution Score";
+  const scoreSubtitle = hasGithubIdentity
+    ? "Aggregated only from repositories where SkillPulse analyzed your GitHub contributions"
+    : "Connect GitHub to analyze repositories from your own contributions";
 
   return (
     <DashboardLayout>
@@ -452,12 +572,21 @@ export default function DeveloperSkills() {
             color: "white", letterSpacing: "-0.5px",
             margin: "0 0 6px",
           }}>
-            Developer Skill Dashboard
+            Developer Contribution Dashboard
           </h1>
           <p style={{ fontSize: "14px", color: "rgba(255,255,255,0.35)", margin: 0 }}>
-            Objective skill scores derived from code analysis
+            Skill scores based only on your own GitHub contribution scope
           </p>
         </div>
+
+        {!loadingSummary && summary && (
+          <ModeNotice
+            hasGithubIdentity={hasGithubIdentity}
+            context={activeContext}
+            selected={Boolean(selectedId)}
+            accent={accent}
+          />
+        )}
 
         {/* ── Overall Score Card ── */}
         <div style={{
@@ -470,10 +599,10 @@ export default function DeveloperSkills() {
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "28px" }}>
             <div>
               <div style={{ fontSize: "14px", fontWeight: 600, color: "rgba(255,255,255,0.6)", marginBottom: "2px" }}>
-                Overall Skill Score
+                {scoreTitle}
               </div>
               <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.3)" }}>
-                Aggregated across all repositories
+                {scoreSubtitle}
               </div>
             </div>
             <div style={{ textAlign: "right" }}>
@@ -532,7 +661,7 @@ export default function DeveloperSkills() {
           display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap",
         }}>
           <span style={{ fontSize: "13.5px", color: "rgba(255,255,255,0.5)", fontWeight: 500, whiteSpace: "nowrap" }}>
-            View detailed analysis for a specific repository:
+            View your contribution analysis for:
           </span>
           {loadingSummary ? (
             <div className="sk" style={{ width: "220px", height: "36px", borderRadius: "10px" }} />
@@ -545,17 +674,70 @@ export default function DeveloperSkills() {
               <option value="">Select a repository…</option>
               {summary?.repos.map(r => (
                 <option key={r.analysis_id} value={r.analysis_id}>
-                  {r.repo_name} ({r.branch})
+                  {r.repo_name} ({r.branch}) - {r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "latest"}
                 </option>
               ))}
             </select>
           )}
           {!selectedId && !loadingSummary && (
             <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.25)", width: "100%" }}>
-              Select a repository to view detailed skill breakdowns, metrics, and AI insights.
+              Select a repository to view metrics and AI guidance for the files touched by your commits.
             </span>
           )}
         </div>
+
+        {selectedId && activeContext && (
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "12px",
+            marginBottom: "24px",
+          }}>
+            <div style={{
+              background: "rgba(255,255,255,0.025)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: "12px",
+              padding: "16px",
+            }}>
+              <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: "6px", fontWeight: 700 }}>
+                GitHub Identity
+              </div>
+              <div style={{ fontSize: "14px", color: "white", fontWeight: 700 }}>
+                {activeContext.has_github_identity ? activeContext.github_login : "Not connected"}
+              </div>
+            </div>
+            <div style={{
+              background: "rgba(255,255,255,0.025)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: "12px",
+              padding: "16px",
+            }}>
+              <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: "6px", fontWeight: 700 }}>
+                Repository Access
+              </div>
+              <div style={{ fontSize: "14px", color: "white", fontWeight: 700 }}>
+                {activeContext.is_private ? "Private repository" : "Public repository"}
+              </div>
+            </div>
+            <div style={{
+              background: "rgba(255,255,255,0.025)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: "12px",
+              padding: "16px",
+            }}>
+              <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: "6px", fontWeight: 700 }}>
+                Contribution Scope
+              </div>
+              <div style={{ fontSize: "14px", color: activeContext.user_contributed ? "#34d399" : "white", fontWeight: 700 }}>
+                {activeContext.user_contributed
+                  ? `${activeContext.commit_count_sample || 1}+ commits found`
+                  : activeContext.has_github_identity
+                    ? "Not available"
+                    : "Connect GitHub to check"}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Dimension cards ── */}
         {selectedId && (
@@ -568,8 +750,6 @@ export default function DeveloperSkills() {
                 const delta    = deltas?.[dim.key] ?? 0;
                 const metrics  = dim.getMetrics(detail);
                 const insights = dim.getInsights(detail);
-                const color    = scoreColor(score);
-
                 return (
                   <div key={dim.key} className="dim-card">
                     {/* Header */}
@@ -605,7 +785,7 @@ export default function DeveloperSkills() {
                     {/* Key Metrics */}
                     <div style={{ marginTop: "20px" }}>
                       <div style={{ fontSize: "11px", fontWeight: 700, color: "rgba(255,255,255,0.3)", letterSpacing: "0.8px", textTransform: "uppercase", marginBottom: "14px" }}>
-                        Key Metrics
+                        Contribution Signals
                       </div>
                       <div className="metrics-grid">
                         {metrics.map((m, i) => (
@@ -614,7 +794,7 @@ export default function DeveloperSkills() {
                       </div>
                     </div>
 
-                    {/* AI Insights */}
+                    {/* AI Guidance */}
                     {insights.length > 0 && <InsightBox lines={insights} />}
                     {insights.length === 0 && (
                       <div style={{
@@ -623,7 +803,7 @@ export default function DeveloperSkills() {
                         borderRadius: "10px",
                         fontSize: "12px", color: "rgba(255,255,255,0.2)",
                       }}>
-                        AI insights not available for this dimension yet.
+                        AI guidance is not available for this dimension yet.
                       </div>
                     )}
                   </div>
@@ -652,10 +832,10 @@ export default function DeveloperSkills() {
               </svg>
             </div>
             <div style={{ fontSize: "15px", fontWeight: 700, color: "rgba(255,255,255,0.5)", marginBottom: "6px" }}>
-              No analyses yet
+              No contribution analyses yet
             </div>
             <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.25)" }}>
-              Analyze a repository first to see your skill scores here.
+              Connect GitHub and analyze a repository where your account has commits.
             </div>
           </div>
         )}
