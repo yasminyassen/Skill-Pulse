@@ -112,7 +112,7 @@ def _hash_windows(lines: list[str], window_size: int = 5) -> list[str]:
     return hashes
 
 
-def analyze_python_files(files: list[dict]) -> dict:
+def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) -> dict:
     file_reports: list[dict] = []
     all_hashes: Counter[str] = Counter()
     file_hashes: dict[str, list[str]] = {}
@@ -281,7 +281,7 @@ def analyze_python_files(files: list[dict]) -> dict:
         )
 
     aggregate = _aggregate_metrics(file_reports)
-    scores = _compute_scores(file_reports)
+    scores = _compute_scores(file_reports, problem_solving_score)
 
     return {
         "files": file_reports,
@@ -344,7 +344,7 @@ def _aggregate_metrics(file_reports: list[dict]) -> dict:
     }
 
 
-def _min_max_scale(value: float, low: float, high: float, reverse: bool = False) -> float:
+def _normalize_metric(value: float, low: float, high: float, reverse: bool = False) -> float:
     if high <= low:
         return 1.0
     scaled = (value - low) / (high - low)
@@ -352,52 +352,97 @@ def _min_max_scale(value: float, low: float, high: float, reverse: bool = False)
     return 1.0 - scaled if reverse else scaled
 
 
-def _mean_scaled(file_reports: list[dict], key: str, reverse: bool = False) -> float:
+def _avg_normalized(
+    file_reports: list[dict],
+    key: str,
+    low: float,
+    high: float,
+    reverse: bool = False,
+) -> float:
     values = [float(r["metrics"].get(key, 0.0)) for r in file_reports]
-    low = min(values)
-    high = max(values)
-    scaled = [_min_max_scale(v, low, high, reverse=reverse) for v in values]
+    scaled = [_normalize_metric(v, low, high, reverse=reverse) for v in values]
     return sum(scaled) / len(scaled) if scaled else 1.0
 
 
-def _compute_scores(file_reports: list[dict]) -> dict:
-    if not file_reports:
+def _normalize(value, min_val, max_val):
+    """Normalize a value to a 0-1 scale."""
+    if max_val == min_val:
+        return 0.0
+    return max(0.0, min(1.0, (value - min_val) / (max_val - min_val)))
+
+
+def _calculate_aggregate_metrics(file_reports: list[dict]) -> dict:
+    """Calculate aggregate metrics from a list of file reports."""
+    total_metrics = defaultdict(float)
+    total_loc = 0
+    total_comment_lines = 0
+    max_inheritance_depth = 0
+    import_coupling_total = 0
+    file_count = len(file_reports)
+
+    if not file_count:
         return {
-            "code_quality": 0,
-            "maintainability": 0,
-            "architecture": 0,
-            "problem_solving": 0,
-            "security_score": 0,
-            "overall": 0,
+            "avg_docstring_coverage": 0.0,
+            "avg_duplication_score": 0.0,
+            "avg_cyclomatic_complexity": 0.0,
+            "avg_maintainability_index": 0.0,
+            "loc": 0,
+            "comment_ratio": 0.0,
+            "import_coupling_total": 0,
+            "max_inheritance_depth": 0,
         }
 
+    for report in file_reports:
+        metrics = report.get("metrics", {})
+        for key, value in metrics.items():
+            if isinstance(value, (int, float)):
+                total_metrics[key] += value
+        
+        loc = metrics.get("loc", 0)
+        total_loc += loc
+        total_comment_lines += metrics.get("comment_lines", 0)
+        max_inheritance_depth = max(max_inheritance_depth, metrics.get("max_inheritance_depth", 0))
+        import_coupling_total += int(metrics.get("import_coupling", 0))
+
+    avg_metrics = {key: value / file_count for key, value in total_metrics.items()}
+
+    return {
+        "avg_docstring_coverage": avg_metrics.get("docstring_coverage", 0.0),
+        "avg_duplication_score": avg_metrics.get("duplication_score", 0.0),
+        "avg_cyclomatic_complexity": avg_metrics.get("cyclomatic_complexity", 0.0),
+        "avg_maintainability_index": avg_metrics.get("maintainability_index", 0.0),
+        "loc": total_loc,
+        "comment_ratio": total_comment_lines / total_loc if total_loc > 0 else 0.0,
+        "import_coupling_total": import_coupling_total,
+        "max_inheritance_depth": max_inheritance_depth,
+    }
+
+
+def _compute_scores(file_reports: list[dict], problem_solving_score: float = 0.0) -> dict:
+    """Computes scores from a list of file reports."""
+    aggregate_metrics = _calculate_aggregate_metrics(file_reports)
+
     quality_components = {
-        "smells": _mean_scaled(file_reports, "long_functions", reverse=True),
-        "duplication": _mean_scaled(file_reports, "duplication_score", reverse=True),
-        "unused_vars": _mean_scaled(file_reports, "unused_variables", reverse=True),
-        "style": _mean_scaled(file_reports, "style_violations", reverse=True),
+        "smells": _avg_normalized(file_reports, "long_functions", 0.0, 2.0, reverse=True),
+        "duplication": _avg_normalized(file_reports, "duplication_score", 0.0, 1.0, reverse=True),
+        "unused_vars": _avg_normalized(file_reports, "unused_variables", 0.0, 5.0, reverse=True),
+        "style": _avg_normalized(file_reports, "style_violations", 0.0, 5.0, reverse=True),
     }
 
     maintainability_components = {
-        "docs": _mean_scaled(file_reports, "docstring_coverage", reverse=False),
-        "tests": _mean_scaled(file_reports, "test_function_ratio", reverse=False),
-        "complexity": _mean_scaled(file_reports, "cyclomatic_complexity", reverse=True),
-        "comments": _mean_scaled(file_reports, "comment_ratio", reverse=False),
+        "docs": _avg_normalized(file_reports, "docstring_coverage", 0.0, 1.0, reverse=False),
+        "tests": _avg_normalized(file_reports, "test_function_ratio", 0.0, 0.5, reverse=False),
+        "complexity": _avg_normalized(file_reports, "cyclomatic_complexity", 1.0, 20.0, reverse=True),
+        "comments": _avg_normalized(file_reports, "comment_ratio", 0.0, 0.3, reverse=False),
     }
 
     architecture_components = {
-        "coupling": _mean_scaled(file_reports, "import_coupling", reverse=True),
-        "inheritance": _mean_scaled(file_reports, "max_inheritance_depth", reverse=False),
-        "function_size": _mean_scaled(file_reports, "avg_function_size", reverse=True),
-        "modularity": _mean_scaled(file_reports, "avg_nesting_depth", reverse=True),
+        "coupling": _avg_normalized(file_reports, "import_coupling", 0.0, 20.0, reverse=True),
+        "inheritance": _avg_normalized(file_reports, "max_inheritance_depth", 1.0, 5.0, reverse=False),
+        "function_size": _avg_normalized(file_reports, "avg_function_size", 10.0, 60.0, reverse=True),
+        "modularity": _avg_normalized(file_reports, "avg_nesting_depth", 1.0, 6.0, reverse=True),
     }
 
-    problem_solving_components = {
-        "complexity_distribution": _mean_scaled(file_reports, "cyclomatic_complexity", reverse=False),
-        "nesting": _mean_scaled(file_reports, "avg_nesting_depth", reverse=False),
-        "modularity": _mean_scaled(file_reports, "avg_function_size", reverse=False),
-        "logic_density": _mean_scaled(file_reports, "long_functions", reverse=False),
-    }
 
     def weighted(components: dict[str, float], weights: dict[str, float]) -> float:
         return sum(components[name] * weights[name] for name in components)
@@ -410,24 +455,21 @@ def _compute_scores(file_reports: list[dict]) -> dict:
         maintainability_components,
         {"docs": 0.3, "tests": 0.25, "complexity": 0.3, "comments": 0.15},
     )
-    architecture = weighted(
-        architecture_components,
-        {"coupling": 0.35, "inheritance": 0.2, "function_size": 0.25, "modularity": 0.2},
-    )
-    problem_solving = weighted(
-        problem_solving_components,
-        {"complexity_distribution": 0.35, "nesting": 0.25, "modularity": 0.2, "logic_density": 0.2},
+    architecture = (
+        (1 - _normalize(aggregate_metrics["import_coupling_total"], 0, 50)) * 0.5 +
+        (1 - _normalize(aggregate_metrics["max_inheritance_depth"], 0, 5)) * 0.5
     )
 
-    security_component = 1.0
-    security_score = 100.0
-    overall = (code_quality + maintainability + architecture + problem_solving + security_component) / 5.0
+    problem_solving = problem_solving_score
 
-    return {
+    overall = (code_quality + maintainability + architecture + problem_solving) / 4.0
+
+    scores = {
         "code_quality": round(code_quality * 100, 2),
         "maintainability": round(maintainability * 100, 2),
         "architecture": round(architecture * 100, 2),
         "problem_solving": round(problem_solving * 100, 2),
-        "security_score": security_score,
-        "overall": round(overall * 100, 2),
+        "overall_score": round(overall * 100, 2),
     }
+
+    return scores

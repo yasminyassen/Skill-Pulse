@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import api, { API_BASE_URL } from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
 
@@ -98,6 +98,51 @@ interface DetailedAnalysis {
       architecture?: string[];
       problem_solving?: string[];
     };
+    llm_problem_solving?: {
+      algorithms?: { score: number; confidence?: number; evidence?: string[] };
+      data_structures?: { score: number; confidence?: number; evidence?: string[] };
+      balanced_complexity?: { score: number; confidence?: number; evidence?: string[] };
+      edge_cases?: { score: number; confidence?: number; evidence?: string[] };
+      generated_at?: number;
+    };
+    llm_skill_scores?: {
+      code_quality?: { adjustment: number; confidence?: number; reason?: string };
+      maintainability?: { adjustment: number; confidence?: number; reason?: string };
+      architecture?: { adjustment: number; confidence?: number; reason?: string };
+      generated_at?: number;
+    };
+    llm_adjustment_guidance?: {
+      code_quality?: {
+        requested_adjustment?: number;
+        applied_delta?: number;
+        confidence?: number;
+        reason?: string;
+        evidence?: string[];
+        overall_impact?: number;
+        overall_delta?: number;
+        ignored?: boolean;
+      };
+      maintainability?: {
+        requested_adjustment?: number;
+        applied_delta?: number;
+        confidence?: number;
+        reason?: string;
+        evidence?: string[];
+        overall_impact?: number;
+        overall_delta?: number;
+        ignored?: boolean;
+      };
+      architecture?: {
+        requested_adjustment?: number;
+        applied_delta?: number;
+        confidence?: number;
+        reason?: string;
+        evidence?: string[];
+        overall_impact?: number;
+        overall_delta?: number;
+        ignored?: boolean;
+      };
+    };
     security_insights?: string;
   };
   completed_at: string | null;
@@ -122,6 +167,57 @@ const fmt = (n: number, decimals = 1) =>
   Number.isFinite(n) ? n.toFixed(decimals) : "—";
 
 const pct = (n: number) => `${Math.round((n || 0) * 100)}%`;
+
+const avgScore = (metrics: Array<{ value: number }>) => {
+  if (!metrics.length) return 0;
+  const total = metrics.reduce((acc, m) => acc + (Number.isFinite(m.value) ? m.value : 0), 0);
+  return Math.round(total / metrics.length);
+};
+
+const llmScore = (d: DetailedAnalysis, key: keyof DetailedAnalysis["scores"]) => {
+  const val = d.scores?.[key];
+  return typeof val === "number" ? val : null;
+};
+
+const fmtSigned = (n: number, decimals = 2) =>
+  `${n >= 0 ? "+" : ""}${n.toFixed(decimals)}`;
+
+const buildAdjustmentLines = (
+  d: DetailedAnalysis,
+  key: "code_quality" | "maintainability" | "architecture",
+) => {
+  const entry = d.ai_insights?.llm_adjustment_guidance?.[key];
+  if (!entry) return [];
+
+  const lines: string[] = [];
+  const confidence = entry.confidence ?? 0;
+
+  if (entry.ignored) {
+    lines.push(`LLM adjustment ignored due to low confidence (${confidence.toFixed(2)}).`);
+  } else {
+    lines.push(
+      `LLM adjustment applied: ${fmtSigned(entry.applied_delta ?? 0)} (confidence ${confidence.toFixed(2)}).`,
+    );
+  }
+
+  if (entry.reason) {
+    lines.push(`Reason: ${entry.reason}`);
+  }
+
+  if (entry.evidence && entry.evidence.length > 0) {
+    lines.push(`Evidence: ${entry.evidence.join(", ")}`);
+  }
+
+  if (entry.overall_impact != null) {
+    lines.push(`Overall impact from this adjustment: ${fmtSigned(entry.overall_impact)} points.`);
+  }
+
+  if (entry.overall_delta != null) {
+    lines.push(`Overall LLM change: ${fmtSigned(entry.overall_delta)} points.`);
+  }
+
+  return lines;
+};
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -193,29 +289,142 @@ function DeltaBadge({ delta, large = false }: { delta: number; large?: boolean }
   );
 }
 
+// function MetricBar({
+//   label,
+//   value,
+//   sub,
+//   max = 100,
+// }: { label: string; value: number; sub?: string; max?: number }) {
+//   const pctVal = Math.min(100, (value / max) * 100);
+//   return (
+//     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+//       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+//         <span style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.55)", fontWeight: 500 }}>{label}</span>
+//         <span style={{ fontSize: "15px", fontWeight: 700, color: "white" }}>{Math.round(value)}</span>
+//       </div>
+//       {sub && (
+//         <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", marginTop: "-4px" }}>{sub}</div>
+//       )}
+//       <div style={{ height: "4px", background: "rgba(255,255,255,0.07)", borderRadius: "3px", overflow: "hidden" }}>
+//         <div style={{
+//           height: "100%", borderRadius: "3px",
+//           background: barColor(value),
+//           width: `${pctVal}%`,
+//           transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
+//         }} />
+//       </div>
+//     </div>
+//   );
+// }
+function ConfidenceDots({ confidence }: { confidence: number }) {
+  const filled = Math.round(confidence * 5);
+  return (
+    <div style={{ display: "flex", gap: "3px", alignItems: "center" }}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div
+          key={i}
+          style={{
+            width: "5px", height: "5px", borderRadius: "50%",
+            background: i < filled ? "#34d399" : "rgba(255,255,255,0.12)",
+            border: i < filled ? "none" : "1px solid rgba(255,255,255,0.18)",
+            transition: "background 0.3s",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function MetricBar({
   label,
   value,
   sub,
   max = 100,
-}: { label: string; value: number; sub?: string; max?: number }) {
-  const pctVal = Math.min(100, (value / max) * 100);
+  adjustedValue,
+  confidence,
+}: {
+  label: string;
+  value: number;         // static score
+  sub?: string;
+  max?: number;
+  adjustedValue?: number; // AI-adjusted score (lower = penalized)
+  confidence?: number;    // 0–1
+}) {
+  const staticPct   = Math.min(100, (value / max) * 100);
+  const hasAdjust   = adjustedValue != null && adjustedValue !== value;
+  const adjPct      = hasAdjust ? Math.min(100, ((adjustedValue as number) / max) * 100) : staticPct;
+  const penaltyPct  = Math.max(0, staticPct - adjPct);
+  const penalized   = hasAdjust && (adjustedValue as number) < value;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.55)", fontWeight: 500 }}>{label}</span>
-        <span style={{ fontSize: "15px", fontWeight: 700, color: "white" }}>{Math.round(value)}</span>
+      {/* Header row: label + dual score + confidence dots */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+        <span style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.55)", fontWeight: 500, flex: 1 }}>
+          {label}
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+          {confidence != null && <ConfidenceDots confidence={confidence} />}
+          {hasAdjust ? (
+            <span style={{ fontSize: "13px", fontWeight: 700 }}>
+              <span style={{ color: "white" }}>{Math.round(value)}</span>
+              <span style={{ color: "rgba(255,255,255,0.3)", margin: "0 4px" }}>→</span>
+              <span style={{ color: penalized ? "#f87171" : "#34d399" }}>
+                {Math.round(adjustedValue as number)}
+              </span>
+            </span>
+          ) : (
+            <span style={{ fontSize: "14px", fontWeight: 700, color: "white" }}>
+              {Math.round(value)}
+            </span>
+          )}
+        </div>
       </div>
+
+      {/* Sub-label */}
       {sub && (
-        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", marginTop: "-4px" }}>{sub}</div>
+        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", marginTop: "-2px" }}>{sub}</div>
       )}
-      <div style={{ height: "4px", background: "rgba(255,255,255,0.07)", borderRadius: "3px", overflow: "hidden" }}>
+
+      {/* Split progress bar */}
+      <div style={{ position: "relative", height: "5px", background: "rgba(255,255,255,0.07)", borderRadius: "3px", overflow: "visible" }}>
+        {/* Green zone: 0 → adjusted (or static if no adjustment) */}
         <div style={{
+          position: "absolute", left: 0, top: 0,
           height: "100%", borderRadius: "3px",
-          background: barColor(value),
-          width: `${pctVal}%`,
+          background: "linear-gradient(90deg,#34d399,#10b981)",
+          width: `${adjPct}%`,
           transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
         }} />
+
+        {/* Red penalty zone: adjusted → static */}
+        {hasAdjust && penaltyPct > 0 && (
+          <div style={{
+            position: "absolute",
+            left: `${adjPct}%`,
+            top: 0,
+            height: "100%",
+            width: `${penaltyPct}%`,
+            minWidth: "3px",
+            background: "rgba(248,113,113,0.55)",
+            transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
+          }} />
+        )}
+
+        {/* Marker line at adjusted score position */}
+        {hasAdjust && penaltyPct > 0 && (
+          <div style={{
+            position: "absolute",
+            left: `${adjPct}%`,
+            top: "-2px",
+            width: "2px",
+            height: "9px",
+            background: "#f87171",
+            borderRadius: "1px",
+            transform: "translateX(-50%)",
+            boxShadow: "0 0 4px rgba(248,113,113,0.7)",
+          }} />
+        )}
       </div>
     </div>
   );
@@ -378,17 +587,73 @@ const DIMENSIONS = [
         <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
       </svg>
     ),
-    getMetrics: (d: DetailedAnalysis) => {
-      const m = d.detailed_metrics?.code_quality || {};
-      const dup = Math.round((m.avg_duplication_score || 0) * 100);
-      return [
-        { label: "Code Smells",       value: Math.max(0, 100 - (m.style_violations || 0) * 2),   sub: `${m.style_violations ?? 0} found` },
-        { label: "Style Violations",  value: Math.max(0, 100 - (m.style_violations || 0) * 3),   sub: `${m.style_violations ?? 0} total` },
-        { label: "Unused Variables",  value: Math.max(0, 100 - (m.unused_variables || 0) * 5),   sub: `${m.unused_variables ?? 0} instances` },
-        { label: "Code Duplication",  value: Math.max(0, 100 - dup),                             sub: `${dup}%` },
-      ];
+    // getMetrics: (d: DetailedAnalysis) => {
+    //   const m = d.detailed_metrics?.code_quality || {};
+    //   const dup = Math.round((m.avg_duplication_score || 0) * 100);
+    //   return [
+    //     { label: "Code Smells",       value: Math.max(0, 100 - (m.style_violations || 0) * 2),   sub: `${m.style_violations ?? 0} found` },
+    //     { label: "Style Violations",  value: Math.max(0, 100 - (m.style_violations || 0) * 3),   sub: `${m.style_violations ?? 0} total` },
+    //     { label: "Unused Variables",  value: Math.max(0, 100 - (m.unused_variables || 0) * 5),   sub: `${m.unused_variables ?? 0} instances` },
+    //     { label: "Code Duplication",  value: Math.max(0, 100 - dup),                             sub: `${dup}%` },
+    //   ];
+    // },
+      getMetrics: (d: DetailedAnalysis) => {
+        const m   = d.detailed_metrics?.code_quality || {};
+        const adj = d.ai_insights?.llm_adjustment_guidance?.code_quality;
+        const confidence  = adj?.confidence ?? undefined;
+        const dup         = Math.round((m.avg_duplication_score || 0) * 100);
+        const cc          = Number((m.avg_cyclomatic_complexity || 0).toFixed(2));
+
+        // Static scores
+        const staticSmells  = Math.max(0, 100 - (m.style_violations || 0) * 2);
+        const staticStyle   = Math.max(0, 100 - (m.style_violations || 0) * 3);
+        const staticUnused  = Math.max(0, 100 - (m.unused_variables || 0) * 5);
+        const staticDup     = Math.max(0, 100 - dup);
+
+        // Derive AI-adjusted scores by distributing the LLM delta across the 4 metrics
+        const delta = adj && !adj.ignored ? (adj.applied_delta ?? 0) : 0;
+        const adjustedSmells  = Math.min(100, Math.max(0, staticSmells  + delta));
+        const adjustedStyle   = Math.min(100, Math.max(0, staticStyle   + delta));
+        const adjustedUnused  = Math.min(100, Math.max(0, staticUnused  + delta));
+        const adjustedDup     = Math.min(100, Math.max(0, staticDup     + delta));
+
+        return [
+          {
+            label: "Code Smells",
+            value: staticSmells,
+            adjustedValue: adjustedSmells,
+            confidence,
+            sub: `${m.style_violations ?? 0} found · cyclomatic avg ${cc}`,
+          },
+          {
+            label: "Style Violations",
+            value: staticStyle,
+            adjustedValue: adjustedStyle,
+            confidence,
+            sub: `${m.style_violations ?? 0} total`,
+          },
+          {
+            label: "Unused Variables",
+            value: staticUnused,
+            adjustedValue: adjustedUnused,
+            confidence,
+            sub: `${m.unused_variables ?? 0} instances`,
+          },
+          {
+            label: "Code Duplication",
+            value: staticDup,
+            adjustedValue: adjustedDup,
+            confidence,
+            sub: `${dup}% duplication`,
+          },
+        ];
+      },
+    getScore: (d: DetailedAnalysis) => {
+      const llm = llmScore(d, "code_quality");
+      return llm != null ? Math.round(llm) : avgScore(DIMENSIONS[0].getMetrics(d));
     },
-    getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.code_quality || [],
+    getInsights: (d: DetailedAnalysis) => 
+      d.ai_insights?.skills_insights?.code_quality || [],
   },
   {
     key: "maintainability" as const,
@@ -399,16 +664,64 @@ const DIMENSIONS = [
         <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
       </svg>
     ),
+    // getMetrics: (d: DetailedAnalysis) => {
+    //   const m = d.detailed_metrics?.maintainability || {};
+    //   return [
+    //     { label: "Documentation Coverage", value: Math.round((m.avg_docstring_coverage || 0) * 100), sub: pct(m.avg_docstring_coverage || 0) },
+    //     { label: "Test Coverage",          value: Math.min(100, Math.round((m.avg_maintainability_index || 0))),            sub: `${Math.round(m.avg_maintainability_index || 0)}%` },
+    //     { label: "Code Comments",          value: Math.min(100, Math.round((m.avg_comment_ratio || 0) * 200)), sub: m.avg_comment_ratio ? "Adequate" : "Low" },
+    //     { label: "Complexity Score",       value: Math.max(0, 100 - (m.long_functions || 0) * 5),            sub: (m.long_functions || 0) > 3 ? "High" : "Medium" },
+    //   ];
+    // },
     getMetrics: (d: DetailedAnalysis) => {
-      const m = d.detailed_metrics?.maintainability || {};
+      const m   = d.detailed_metrics?.maintainability || {};
+      const adj = d.ai_insights?.llm_adjustment_guidance?.maintainability;
+      const confidence = adj?.confidence ?? undefined;
+      const delta = adj && !adj.ignored ? (adj.applied_delta ?? 0) : 0;
+
+      const staticDocCoverage  = Math.round((m.avg_docstring_coverage || 0) * 100);
+      const staticTestCoverage = Math.min(100, Math.round(m.avg_maintainability_index || 0));
+      const staticComments     = Math.min(100, Math.round((m.avg_comment_ratio || 0) * 200));
+      const staticComplexity   = Math.max(0, 100 - (m.long_functions || 0) * 5);
+
       return [
-        { label: "Documentation Coverage", value: Math.round((m.avg_docstring_coverage || 0) * 100), sub: pct(m.avg_docstring_coverage || 0) },
-        { label: "Test Coverage",          value: Math.min(100, Math.round((m.avg_maintainability_index || 0))),            sub: `${Math.round(m.avg_maintainability_index || 0)}%` },
-        { label: "Code Comments",          value: Math.min(100, Math.round((m.avg_comment_ratio || 0) * 200)), sub: m.avg_comment_ratio ? "Adequate" : "Low" },
-        { label: "Complexity Score",       value: Math.max(0, 100 - (m.long_functions || 0) * 5),            sub: (m.long_functions || 0) > 3 ? "High" : "Medium" },
+        {
+          label: "Documentation Coverage",
+          value: staticDocCoverage,
+          adjustedValue: Math.min(100, Math.max(0, staticDocCoverage + delta)),
+          confidence,
+          sub: `${pct(m.avg_docstring_coverage || 0)} · ${m.missing_docstrings ?? 0} missing`,
+        },
+        {
+          label: "Maintainability Index",
+          value: staticTestCoverage,
+          adjustedValue: Math.min(100, Math.max(0, staticTestCoverage + delta)),
+          confidence,
+          sub: `${Math.round(m.avg_maintainability_index || 0)} index score`,
+        },
+        {
+          label: "Code Comments",
+          value: staticComments,
+          adjustedValue: Math.min(100, Math.max(0, staticComments + delta)),
+          confidence,
+          sub: m.avg_comment_ratio ? `${(m.avg_comment_ratio * 100).toFixed(1)}% ratio · Adequate` : "Low comment ratio",
+        },
+        {
+          label: "Complexity Score",
+          value: staticComplexity,
+          adjustedValue: Math.min(100, Math.max(0, staticComplexity + delta)),
+          confidence,
+          sub: `${m.long_functions ?? 0} long functions · ${m.too_many_params ?? 0} over-param'd`,
+        },
       ];
     },
-    getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.maintainability || [],
+    getScore: (d: DetailedAnalysis) => {
+      const llm = llmScore(d, "maintainability");
+      return llm != null ? Math.round(llm) : avgScore(DIMENSIONS[1].getMetrics(d));
+    },
+    getInsights: (d: DetailedAnalysis) => [
+      ...(d.ai_insights?.skills_insights?.maintainability || []),
+    ],
   },
   {
     key: "architecture" as const,
@@ -420,19 +733,68 @@ const DIMENSIONS = [
         <rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
       </svg>
     ),
+    // getMetrics: (d: DetailedAnalysis) => {
+    //   const m = d.detailed_metrics?.architecture || {};
+    //   const coupling = Math.max(0, 100 - (m.import_coupling_total || 0) * 2);
+    //   const inherit  = Math.max(0, 100 - (m.max_inheritance_depth || 0) * 10);
+    //   const fnSize   = Math.max(0, 100 - Math.max(0, (m.avg_function_size || 0) - 20) * 2);
+    //   return [
+    //     { label: "Class Design",       value: Math.min(100, coupling + 10),          sub: coupling > 70 ? "Good" : "Needs work" },
+    //     { label: "Coupling",           value: coupling,                              sub: coupling > 70 ? "Low" : "High" },
+    //     { label: "Function Size",      value: fnSize,                                sub: `${fmt(m.avg_function_size || 0, 0)} LOC avg` },
+    //     { label: "Inheritance Depth",  value: inherit,                               sub: `${m.max_inheritance_depth ?? 0} levels` },
+    //   ];
+    // },
     getMetrics: (d: DetailedAnalysis) => {
-      const m = d.detailed_metrics?.architecture || {};
-      const coupling = Math.max(0, 100 - (m.import_coupling_total || 0) * 2);
-      const inherit  = Math.max(0, 100 - (m.max_inheritance_depth || 0) * 10);
-      const fnSize   = Math.max(0, 100 - Math.max(0, (m.avg_function_size || 0) - 20) * 2);
+      const m   = d.detailed_metrics?.architecture || {};
+      const adj = d.ai_insights?.llm_adjustment_guidance?.architecture;
+      const confidence = adj?.confidence ?? undefined;
+      const delta = adj && !adj.ignored ? (adj.applied_delta ?? 0) : 0;
+
+      const couplingScore = Math.max(0, 100 - (m.import_coupling_total || 0) * 2);
+      const couplingDisplay = Math.min(100, (m.import_coupling_total || 0) * 2);
+      const inherit       = Math.max(0, 100 - (m.max_inheritance_depth || 0) * 10);
+      const fnSize        = Math.max(0, 100 - Math.max(0, (m.avg_function_size || 0) - 20) * 2);
+      const staticDesign  = Math.min(100, couplingScore + 10);
+
       return [
-        { label: "Class Design",       value: Math.min(100, coupling + 10),          sub: coupling > 70 ? "Good" : "Needs work" },
-        { label: "Coupling",           value: coupling,                              sub: coupling > 70 ? "Low" : "High" },
-        { label: "Function Size",      value: fnSize,                                sub: `${fmt(m.avg_function_size || 0, 0)} LOC avg` },
-        { label: "Inheritance Depth",  value: inherit,                               sub: `${m.max_inheritance_depth ?? 0} levels` },
+        {
+          label: "Class Design",
+          value: staticDesign,
+          adjustedValue: Math.min(100, Math.max(0, staticDesign + delta)),
+          confidence,
+          sub: `${couplingScore > 70 ? "Good" : "Needs work"} · ${m.deep_nesting ?? 0} deep nesting`,
+        },
+        {
+          label: "Coupling",
+          value: couplingDisplay,
+          adjustedValue: Math.min(100, Math.max(0, couplingDisplay + delta)),
+          confidence,
+          sub: `${m.import_coupling_total ?? 0} imports total · ${couplingDisplay > 70 ? "High" : "Low"} coupling`,
+        },
+        {
+          label: "Function Size",
+          value: fnSize,
+          adjustedValue: Math.min(100, Math.max(0, fnSize + delta)),
+          confidence,
+          sub: `${fmt(m.avg_function_size || 0, 0)} LOC avg · avg nesting ${fmt(m.avg_nesting_depth || 0, 1)}`,
+        },
+        {
+          label: "Inheritance Depth",
+          value: inherit,
+          adjustedValue: Math.min(100, Math.max(0, inherit + delta)),
+          confidence,
+          sub: `${m.max_inheritance_depth ?? 0} levels max`,
+        },
       ];
     },
-    getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.architecture || [],
+    getScore: (d: DetailedAnalysis) => {
+      const llm = llmScore(d, "architecture");
+      return llm != null ? Math.round(llm) : avgScore(DIMENSIONS[2].getMetrics(d));
+    },
+    getInsights: (d: DetailedAnalysis) => [
+      ...(d.ai_insights?.skills_insights?.architecture || []),
+    ],
   },
   {
     key: "problem_solving" as const,
@@ -445,17 +807,44 @@ const DIMENSIONS = [
       </svg>
     ),
     getMetrics: (d: DetailedAnalysis) => {
-      const m = d.detailed_metrics?.problem_solving || {};
-      const cc = m.avg_cyclomatic_complexity || 0;
-      const ccScore = Math.max(0, 100 - Math.max(0, cc - 3) * 8);
+      const llm = d.ai_insights?.llm_problem_solving;
+      if (llm && (llm.algorithms || llm.data_structures || llm.balanced_complexity || llm.edge_cases)) {
+        return [
+          { label: "Algorithms",           value: llm.algorithms?.score ?? 0,          sub: llm.algorithms?.confidence != null ? `Conf ${Math.round((llm.algorithms.confidence || 0) * 100)}%` : "" },
+          { label: "Data Structures",      value: llm.data_structures?.score ?? 0,     sub: llm.data_structures?.confidence != null ? `Conf ${Math.round((llm.data_structures.confidence || 0) * 100)}%` : "" },
+          { label: "Balanced Complexity", value: llm.balanced_complexity?.score ?? 0, sub: llm.balanced_complexity?.confidence != null ? `Conf ${Math.round((llm.balanced_complexity.confidence || 0) * 100)}%` : "" },
+          { label: "Edge Cases",          value: llm.edge_cases?.score ?? 0,          sub: llm.edge_cases?.confidence != null ? `Conf ${Math.round((llm.edge_cases.confidence || 0) * 100)}%` : "" },
+        ];
+      }
       return [
-        { label: "Cyclomatic Complexity", value: ccScore,                                          sub: cc < 5 ? "Low" : cc < 10 ? "Medium" : "High" },
-        { label: "Nesting Depth",         value: Math.max(0, 100 - (d.detailed_metrics?.architecture?.avg_nesting_depth || 0) * 20), sub: `${fmt(d.detailed_metrics?.architecture?.avg_nesting_depth || 0)} avg` },
-        { label: "Modularity",            value: Math.max(0, 100 - (m.long_functions || 0) * 4),  sub: (m.long_functions || 0) === 0 ? "High" : "Medium" },
-        { label: "Algorithm Efficiency",  value: Math.max(0, 100 - Math.max(0, cc - 2) * 6),      sub: ccScore > 70 ? "Good" : "Needs work" },
+        { label: "Algorithms",           value: 0, sub: "LLM required" },
+        { label: "Data Structures",      value: 0, sub: "LLM required" },
+        { label: "Balanced Complexity", value: 0, sub: "LLM required" },
+        { label: "Edge Cases",          value: 0, sub: "LLM required" },
       ];
     },
-    getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.problem_solving || [],
+    getScore: (d: DetailedAnalysis) => {
+      const llm = llmScore(d, "problem_solving");
+      return llm != null ? Math.round(llm) : 0;
+    },
+    getInsights: (d: DetailedAnalysis) => {
+      const llm = d.ai_insights?.llm_problem_solving;
+      if (llm) {
+        const entries = [
+          { label: "Algorithms", value: llm.algorithms?.evidence || [] },
+          { label: "Data Structures", value: llm.data_structures?.evidence || [] },
+          { label: "Balanced Complexity", value: llm.balanced_complexity?.evidence || [] },
+          { label: "Edge Cases", value: llm.edge_cases?.evidence || [] },
+        ];
+        const lines = entries.flatMap((entry) =>
+          entry.value.map((item) => `${entry.label}: ${item}`),
+        );
+        if (lines.length > 0) {
+          return lines;
+        }
+      }
+      return d.ai_insights?.skills_insights?.problem_solving || [];
+    },
   },
 ];
 
@@ -746,7 +1135,7 @@ export default function DeveloperSkills() {
               <>{[1,2,3,4].map(i => <SkeletonCard key={i} />)}</>
             ) : detail ? (
               DIMENSIONS.map(dim => {
-                const score    = detail.scores[dim.key === "problem_solving" ? "problem_solving" : dim.key as keyof typeof detail.scores] ?? 0;
+                const score    = dim.getScore ? dim.getScore(detail) : detail.scores[dim.key === "problem_solving" ? "problem_solving" : dim.key as keyof typeof detail.scores] ?? 0;
                 const delta    = deltas?.[dim.key] ?? 0;
                 const metrics  = dim.getMetrics(detail);
                 const insights = dim.getInsights(detail);
@@ -789,11 +1178,50 @@ export default function DeveloperSkills() {
                       </div>
                       <div className="metrics-grid">
                         {metrics.map((m, i) => (
-                          <MetricBar key={i} label={m.label} value={m.value} sub={m.sub} />
-                        ))}
+                            <MetricBar
+                              key={i}
+                              label={m.label}
+                              value={m.value}
+                              sub={m.sub}
+                              adjustedValue={(m as any).adjustedValue}
+                              confidence={(m as any).confidence}
+                            />
+                          ))}
                       </div>
                     </div>
-
+                    {/* Legend – only for code quality */}
+                    {(dim.key === "code_quality" || dim.key === "maintainability" || dim.key === "architecture") && (
+                      <div style={{
+                        display: "flex", gap: "20px", flexWrap: "wrap",
+                        marginTop: "16px",
+                        padding: "10px 14px",
+                        background: "rgba(255,255,255,0.025)",
+                        borderRadius: "8px",
+                        border: "1px solid rgba(255,255,255,0.06)",
+                      }}>
+                        {[
+                          { color: "#10b981", label: "Static (rule-based) score" },
+                          { color: "rgba(248,113,113,0.55)", label: "AI penalty zone" },
+                        ].map(({ color, label }) => (
+                          <div key={label} style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                            <div style={{ width: "24px", height: "5px", borderRadius: "3px", background: color }} />
+                            <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)" }}>{label}</span>
+                          </div>
+                        ))}
+                        <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                          <div style={{ display: "flex", gap: "2px" }}>
+                            {[true, true, true, false, false].map((f, i) => (
+                              <div key={i} style={{
+                                width: "5px", height: "5px", borderRadius: "50%",
+                                background: f ? "#34d399" : "rgba(255,255,255,0.12)",
+                                border: f ? "none" : "1px solid rgba(255,255,255,0.18)",
+                              }} />
+                            ))}
+                          </div>
+                          <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)" }}>AI confidence (dots = 1–5 scale)</span>
+                        </div>
+                      </div>
+                    )}
                     {/* AI Guidance */}
                     {insights.length > 0 && <InsightBox lines={insights} />}
                     {insights.length === 0 && (

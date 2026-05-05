@@ -16,6 +16,7 @@ router = APIRouter(prefix="/auth", tags=["github"])
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_EMAIL_URL = "https://api.github.com/user/emails"
+GITHUB_OAUTH_TIMEOUT = httpx.Timeout(20.0, connect=10.0, read=20.0)
 
 
 def _cookie_samesite() -> str:
@@ -70,18 +71,23 @@ async def github_callback(
     """Exchange GitHub code for access token and log user in"""
 
     # 1. Exchange code for GitHub access token
-    async with httpx.AsyncClient() as client:
-        token_res = await client.post(
-            GITHUB_TOKEN_URL,
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": settings.GITHUB_CLIENT_ID,
-                "client_secret": settings.GITHUB_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": settings.GITHUB_REDIRECT_URI,
-            }
-        )
-        token_data = token_res.json()
+    try:
+        async with httpx.AsyncClient(timeout=GITHUB_OAUTH_TIMEOUT) as client:
+            token_res = await client.post(
+                GITHUB_TOKEN_URL,
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.GITHUB_CLIENT_ID,
+                    "client_secret": settings.GITHUB_CLIENT_SECRET,
+                    "code": code,
+                    "redirect_uri": settings.GITHUB_REDIRECT_URI,
+                },
+            )
+            token_data = token_res.json()
+    except httpx.TimeoutException:
+        return _frontend_oauth_error("github_timeout", "GitHub request timed out. Please try again.")
+    except httpx.HTTPError:
+        return _frontend_oauth_error("github_unreachable", "Unable to reach GitHub. Please try again.")
 
     github_access_token = token_data.get("access_token")
     if not github_access_token:
@@ -92,18 +98,23 @@ async def github_callback(
     github_refresh_token_expires_at = _expires_at_from_seconds(token_data.get("refresh_token_expires_in"))
 
     # 2. Get GitHub user info
-    async with httpx.AsyncClient() as client:
-        user_res = await client.get(
-            GITHUB_USER_URL,
-            headers={"Authorization": f"Bearer {github_access_token}"}
-        )
-        github_user = user_res.json()
+    try:
+        async with httpx.AsyncClient(timeout=GITHUB_OAUTH_TIMEOUT) as client:
+            user_res = await client.get(
+                GITHUB_USER_URL,
+                headers={"Authorization": f"Bearer {github_access_token}"},
+            )
+            github_user = user_res.json()
 
-        email_res = await client.get(
-            GITHUB_EMAIL_URL,
-            headers={"Authorization": f"Bearer {github_access_token}"}
-        )
-        emails = email_res.json()
+            email_res = await client.get(
+                GITHUB_EMAIL_URL,
+                headers={"Authorization": f"Bearer {github_access_token}"},
+            )
+            emails = email_res.json()
+    except httpx.TimeoutException:
+        return _frontend_oauth_error("github_timeout", "GitHub request timed out. Please try again.")
+    except httpx.HTTPError:
+        return _frontend_oauth_error("github_unreachable", "Unable to reach GitHub. Please try again.")
 
     github_id = str(github_user.get("id"))
     username = github_user.get("login")

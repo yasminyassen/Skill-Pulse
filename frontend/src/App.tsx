@@ -28,7 +28,6 @@ function App() {
         <Route path="/dashboard/developer/analysis" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/developer/skills" element={<DeveloperSkills />} />
         {/* Future pages — each will get its own component */}
-        <Route path="/dashboard/developer/skills" element={<DeveloperDashboard />} />
         <Route path="/dashboard/developer/security" element={<DeveloperDashboard />} />
         <Route path="/dashboard/developer/requirements" element={<DeveloperDashboard />} />
         <Route path="/dashboard/developer/learning" element={<DeveloperDashboard />} />
