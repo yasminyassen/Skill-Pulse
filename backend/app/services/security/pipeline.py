@@ -51,6 +51,7 @@ def run_security_analysis(repo_path):
                     #  PATCH: normalize here
                     normalized = [_normalize_finding(f) for f in results]
                     findings.extend(normalized)
+                    print(f"{tool_name} completed with {len(normalized)} findings")
                 else:
                     print(f"{tool_name} completed with 0 findings")
 

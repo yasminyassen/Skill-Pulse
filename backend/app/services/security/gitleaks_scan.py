@@ -14,6 +14,19 @@ GITLEAKS_TO_CWE = {
     "password": "CWE-798",
 }
 
+
+def _relative_path(file_path: str, repo_path: str) -> str:
+    normalized = (file_path or "").replace("\\", "/")
+    if not normalized or not os.path.isabs(file_path):
+        return normalized or "unknown"
+
+    try:
+        rel = os.path.relpath(file_path, repo_path)
+        return rel.replace("\\", "/")
+    except ValueError:
+        return normalized
+
+
 def run_gitleaks(repo_path):
     configured = (settings.GITLEAKS_PATH or "").strip()
     exe_path = configured
@@ -34,7 +47,7 @@ def run_gitleaks(repo_path):
 
     report_path = os.path.join(repo_path, "gitleaks-report.json")
 
-    subprocess.run(
+    result = subprocess.run(
         [
             exe_path,
             "detect",
@@ -55,23 +68,30 @@ def run_gitleaks(repo_path):
     findings = []
 
     if not os.path.exists(report_path):
+        stderr = (result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(f"gitleaks failed (exit={result.returncode}): {stderr[:500]}")
         return findings
 
     try:
         with open(report_path, "r") as f:
             data = json.load(f)
-    except:
-        return findings
+    except Exception as exc:
+        stderr = (result.stderr or "").strip()
+        raise RuntimeError(
+            f"gitleaks report was not valid JSON (exit={result.returncode}): {stderr[:500]}"
+        ) from exc
     
     for issue in data:
         rule = (issue.get("RuleID") or "").lower().replace(" ", "-")
+        file_path = _relative_path(issue.get("File") or "", repo_path)
 
         cwe = GITLEAKS_TO_CWE.get(rule, "CWE-798")
         owasp = CWE_TO_OWASP.get(cwe, "A07")
         findings.append({
             "tool": "gitleaks",
             "rule": rule,
-            "file_path": issue.get("File"),
+            "file_path": file_path,
             "severity": "HIGH",
             "description": issue.get("Description"),
             "line_number": issue.get("StartLine"),

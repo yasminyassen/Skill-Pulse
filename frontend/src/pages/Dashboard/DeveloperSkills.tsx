@@ -157,12 +157,6 @@ const scoreColor = (s: number) => {
   return "#f87171";
 };
 
-const barColor = (s: number) => {
-  if (s >= 80) return "linear-gradient(90deg,#34d399,#10b981)";
-  if (s >= 60) return "linear-gradient(90deg,#fbbf24,#f59e0b)";
-  return "linear-gradient(90deg,#f87171,#ef4444)";
-};
-
 const fmt = (n: number, decimals = 1) =>
   Number.isFinite(n) ? n.toFixed(decimals) : "—";
 
@@ -177,46 +171,6 @@ const avgScore = (metrics: Array<{ value: number }>) => {
 const llmScore = (d: DetailedAnalysis, key: keyof DetailedAnalysis["scores"]) => {
   const val = d.scores?.[key];
   return typeof val === "number" ? val : null;
-};
-
-const fmtSigned = (n: number, decimals = 2) =>
-  `${n >= 0 ? "+" : ""}${n.toFixed(decimals)}`;
-
-const buildAdjustmentLines = (
-  d: DetailedAnalysis,
-  key: "code_quality" | "maintainability" | "architecture",
-) => {
-  const entry = d.ai_insights?.llm_adjustment_guidance?.[key];
-  if (!entry) return [];
-
-  const lines: string[] = [];
-  const confidence = entry.confidence ?? 0;
-
-  if (entry.ignored) {
-    lines.push(`LLM adjustment ignored due to low confidence (${confidence.toFixed(2)}).`);
-  } else {
-    lines.push(
-      `LLM adjustment applied: ${fmtSigned(entry.applied_delta ?? 0)} (confidence ${confidence.toFixed(2)}).`,
-    );
-  }
-
-  if (entry.reason) {
-    lines.push(`Reason: ${entry.reason}`);
-  }
-
-  if (entry.evidence && entry.evidence.length > 0) {
-    lines.push(`Evidence: ${entry.evidence.join(", ")}`);
-  }
-
-  if (entry.overall_impact != null) {
-    lines.push(`Overall impact from this adjustment: ${fmtSigned(entry.overall_impact)} points.`);
-  }
-
-  if (entry.overall_delta != null) {
-    lines.push(`Overall LLM change: ${fmtSigned(entry.overall_delta)} points.`);
-  }
-
-  return lines;
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────

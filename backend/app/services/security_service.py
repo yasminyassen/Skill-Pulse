@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
 
 
 def normalize_severity(severity: str | None) -> str:
@@ -34,7 +35,98 @@ def group_findings_by_severity_and_file(findings: list[dict]) -> dict:
     return grouped
 
 
+def _is_dependency_finding(finding: dict) -> bool:
+    tool = (finding.get("tool") or "").lower()
+    if tool == "safety":
+        return True
+
+    file_name = os.path.basename((finding.get("file_path") or "").replace("\\", "/")).lower()
+    return file_name in {
+        "requirements.txt",
+        "pyproject.toml",
+        "poetry.lock",
+        "pipfile",
+        "pipfile.lock",
+    }
+
+
+def _component_score(
+    findings: list[dict],
+    severity_weight: dict[str, float],
+    cwe_weight: dict[str, float],
+    total_loc: int | None = None,
+    use_density: bool = False,
+) -> float:
+    if not findings:
+        return 100.0
+
+    penalty = 0.0
+    for finding in findings:
+        sev = normalize_severity(finding.get("severity"))
+        penalty += severity_weight.get(sev, severity_weight["MEDIUM"]) * cwe_weight.get(finding.get("cwe"), 1.0)
+
+    if use_density:
+        density = len(findings) / max(total_loc or 1, 1)
+        penalty *= min(1.6, 1 + density * 30)
+
+        unique_files = len(set(finding.get("file_path") for finding in findings))
+        repeated_findings = max(0, len(findings) - unique_files)
+        penalty *= 1 + repeated_findings * 0.03
+
+    return round(max(0.0, 100.0 - min(100.0, penalty)), 2)
+
+
+def compute_security_score_breakdown(findings: list[dict], total_loc: int = 1000) -> dict:
+    code_findings = [finding for finding in findings if not _is_dependency_finding(finding)]
+    dependency_findings = [finding for finding in findings if _is_dependency_finding(finding)]
+
+    code_score = _component_score(
+        code_findings,
+        severity_weight={
+            "HIGH": 12,
+            "MEDIUM": 6,
+            "LOW": 2,
+        },
+        cwe_weight={
+            "CWE-79": 1.5,
+            "CWE-89": 1.8,
+            "CWE-94": 2.2,
+        },
+        total_loc=total_loc,
+        use_density=True,
+    )
+
+    dependency_score = _component_score(
+        dependency_findings,
+        severity_weight={
+            "HIGH": 8,
+            "MEDIUM": 4,
+            "LOW": 1.5,
+        },
+        cwe_weight={},
+    )
+
+    overall = round((code_score * 0.6) + (dependency_score * 0.4), 2)
+    return {
+        "overall": overall,
+        "code_security": code_score,
+        "dependency_security": dependency_score,
+        "weights": {
+            "code_security": 0.6,
+            "dependency_security": 0.4,
+        },
+        "finding_counts": {
+            "code_security": len(code_findings),
+            "dependency_security": len(dependency_findings),
+        },
+    }
+
+
 def compute_security_score(findings: list[dict], total_loc: int = 1000) -> float:
+    return compute_security_score_breakdown(findings, total_loc)["overall"]
+
+
+def compute_legacy_security_score(findings: list[dict], total_loc: int = 1000) -> float:
     if not findings:
         return 100.0
 

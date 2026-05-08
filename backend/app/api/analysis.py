@@ -39,7 +39,7 @@ from app.services.code_analysis_service import (
 )
 from app.services.security_service import (
     normalize_severity,
-    compute_security_score,
+    compute_security_score_breakdown,
     group_findings_by_severity_and_file,
 )
 
@@ -50,6 +50,22 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 class RepoRequest(BaseModel):
     repo_url: str
     branch: str = "main"
+
+
+def compute_repository_display_score(code_score: float | None, security_score: float | None) -> float | None:
+    if code_score is None:
+        return None
+    if security_score is None:
+        return round(code_score, 2)
+
+    code = max(0.0, min(100.0, float(code_score)))
+    security = max(0.0, min(100.0, float(security_score)))
+
+    code_weight = 0.7
+    security_weight = 0.3
+    return round((code * code_weight) + (security * security_weight), 2)
+
+
 @router.post("/run")
 @limiter.limit("2/minute")
 async def run_analysis(
@@ -212,14 +228,13 @@ async def run_analysis(
             )
 
         analysis_scope = "contribution"
-        touched_files = python_touched_files
-        contribution_fingerprint = await get_files_fingerprint(
+        python_contribution_fingerprint = await get_files_fingerprint(
             token,
             full_name,
             data.branch,
-            touched_files,
+            python_touched_files,
         )
-        if not contribution_fingerprint:
+        if not python_contribution_fingerprint:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -227,6 +242,12 @@ async def run_analysis(
                     "message": "We found your commits, but none of the touched Python files are present on this branch anymore.",
                 },
             )
+        contribution_fingerprint = await get_files_fingerprint(
+            token,
+            full_name,
+            data.branch,
+            touched_files,
+        ) or python_contribution_fingerprint
         cache_sha = contribution_fingerprint
 
     # Get or Create Repo
@@ -258,13 +279,19 @@ async def run_analysis(
             .first()
         )
         if existing_run:
+            cached_for_current_user = score_belongs_to_user(db, existing_run.id, current_user.id)
             if link_existing_run_to_user(db, existing_run, current_user.id):
                 return {
-                    "message": "Your contribution scope is up to date. Returning cached results.",
+                    "message": (
+                        "Your contribution scope is up to date. Returning cached results."
+                        if cached_for_current_user
+                        else "Existing analysis results are ready for this contribution scope."
+                    ),
                     "analysis_run_id": existing_run.id,
                     "status": "completed",
                     "cached": True,
                     "cached_scope": analysis_scope,
+                    "cached_for_current_user": cached_for_current_user,
                 }
 
     # Create Analysis Run (Pending/Running)
@@ -342,6 +369,8 @@ async def get_analysis_history(
             SkillScore.analysis_run_id == run.id,
             SkillScore.user_id == current_user.id,
         ).first()
+        code_score = score.overall_score if score else None
+        security_score = score.security_awareness_score if score else None
 
         result.append({
             "analysis_id": run.id,
@@ -350,7 +379,9 @@ async def get_analysis_history(
             "status": run.status,
             "triggered_at": run.triggered_at,
             "completed_at": run.completed_at,
-            "score": score.overall_score if score else None,
+            "score": compute_repository_display_score(code_score, security_score),
+            "code_score": code_score,
+            "security_score": security_score,
             "repo_id": run.repository.id,
         })
 
@@ -481,17 +512,17 @@ async def get_detailed_metrics_breakdown(
     maintainability_score = safe_float(score_row.maintainability_score, 0.0) if score_row else 0.0
     architecture_score = safe_float(score_row.architecture_score, 0.0) if score_row else 0.0
     problem_solving_score = safe_float(score_row.problem_solving_score, 0.0) if score_row else 0.0
-    security_score = safe_float(score_row.security_awareness_score, 0.0) if score_row else compute_security_score(
-        [
-            {
-                "severity": f.severity,
-                "cwe": f.cwe,
-                "file_path": f.file_path,
-            }
-            for f in findings
-        ],
-        total_loc,
-    )
+    security_score_inputs = [
+        {
+            "severity": f.severity,
+            "cwe": f.cwe,
+            "file_path": f.file_path,
+            "tool": f.tool,
+        }
+        for f in findings
+    ]
+    security_breakdown = compute_security_score_breakdown(security_score_inputs, total_loc)
+    security_score = security_breakdown["overall"]
     overall_score = safe_float(score_row.overall_score, 0.0) if score_row else compute_overall_score(
         {
             "code_quality": code_quality_score,
@@ -506,6 +537,11 @@ async def get_detailed_metrics_breakdown(
     if isinstance(ai_insights, dict):
         ai_insights = dict(ai_insights)
         ai_insights.pop("final_categorized_findings", None)
+
+    if isinstance(ai_insights, dict):
+        report = ai_insights.get("security_report")
+        if isinstance(report, dict) and "security_score_breakdown" in report:
+            security_breakdown = report["security_score_breakdown"]
 
     analysis_context = await build_personal_repo_context(
         db,
@@ -525,6 +561,7 @@ async def get_detailed_metrics_breakdown(
             "maintainability": round(maintainability_score, 2),
             "architecture": round(architecture_score, 2),
             "security_score": round(security_score, 2),
+            "security_score_breakdown": security_breakdown,
             "problem_solving": round(problem_solving_score, 2),
             "overall": round(overall_score, 2),
         },

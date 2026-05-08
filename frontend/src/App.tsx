@@ -11,6 +11,7 @@ import DeveloperDashboard from './pages/Dashboard/DeveloperDashboard';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
 import RecruiterDashboard from './pages/Dashboard/RecruiterDashboard';
 import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
+import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
 
 function App() {
   return (
@@ -28,7 +29,7 @@ function App() {
         <Route path="/dashboard/developer/analysis" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/developer/skills" element={<DeveloperSkills />} />
         {/* Future pages — each will get its own component */}
-        <Route path="/dashboard/developer/security" element={<DeveloperDashboard />} />
+        <Route path="/dashboard/developer/security" element={<DeveloperSecurity />} />
         <Route path="/dashboard/developer/requirements" element={<DeveloperDashboard />} />
         <Route path="/dashboard/developer/learning" element={<DeveloperDashboard />} />
         <Route path="/dashboard/developer/profile" element={<DeveloperDashboard />} />

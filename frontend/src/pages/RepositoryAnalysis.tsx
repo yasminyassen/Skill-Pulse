@@ -123,7 +123,12 @@ export default function RepositoryAnalysis() {
         // Relevant analysis scope has not changed — results already exist.
         setLoading(false);
         const repoName = url.replace("https://github.com/", "").split("/").pop() || url;
-        setCachedMsg({ runId: res.data.analysis_run_id, repoName, scope: res.data.cached_scope });
+        setCachedMsg({
+          runId: res.data.analysis_run_id,
+          repoName,
+          scope: res.data.cached_scope,
+          cachedForCurrentUser: res.data.cached_for_current_user ?? true,
+        });
         fetchHistory();
         return;
       }
@@ -203,7 +208,12 @@ export default function RepositoryAnalysis() {
   };
 
   const [failedMsg, setFailedMsg] = useState<string | null>(null);
-  const [cachedMsg, setCachedMsg] = useState<{ runId: number; repoName: string; scope?: string } | null>(null);
+  const [cachedMsg, setCachedMsg] = useState<{
+    runId: number;
+    repoName: string;
+    scope?: string;
+    cachedForCurrentUser?: boolean;
+  } | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
 
   const disconnectAnalysis = async (analysisId: number) => {
@@ -736,12 +746,18 @@ export default function RepositoryAnalysis() {
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: "13.5px", fontWeight: 600, color: "#34d399", marginBottom: "3px" }}>
-                  {cachedMsg.scope === "contribution"
-                    ? "Your contributions are up to date"
-                    : "Up to date — no re-analysis needed"}
+                  {!cachedMsg.cachedForCurrentUser
+                    ? "Analysis results are ready"
+                    : cachedMsg.scope === "contribution"
+                      ? "Your contributions are up to date"
+                      : "Up to date - no re-analysis needed"}
                 </div>
                 <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
-                  {cachedMsg.scope === "contribution" ? (
+                  {!cachedMsg.cachedForCurrentUser ? (
+                    <>
+                      <strong style={{ color: "rgba(255,255,255,0.6)" }}>{cachedMsg.repoName}</strong> was already analyzed for this same code snapshot, so we linked the existing results to your dashboard.
+                    </>
+                  ) : cachedMsg.scope === "contribution" ? (
                     <>
                       Your analyzed contribution files in <strong style={{ color: "rgba(255,255,255,0.6)" }}>{cachedMsg.repoName}</strong> have not changed since the last analysis. Repository changes outside your contribution scope do not trigger a new analysis.
                     </>

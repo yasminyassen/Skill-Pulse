@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.db.database import get_db
-from app.db.models import SecurityFinding, SkillScore
+from app.db.models import AnalysisRun, SecurityFinding, SkillScore
 from app.core.auth_utils import get_current_user
 from app.db.models import User
 from fastapi import Request
@@ -41,6 +41,18 @@ def get_security_report(
     if not has_access:
         raise HTTPException(status_code=404, detail="Analysis report not found")
 
+    run = db.query(AnalysisRun).filter(AnalysisRun.id == analysis_id).first()
+    failed_tools = []
+    security_score_breakdown = None
+    if isinstance(run.ai_insights, dict):
+        security_report = run.ai_insights.get("security_report", {})
+        failed_tools = (
+            run.ai_insights.get("failed_tools")
+            or security_report.get("failed_tools")
+            or []
+        )
+        security_score_breakdown = security_report.get("security_score_breakdown")
+
     findings = db.query(SecurityFinding).filter(
         SecurityFinding.analysis_run_id == analysis_id
     ).all()
@@ -57,6 +69,8 @@ def get_security_report(
                 "MEDIUM": {},
                 "LOW": {},
             },
+            "failed_tools": failed_tools,
+            "security_score_breakdown": security_score_breakdown,
         }
 
     total = len(findings)
@@ -132,5 +146,7 @@ def get_security_report(
             k: v for k, v in file_stats
         },
         "categorized_findings": categorized_findings,
+        "failed_tools": failed_tools,
+        "security_score_breakdown": security_score_breakdown,
 
     }

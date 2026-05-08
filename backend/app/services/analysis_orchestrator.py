@@ -24,7 +24,7 @@ from app.services.metrics import build_unified_schema
 from ai_services.insights.ai_insights import generate_insights
 from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
 from app.core.auth_utils import decrypt_github_token
-from app.services.security_service import compute_security_score, group_findings_by_severity_and_file
+from app.services.security_service import compute_security_score_breakdown, group_findings_by_severity_and_file
 from app.services.code_analysis_service import apply_adjustment, compute_overall_score
 
 
@@ -355,7 +355,8 @@ async def background_analysis_task(
         total_loc = code_intelligence_result.get("aggregate_metrics", {}).get("total_loc")
         if total_loc is None:
             total_loc = code_intelligence_result.get("aggregate_metrics", {}).get("loc", 1000)
-        security_score = compute_security_score(findings, int(total_loc or 0))
+        security_score_breakdown = compute_security_score_breakdown(findings, int(total_loc or 0))
+        security_score = security_score_breakdown["overall"]
 
         logging.info("[run=%s] final_scores before DB write: %s", run_id, final_scores)
         db.add(SkillScore(
@@ -374,6 +375,7 @@ async def background_analysis_task(
             "llm_problem_solving": llm_result,
             "llm_skill_scores": llm_skill_scores,
                 "llm_adjustment_guidance": llm_adjustment_guidance,
+            "failed_tools": failed_tools,
         }
         try:
             security_report = {
@@ -394,7 +396,9 @@ async def background_analysis_task(
             security_report["top_vulnerable_files"] = dict(sorted(file_counts.items(), key=lambda x: x[1], reverse=True)[:5])
             security_report["categorized_findings"] = group_findings_by_severity_and_file(findings)
             security_report["security_score"] = security_score
+            security_report["security_score_breakdown"] = security_score_breakdown
             security_report["failed_tools"] = failed_tools
+            ai_insights["security_report"] = security_report
 
             analysis_payload = {
                 "scores": final_scores,
