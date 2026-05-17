@@ -162,6 +162,51 @@ const fmt = (n: number, decimals = 1) =>
 
 const pct = (n: number) => `${Math.round((n || 0) * 100)}%`;
 
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+const normalize = (value: number, low: number, high: number) => {
+  if (high <= low) return 0;
+  return clamp01((value - low) / (high - low));
+};
+
+const computeComplexityScore = (d: DetailedAnalysis) => {
+  const cq = d.detailed_metrics?.code_quality || {};
+  const m = d.detailed_metrics?.maintainability || {};
+  const a = d.detailed_metrics?.architecture || {};
+
+  const files = Math.max(1, Number(cq.python_files || 0));
+  const cyclomatic = Number(cq.avg_cyclomatic_complexity || 0);
+  const avgFunctionSize = Number(a.avg_function_size || 0);
+  const avgNesting = Number(a.avg_nesting_depth || 0);
+  const longFunctionsPerFile = Number(m.long_functions || 0) / files;
+  const paramsPerFile = Number(m.too_many_params || 0) / files;
+  const duplication = Number(cq.avg_duplication_score || 0);
+  const couplingPerFile = Number(a.import_coupling_total || 0) / files;
+
+  // Higher values indicate more complexity and lower score.
+  const penalties = {
+    cyclomatic: normalize(cyclomatic, 5, 40),
+    functionSize: normalize(avgFunctionSize, 20, 90),
+    nesting: normalize(avgNesting, 1.5, 6),
+    longFunctions: normalize(longFunctionsPerFile, 0.2, 2.5),
+    params: normalize(paramsPerFile, 0.2, 2.5),
+    duplication: normalize(duplication, 0.05, 0.4),
+    coupling: normalize(couplingPerFile, 2, 15),
+  };
+
+  const penalty = (
+    penalties.cyclomatic * 0.30 +
+    penalties.functionSize * 0.15 +
+    penalties.nesting * 0.15 +
+    penalties.longFunctions * 0.10 +
+    penalties.params * 0.10 +
+    penalties.duplication * 0.10 +
+    penalties.coupling * 0.10
+  );
+
+  return Math.round(100 * (1 - clamp01(penalty)));
+};
+
 const avgScore = (metrics: Array<{ value: number }>) => {
   if (!metrics.length) return 0;
   const total = metrics.reduce((acc, m) => acc + (Number.isFinite(m.value) ? m.value : 0), 0);
@@ -636,7 +681,7 @@ const DIMENSIONS = [
       const staticDocCoverage  = Math.round((m.avg_docstring_coverage || 0) * 100);
       const staticTestCoverage = Math.min(100, Math.round(m.avg_maintainability_index || 0));
       const staticComments     = Math.min(100, Math.round((m.avg_comment_ratio || 0) * 200));
-      const staticComplexity   = Math.max(0, 100 - (m.long_functions || 0) * 5);
+      const staticComplexity   = computeComplexityScore(d);
 
       return [
         {
@@ -665,7 +710,7 @@ const DIMENSIONS = [
           value: staticComplexity,
           adjustedValue: Math.min(100, Math.max(0, staticComplexity + delta)),
           confidence,
-          sub: `${m.long_functions ?? 0} long functions · ${m.too_many_params ?? 0} over-param'd`,
+          sub: `${m.long_functions ?? 0} long functions · ${m.too_many_params ?? 0} over-param'd · ${(d.detailed_metrics?.code_quality?.avg_cyclomatic_complexity || 0).toFixed(1)} avg CC`,
         },
       ];
     },
@@ -687,18 +732,7 @@ const DIMENSIONS = [
         <rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
       </svg>
     ),
-    // getMetrics: (d: DetailedAnalysis) => {
-    //   const m = d.detailed_metrics?.architecture || {};
-    //   const coupling = Math.max(0, 100 - (m.import_coupling_total || 0) * 2);
-    //   const inherit  = Math.max(0, 100 - (m.max_inheritance_depth || 0) * 10);
-    //   const fnSize   = Math.max(0, 100 - Math.max(0, (m.avg_function_size || 0) - 20) * 2);
-    //   return [
-    //     { label: "Class Design",       value: Math.min(100, coupling + 10),          sub: coupling > 70 ? "Good" : "Needs work" },
-    //     { label: "Coupling",           value: coupling,                              sub: coupling > 70 ? "Low" : "High" },
-    //     { label: "Function Size",      value: fnSize,                                sub: `${fmt(m.avg_function_size || 0, 0)} LOC avg` },
-    //     { label: "Inheritance Depth",  value: inherit,                               sub: `${m.max_inheritance_depth ?? 0} levels` },
-    //   ];
-    // },
+
     getMetrics: (d: DetailedAnalysis) => {
       const m   = d.detailed_metrics?.architecture || {};
       const adj = d.ai_insights?.llm_adjustment_guidance?.architecture;

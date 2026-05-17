@@ -347,8 +347,7 @@ def _aggregate_metrics(file_reports: list[dict]) -> dict:
 def _normalize_metric(value: float, low: float, high: float, reverse: bool = False) -> float:
     if high <= low:
         return 1.0
-    scaled = (value - low) / (high - low)
-    scaled = max(0.0, min(1.0, scaled))
+    scaled = max(0.0, min(1.0, (value - low) / (high - low)))
     return 1.0 - scaled if reverse else scaled
 
 
@@ -364,22 +363,21 @@ def _avg_normalized(
     return sum(scaled) / len(scaled) if scaled else 1.0
 
 
-def _normalize(value, min_val, max_val):
-    """Normalize a value to a 0-1 scale."""
+def _normalize(value: float, min_val: float, max_val: float) -> float:
     if max_val == min_val:
         return 0.0
     return max(0.0, min(1.0, (value - min_val) / (max_val - min_val)))
 
 
+
 def _calculate_aggregate_metrics(file_reports: list[dict]) -> dict:
-    """Calculate aggregate metrics from a list of file reports."""
-    total_metrics = defaultdict(float)
+    total_metrics: dict = defaultdict(float)
     total_loc = 0
     total_comment_lines = 0
     max_inheritance_depth = 0
     import_coupling_total = 0
     file_count = len(file_reports)
-
+ 
     if not file_count:
         return {
             "avg_docstring_coverage": 0.0,
@@ -391,21 +389,18 @@ def _calculate_aggregate_metrics(file_reports: list[dict]) -> dict:
             "import_coupling_total": 0,
             "max_inheritance_depth": 0,
         }
-
+ 
     for report in file_reports:
         metrics = report.get("metrics", {})
         for key, value in metrics.items():
             if isinstance(value, (int, float)):
                 total_metrics[key] += value
-        
-        loc = metrics.get("loc", 0)
-        total_loc += loc
+        total_loc += metrics.get("loc", 0)
         total_comment_lines += metrics.get("comment_lines", 0)
         max_inheritance_depth = max(max_inheritance_depth, metrics.get("max_inheritance_depth", 0))
         import_coupling_total += int(metrics.get("import_coupling", 0))
-
-    avg_metrics = {key: value / file_count for key, value in total_metrics.items()}
-
+ 
+    avg_metrics = {k: v / file_count for k, v in total_metrics.items()}
     return {
         "avg_docstring_coverage": avg_metrics.get("docstring_coverage", 0.0),
         "avg_duplication_score": avg_metrics.get("duplication_score", 0.0),
@@ -418,58 +413,183 @@ def _calculate_aggregate_metrics(file_reports: list[dict]) -> dict:
     }
 
 
+def _rule_based_balanced_complexity(file_reports: list[dict]) -> float:
+    """
+    Compute a 0-1 balanced_complexity score purely from AST metrics.
+    Used when the LLM is unavailable or returned zeros.
+
+    Four components (equal weight):
+      long_functions  – penalises over-engineering / bloat
+      deep_nesting    – penalises tangled control flow
+      too_many_params – penalises over-parameterised functions
+      cyclomatic      – penalises excessive branching
+
+    Thresholds are calibrated so a healthy repo scores ~0.7-0.9 and a
+    repo with 20 long functions scores roughly 0.3-0.5.
+    """
+    if not file_reports:
+        return 0.5  # neutral default when there is nothing to analyse
+
+    components = {
+        # A handful of long functions is normal; 10+ per file is a problem
+        "long_functions": _avg_normalized(
+            file_reports, "long_functions", low=0.0, high=10.0, reverse=True
+        ),
+        # Deep nesting > 4 per file signals tangled logic
+        "deep_nesting": _avg_normalized(
+            file_reports, "deep_nesting", low=0.0, high=5.0, reverse=True
+        ),
+        # Over-param'd functions; even 3 per file is moderate
+        "too_many_params": _avg_normalized(
+            file_reports, "too_many_params", low=0.0, high=5.0, reverse=True
+        ),
+        # Per-file cyclomatic total; 30 is moderate, 80+ is problematic
+        "cyclomatic": _avg_normalized(
+            file_reports, "cyclomatic_complexity", low=1.0, high=80.0, reverse=True
+        ),
+    }
+    weights = {
+        "long_functions": 0.35,
+        "deep_nesting": 0.25,
+        "too_many_params": 0.20,
+        "cyclomatic": 0.20,
+    }
+    return sum(components[k] * weights[k] for k in components)
+
+
 def _compute_scores(file_reports: list[dict], problem_solving_score: float = 0.0) -> dict:
-    """Computes scores from a list of file reports."""
+    """
+    Compute skill scores from per-file AST metrics.
+
+    Key fixes vs original
+    ─────────────────────
+    • Realistic thresholds — no metric bottoms out from a handful of issues
+    • smells now includes deep_nesting + too_many_params, not just long_functions
+    • architecture uses all four components it already computed
+    • balanced_complexity falls back to rule-based score when problem_solving=0
+    """
     aggregate_metrics = _calculate_aggregate_metrics(file_reports)
 
+    # ── code quality ────────────────────────────────────────────────────────
+    # Thresholds: "low" = still fine, "high" = clearly problematic
     quality_components = {
-        "smells": _avg_normalized(file_reports, "long_functions", 0.0, 2.0, reverse=True),
-        "duplication": _avg_normalized(file_reports, "duplication_score", 0.0, 1.0, reverse=True),
-        "unused_vars": _avg_normalized(file_reports, "unused_variables", 0.0, 5.0, reverse=True),
-        "style": _avg_normalized(file_reports, "style_violations", 0.0, 5.0, reverse=True),
+        # long_functions: 0-2 fine, 10+ clearly over-engineered
+        "long_functions": _avg_normalized(
+            file_reports, "long_functions", low=0.0, high=10.0, reverse=True
+        ),
+        # deep_nesting: 0-1 fine, 5+ problematic
+        "deep_nesting": _avg_normalized(
+            file_reports, "deep_nesting", low=0.0, high=5.0, reverse=True
+        ),
+        # too_many_params: 0-1 fine, 5+ problematic
+        "too_many_params": _avg_normalized(
+            file_reports, "too_many_params", low=0.0, high=5.0, reverse=True
+        ),
+        # duplication: 0% fine, 50%+ clearly bad
+        "duplication": _avg_normalized(
+            file_reports, "duplication_score", low=0.0, high=0.5, reverse=True
+        ),
+        # unused vars: 0-2 fine, 10+ problematic
+        "unused_vars": _avg_normalized(
+            file_reports, "unused_variables", low=0.0, high=10.0, reverse=True
+        ),
+        # style violations: 0-3 fine, 15+ problematic
+        "style": _avg_normalized(
+            file_reports, "style_violations", low=0.0, high=15.0, reverse=True
+        ),
     }
 
+    code_quality = sum(
+        quality_components[k] * w
+        for k, w in {
+            "long_functions": 0.25,
+            "deep_nesting": 0.20,
+            "too_many_params": 0.15,
+            "duplication": 0.20,
+            "unused_vars": 0.10,
+            "style": 0.10,
+        }.items()
+    )
+
+    # ── maintainability ─────────────────────────────────────────────────────
     maintainability_components = {
-        "docs": _avg_normalized(file_reports, "docstring_coverage", 0.0, 1.0, reverse=False),
-        "tests": _avg_normalized(file_reports, "test_function_ratio", 0.0, 0.5, reverse=False),
-        "complexity": _avg_normalized(file_reports, "cyclomatic_complexity", 1.0, 20.0, reverse=True),
-        "comments": _avg_normalized(file_reports, "comment_ratio", 0.0, 0.3, reverse=False),
+        # docstring coverage: 0=no docs, 1=fully documented
+        "docs": _avg_normalized(
+            file_reports, "docstring_coverage", low=0.0, high=1.0, reverse=False
+        ),
+        # test ratio: 0=no tests, 0.5+=well tested
+        "tests": _avg_normalized(
+            file_reports, "test_function_ratio", low=0.0, high=0.5, reverse=False
+        ),
+        # cyclomatic per file: 1=trivial, 50=high (was 20, too tight)
+        "complexity": _avg_normalized(
+            file_reports, "cyclomatic_complexity", low=1.0, high=50.0, reverse=True
+        ),
+        # comment ratio: 0=none, 0.3+=well commented
+        "comments": _avg_normalized(
+            file_reports, "comment_ratio", low=0.0, high=0.3, reverse=False
+        ),
     }
 
+    maintainability = sum(
+        maintainability_components[k] * w
+        for k, w in {
+            "docs": 0.30,
+            "tests": 0.25,
+            "complexity": 0.30,
+            "comments": 0.15,
+        }.items()
+    )
+
+    # ── architecture ────────────────────────────────────────────────────────
+    # Original code built architecture_components then threw them away and
+    # recomputed from only coupling + inheritance. Fixed to use all four.
     architecture_components = {
-        "coupling": _avg_normalized(file_reports, "import_coupling", 0.0, 20.0, reverse=True),
-        "inheritance": _avg_normalized(file_reports, "max_inheritance_depth", 1.0, 5.0, reverse=False),
-        "function_size": _avg_normalized(file_reports, "avg_function_size", 10.0, 60.0, reverse=True),
-        "modularity": _avg_normalized(file_reports, "avg_nesting_depth", 1.0, 6.0, reverse=True),
+        # import coupling per file: 0-5 fine, 20+ problematic
+        "coupling": _avg_normalized(
+            file_reports, "import_coupling", low=0.0, high=20.0, reverse=True
+        ),
+        # inheritance depth: 1=flat (good), 5+=deep (bad)
+        "inheritance": _avg_normalized(
+            file_reports, "max_inheritance_depth", low=1.0, high=5.0, reverse=True
+        ),
+        # avg function size: 10 lines=compact, 80+=bloated
+        "function_size": _avg_normalized(
+            file_reports, "avg_function_size", low=10.0, high=80.0, reverse=True
+        ),
+        # avg nesting depth: 1=flat, 6+=deeply nested
+        "modularity": _avg_normalized(
+            file_reports, "avg_nesting_depth", low=1.0, high=6.0, reverse=True
+        ),
     }
 
-
-    def weighted(components: dict[str, float], weights: dict[str, float]) -> float:
-        return sum(components[name] * weights[name] for name in components)
-
-    code_quality = weighted(
-        quality_components,
-        {"smells": 0.35, "duplication": 0.25, "unused_vars": 0.2, "style": 0.2},
-    )
-    maintainability = weighted(
-        maintainability_components,
-        {"docs": 0.3, "tests": 0.25, "complexity": 0.3, "comments": 0.15},
-    )
-    architecture = (
-        (1 - _normalize(aggregate_metrics["import_coupling_total"], 0, 50)) * 0.5 +
-        (1 - _normalize(aggregate_metrics["max_inheritance_depth"], 0, 5)) * 0.5
+    architecture = sum(
+        architecture_components[k] * w
+        for k, w in {
+            "coupling": 0.30,
+            "inheritance": 0.20,
+            "function_size": 0.25,
+            "modularity": 0.25,
+        }.items()
     )
 
-    problem_solving = problem_solving_score
+    # ── problem solving / balanced_complexity ───────────────────────────────
+    # If the LLM returned 0 (failed), fall back to the rule-based score so
+    # the UI never shows a misleading 0 due to an infrastructure failure.
+    if problem_solving_score > 0.0:
+        problem_solving = problem_solving_score
+    else:
+        problem_solving = _rule_based_balanced_complexity(file_reports)
 
+    # ── overall ─────────────────────────────────────────────────────────────
     overall = (code_quality + maintainability + architecture + problem_solving) / 4.0
 
-    scores = {
+    return {
         "code_quality": round(code_quality * 100, 2),
         "maintainability": round(maintainability * 100, 2),
         "architecture": round(architecture * 100, 2),
         "problem_solving": round(problem_solving * 100, 2),
         "overall_score": round(overall * 100, 2),
+        # expose which path was taken so callers can log/display it
+        "_problem_solving_source": "llm" if problem_solving_score > 0.0 else "rule_based",
     }
-
-    return scores
