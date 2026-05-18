@@ -23,7 +23,7 @@ def _get_client():
     mode = os.getenv("AI_MODE", "openrouter")
     if mode == "openrouter":
         return AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
+            base_url=os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1"),
             api_key=os.getenv("OPENROUTER_API_KEY"),
         ), os.getenv("OPENROUTER_MODEL", "qwen/qwen3-14b")
     else:
