@@ -43,6 +43,7 @@ class Repository(Base):
     connected_at = Column(DateTime(timezone=True), server_default=func.now())
     
     analysis_runs = relationship("AnalysisRun", back_populates="repository")
+    repository_analyses = relationship("RepositoryAnalysis", back_populates="repository")
 
 class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
@@ -64,6 +65,39 @@ class AnalysisRun(Base):
     skill_scores = relationship("SkillScore", back_populates="analysis_run")
     user = relationship("User", back_populates="analysis_runs")
     ai_insights = Column(JSON, nullable=True)
+    recruiter_candidate = relationship("RecruiterCandidate", back_populates="analysis_run", uselist=False)
+
+
+class RepositoryAnalysis(Base):
+    __tablename__ = "repository_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    repository_id = Column(Integer, ForeignKey("repositories.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    latest_commit_sha = Column(String, nullable=True)
+    analysis_version = Column(String, nullable=False)
+    analyzed_at = Column(DateTime(timezone=True), nullable=True)
+    analysis_status = Column(String, nullable=False, default="pending")
+    results_path = Column(String, nullable=True)
+    force_reanalyzed = Column(Boolean, default=False)
+    last_run_id = Column(Integer, ForeignKey("analysis_runs.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    repository = relationship("Repository", back_populates="repository_analyses")
+    user = relationship("User")
+    last_run = relationship("AnalysisRun")
+
+
+class RecruiterCandidate(Base):
+    __tablename__ = "recruiter_candidates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"), unique=True, nullable=False)
+    candidate_name = Column(String, nullable=False)
+    github_login = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    analysis_run = relationship("AnalysisRun", back_populates="recruiter_candidate")
 class CodeMetrics(Base):
     __tablename__ = "code_metrics"
 

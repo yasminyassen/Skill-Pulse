@@ -310,6 +310,20 @@ def _merge_skill_scores(results: List[dict]) -> dict:
 # JSON extraction
 # ---------------------------------------------------------------------------
 
+def try_repair_truncated_json(text: str) -> dict:
+    import re, json
+    partial = {}
+    for key in ("algorithms", "data_structures", "balanced_complexity", "edge_cases"):
+        block_match = re.search(
+            rf'"{key}"\s*:\s*(\{{[^{{}}]*\}})', text, re.DOTALL
+        )
+        if block_match:
+            try:
+                partial[key] = json.loads(block_match.group(1))
+            except Exception:
+                pass
+    return partial
+
 def _extract_json_payload(text: str) -> dict:
     if not text or not text.strip():
         logger.warning("LLM returned empty text, nothing to parse")
@@ -348,7 +362,12 @@ def _extract_json_payload(text: str) -> dict:
                     except Exception:
                         break
 
-    logger.warning("Could not extract JSON from LLM response: %r", text[:300])
+    # Before giving up, attempt repair
+    repaired = try_repair_truncated_json(text)
+    if repaired:
+        logging.info("Repaired partial JSON, recovered keys: %s", list(repaired.keys()))
+        return repaired  # use whatever keys were complete
+    logging.warning("JSON repair failed, returning empty dict")
     return {}
 
 
@@ -446,6 +465,11 @@ def _call_problem_solving_once(
             {
                 "role": "user",
                 "content": (
+                    "CRITICAL OUTPUT RULES:\n"
+                    "- Return ONLY raw valid JSON. No markdown, no code blocks, no text outside the JSON.\n"
+                    "- Each \"evidence\" array must have EXACTLY 2 short strings, each UNDER 15 WORDS.\n"
+                    "- Do not elaborate on security issues inside evidence. One short phrase only.\n"
+                    "- The JSON object MUST be fully closed and valid before you finish responding.\n\n"
                     "You are evaluating the problem-solving ability demonstrated in code.\n\n"
                     "Analyze the following files and return ONLY a JSON object with this exact structure:\n\n"
                     "{\n"
@@ -472,6 +496,7 @@ def _call_problem_solving_once(
             },
         ],
         "response_format": {"type": "json_object"},
+        "max_tokens": 2000,
         "temperature": 0.2,
     }
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -513,6 +538,10 @@ def _call_skill_scores_once(
             {
                 "role": "user",
                 "content": (
+                    "CRITICAL OUTPUT RULES:\n"
+                    "- Return ONLY raw valid JSON. No markdown, no code blocks, no text outside the JSON.\n"
+                    "- Each \"reason\" value must be UNDER 20 WORDS. No long explanations.\n"
+                    "- The JSON object MUST be fully closed and valid before you finish responding.\n\n"
                     "You are a code reviewer calibrating existing rule-based scores.\n\n"
                     "Inputs:\n"
                     "- base_scores: deterministic metric-based scores.\n"
@@ -550,6 +579,7 @@ def _call_skill_scores_once(
             },
         ],
         "response_format": {"type": "json_object"},
+        "max_tokens": 2000,
         "temperature": 0.2,
     }
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}

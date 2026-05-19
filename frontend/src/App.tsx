@@ -1,18 +1,19 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import Login from './pages/Login';
-import Register from './pages/register';
+import { Route, BrowserRouter as Router, Routes } from 'react-router-dom';
 import GitHubCallback from './pages/GitHubCallback';
-import RoleSelection from './pages/RoleSelection';
+import Login from './pages/Login';
 import NotFound from './pages/NotFound';
+import Register from './pages/register';
 import RepositoryAnalysis from "./pages/RepositoryAnalysis";
+import RoleSelection from './pages/RoleSelection';
 
-// Dashboard pages
+
 import DeveloperProfile from './pages/Dashboard/DeveloperDashboard';
+import CandidateEvaluation from './pages/Dashboard/CandidateEvaluation';
+import DeveloperLearning from './pages/Dashboard/DeveloperLearning';
+import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
+import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
 import RecruiterDashboard from './pages/Dashboard/RecruiterDashboard';
-import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
-import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
-import DeveloperLearning from './pages/Dashboard/DeveloperLearning';
 
 import AccountSettings from './pages/Dashboard/AccountSettings';
 import ConnectedRepositories from './pages/Dashboard/ConnectedRepositories';
@@ -60,10 +61,10 @@ function App() {
         <Route path="/dashboard/manager/team" element={<ManagerDashboard />} />
 
         {/* ── Recruiter routes ── */}
-        <Route path="/dashboard/recruiter" element={<RepositoryAnalysis />} />
-        <Route path="/dashboard/recruiter/analysis" element={<RepositoryAnalysis />} />
+        <Route path="/dashboard/recruiter" element={<RecruiterDashboard />} />
+        <Route path="/dashboard/recruiter/analysis" element={<RecruiterDashboard />} />
         <Route path="/dashboard/recruiter/profile" element={<RecruiterDashboard />} />
-        <Route path="/dashboard/recruiter/candidates" element={<RecruiterDashboard />} />
+        <Route path="/dashboard/recruiter/candidates" element={<CandidateEvaluation />} />
 
         {/* ── Fallback ── */}
         <Route path="*" element={<NotFound />} />

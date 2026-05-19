@@ -53,7 +53,7 @@ def github_login(request: Request, action: str = "login", token: str | None = No
         f"https://github.com/login/oauth/authorize"
         f"?client_id={settings.GITHUB_CLIENT_ID}"
         f"&redirect_uri={settings.GITHUB_REDIRECT_URI}"
-        f"&scope=user:email,repo"
+        f"&scope=user:email,repo,read:org"
         f"&state={state}"
     )
     return RedirectResponse(github_auth_url)

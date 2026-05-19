@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, ValidationError
 
 from app.db.database import SessionLocal
-from app.db.models import AnalysisRun, SecurityFinding, CodeMetrics, SkillScore, User
+from app.db.models import AnalysisRun, RepositoryAnalysis, SecurityFinding, CodeMetrics, SkillScore, User
 from app.services.security.pipeline import run_security_analysis
 from app.services.github_client import (
     read_local_repo_files,
@@ -30,6 +30,7 @@ from app.services.code_analysis_service import apply_adjustment, compute_overall
 
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class FindingModel(BaseModel):
@@ -41,6 +42,48 @@ class FindingModel(BaseModel):
     line_number: int
     cwe: str
     owasp_category: str
+
+
+def _prepare_repo_checkout(
+    repo_url: str,
+    branch: str,
+    token: str,
+    is_private: bool,
+    repo_name: str,
+    full_name: str,
+) -> tuple[str, tempfile.TemporaryDirectory | None]:
+    cache_root = os.environ.get("ANALYSIS_CACHE_DIR")
+    auth_repo_url = repo_url
+    if is_private and token:
+        auth_repo_url = repo_url.replace("https://", f"https://x-access-token:{token}@")
+
+    if cache_root:
+        os.makedirs(cache_root, exist_ok=True)
+        safe_name = full_name.replace("/", "__")
+        clone_path = os.path.join(cache_root, safe_name)
+
+        if os.path.isdir(os.path.join(clone_path, ".git")):
+            subprocess.run(["git", "remote", "set-url", "origin", auth_repo_url], cwd=clone_path, check=True, timeout=300)
+            subprocess.run(["git", "fetch", "--prune", "origin"], cwd=clone_path, check=True, timeout=300)
+            subprocess.run(["git", "checkout", branch], cwd=clone_path, check=True, timeout=300)
+            subprocess.run(["git", "reset", "--hard", f"origin/{branch}"], cwd=clone_path, check=True, timeout=300)
+        else:
+            clone_cmd = [
+                "git", "clone", "--depth", "1", "--no-tags", "--filter=blob:none",
+                "--branch", branch, "--single-branch", auth_repo_url, clone_path,
+            ]
+            subprocess.run(clone_cmd, check=True, timeout=300)
+
+        return clone_path, None
+
+    temp_dir = tempfile.TemporaryDirectory(prefix="repo_")
+    clone_path = os.path.join(temp_dir.name, f"{repo_name}_{uuid.uuid4().hex}")
+    clone_cmd = [
+        "git", "clone", "--depth", "1", "--no-tags", "--filter=blob:none",
+        "--branch", branch, "--single-branch", auth_repo_url, clone_path,
+    ]
+    subprocess.run(clone_cmd, check=True, timeout=300)
+    return clone_path, temp_dir
 
 
 async def resolve_github_identity(db: Session, user: User) -> tuple[str | None, str | None]:
@@ -102,25 +145,37 @@ async def background_analysis_task(
     contributor_login: str | None = None,
     touched_files: list[str] | None = None,
 ):
+    is_recruiter_scoring_mode = user_role == "recruiter"
+    skip_insights = is_recruiter_scoring_mode
+    logger.info(
+        "[run=%s] Background analysis started repo=%s full_name=%s role=%s scope=%s mode=%s",
+        run_id,
+        repo_name,
+        full_name,
+        user_role,
+        analysis_scope,
+        "recruiter_scoring" if is_recruiter_scoring_mode else "developer_full",
+    )
     db = SessionLocal()
     try:
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
         if not run:
+            logger.warning("[run=%s] Background analysis aborted: run not found", run_id)
             return
 
-        with tempfile.TemporaryDirectory(prefix="repo_") as repo_path:
-            clone_path = os.path.join(repo_path, f"{repo_name}_{uuid.uuid4().hex}")
-
-            clone_cmd = [
-                "git", "clone", "--depth", "1", "--no-tags", "--filter=blob:none",
-                "--branch", branch, "--single-branch", repo_url, clone_path,
-            ]
-
-            if is_private and token:
-                auth_repo_url = repo_url.replace("https://", f"https://x-access-token:{token}@")
-                clone_cmd[-2] = auth_repo_url
-
-            subprocess.run(clone_cmd, check=True, timeout=300)
+        clone_path = ""
+        repo_context: tempfile.TemporaryDirectory | None = None
+        try:
+            logger.info("[run=%s] Git checkout started branch=%s private=%s", run_id, branch, is_private)
+            clone_path, repo_context = _prepare_repo_checkout(
+                repo_url=repo_url,
+                branch=branch,
+                token=token,
+                is_private=is_private,
+                repo_name=repo_name,
+                full_name=full_name,
+            )
+            logger.info("[run=%s] Git checkout finished", run_id)
 
             python_files = read_local_repo_files(clone_path)
             touched_set = {p.replace("\\", "/") for p in (touched_files or [])}
@@ -132,39 +187,68 @@ async def background_analysis_task(
                 if not python_files:
                     raise Exception("No Python files were found in your contributions for this repository.")
 
-            pipeline_result = run_security_analysis(clone_path)
+            total_source_chars = sum(len(file_obj.get("content", "") or "") for file_obj in python_files)
+            llm_payload_chars = sum(
+                len("\n".join((file_obj.get("content", "") or "").splitlines()[:300]))
+                for file_obj in python_files
+            )
+            logger.info(
+                "[run=%s] Files selected for analysis count=%d source_chars=%d llm_input_chars_approx=%d",
+                run_id,
+                len(python_files),
+                total_source_chars,
+                llm_payload_chars,
+            )
+            if not python_files:
+                raise Exception("No Python files were found for analysis.")
 
-            analyze_python_files(python_files)
+            logger.info("[run=%s] Security analysis started", run_id)
+            pipeline_result = run_security_analysis(clone_path)
+            logger.info(
+                "[run=%s] Security analysis finished findings=%d failed_tools=%s",
+                run_id,
+                len(pipeline_result.get("findings", [])),
+                pipeline_result.get("failed_tools", []),
+            )
 
             llm_problem_solving_score = 0.0
             llm_result = {}
             llm_skill_scores = {}
+            llm_adjustment_guidance = {}
             try:
+                logger.info(
+                    "[run=%s] LLM problem solving started files=%d chars_approx=%d",
+                    run_id,
+                    len(python_files),
+                    llm_payload_chars,
+                )
                 llm_result = analyze_problem_solving(python_files, run.commit_sha)
-                logging.warning("[run=%s] Raw LLM problem solving result: %s", run_id, llm_result)
+                logger.info("[run=%s] LLM problem solving finished", run_id)
+                logger.debug("[run=%s] Raw LLM problem solving result: %s", run_id, llm_result)
                 component_scores = [
                     float((llm_result.get(key) or {}).get("score", 0.0) or 0.0)
                     for key in ("algorithms", "data_structures", "balanced_complexity", "edge_cases")
                 ]
-                logging.warning("[run=%s] Component scores extracted: %s", run_id, component_scores)
+                logger.info("[run=%s] LLM problem solving component_scores=%s", run_id, component_scores)
                 if component_scores:
                     avg_score = sum(component_scores) / len(component_scores)
                     llm_problem_solving_score = avg_score / 100.0
-                    logging.warning(
+                    logger.info(
                         "[run=%s] llm_problem_solving_score set to: %.3f",
                         run_id,
                         llm_problem_solving_score,
                     )
             except LLMError as exc:
-                logging.error(f"[run={run_id}] LLM problem solving FAILED: {exc}")
+                logger.exception("[run=%s] LLM problem solving failed: %s", run_id, exc)
             except Exception as exc:
-                logging.error(f"[run={run_id}] Unexpected error in problem solving: {exc}")
+                logger.exception("[run=%s] Unexpected error in LLM problem solving: %s", run_id, exc)
 
+            logger.info("[run=%s] Static code analysis started", run_id)
             analysis_result = analyze_python_files(
                 python_files,
                 problem_solving_score=llm_problem_solving_score,
             )
-            logging.warning(
+            logger.info(
                 "[run=%s] Scores after analyze_python_files: %s",
                 run_id,
                 analysis_result.get("scores", {}),
@@ -172,7 +256,7 @@ async def background_analysis_task(
             code_intelligence_result = analysis_result
             final_scores = analysis_result.get("scores", {})
             base_scores = dict(final_scores)
-            logging.warning("[DEBUG] Base scores BEFORE LLM: %s", base_scores)
+            logger.info("[run=%s] Base scores before LLM calibration: %s", run_id, base_scores)
             base_overall = float(base_scores.get("overall_score") or compute_overall_score(base_scores))
 
             def _collect_adjustment_evidence(skill: str, metrics: dict) -> list[str]:
@@ -206,12 +290,21 @@ async def background_analysis_task(
                 return entries
 
             try:
+                logger.info(
+                    "[run=%s] LLM skill calibration started files=%d chars_approx=%d",
+                    run_id,
+                    len(python_files),
+                    llm_payload_chars,
+                )
                 llm_skill_scores = analyze_skill_scores(
                     python_files,
                     base_scores=final_scores,
                     aggregate_metrics=code_intelligence_result.get("aggregate_metrics", {}),
                     commit_sha=run.commit_sha,
                 )
+                logger.info("[run=%s] LLM skill calibration finished", run_id)
+                if not llm_skill_scores:
+                    logger.warning("[run=%s] LLM skill calibration returned no scores", run_id)
                 if llm_skill_scores:
                     for skill in ("code_quality", "maintainability", "architecture"):
                         base = float(final_scores.get(skill, 0.0) or 0.0)
@@ -219,17 +312,19 @@ async def background_analysis_task(
                         adjustment = float(entry.get("adjustment", 0.0) or 0.0)
                         confidence = float(entry.get("confidence", 0.0) or 0.0)
 
-                        logging.warning("[LLM] %s BEFORE 5 base=%.2f", skill, base)
-                        logging.warning(
-                            "[LLM] %s adjustment=%.2f, confidence=%.2f",
+                        logger.info("[run=%s] LLM %s before base=%.2f", run_id, skill, base)
+                        logger.info(
+                            "[run=%s] LLM %s adjustment=%.2f confidence=%.2f",
+                            run_id,
                             skill,
                             adjustment,
                             confidence,
                         )
 
                         if confidence < 0.4:
-                            logging.warning(
-                                "[LLM] %s adjustment IGNORED due to low confidence (%.2f)",
+                            logger.info(
+                                "[run=%s] LLM %s adjustment ignored due to low confidence %.2f",
+                                run_id,
                                 skill,
                                 confidence,
                             )
@@ -237,20 +332,23 @@ async def background_analysis_task(
 
                         adjustment = max(-20.0, min(20.0, adjustment))
                         new_score = apply_adjustment(base, adjustment, confidence)
-                        logging.warning("[LLM] %s AFTER 5 new_score=%.2f", skill, new_score)
+                        logger.info("[run=%s] LLM %s after new_score=%.2f", run_id, skill, new_score)
                         final_scores[skill] = max(0.0, min(100.0, new_score))
 
                     final_scores["overall_score"] = compute_overall_score(final_scores)
-                    logging.warning("[DEBUG] Final scores AFTER LLM: %s", final_scores)
+                    logger.info("[run=%s] Final scores after LLM calibration: %s", run_id, final_scores)
             except LLMError as exc:
-                logging.error(f"LLM skill score calibration failed: {exc}")
+                logger.exception("[run=%s] LLM skill score calibration failed: %s", run_id, exc)
             except Exception as exc:
-                logging.error(f"An unexpected error occurred during LLM skill score calibration: {exc}")
+                logger.exception(
+                    "[run=%s] Unexpected error during LLM skill score calibration: %s",
+                    run_id,
+                    exc,
+                )
 
             final_overall = float(final_scores.get("overall_score") or compute_overall_score(final_scores))
             overall_delta = round(final_overall - base_overall, 2)
 
-            llm_adjustment_guidance = {}
             if llm_skill_scores:
                 metrics = code_intelligence_result.get("aggregate_metrics", {})
                 for skill in ("code_quality", "maintainability", "architecture"):
@@ -295,10 +393,13 @@ async def background_analysis_task(
                 code_intelligence_result.setdefault("unified_metrics", {})
                 code_intelligence_result["unified_metrics"] = unified
             except Exception:
-                logging.exception("Failed to build unified metrics schema")
+                logger.exception("[run=%s] Failed to build unified metrics schema", run_id)
 
             findings = pipeline_result.get("findings", [])
             failed_tools = pipeline_result.get("failed_tools", [])
+        finally:
+            if repo_context:
+                repo_context.cleanup()
 
         ignored = ["venv", ".venv", "__pycache__", "migrations"]
         findings = [
@@ -359,7 +460,14 @@ async def background_analysis_task(
         security_score_breakdown = compute_security_score_breakdown(findings, int(total_loc or 0))
         security_score = security_score_breakdown["overall"]
 
-        logging.info("[run=%s] final_scores before DB write: %s", run_id, final_scores)
+        logger.info(
+            "[run=%s] Final scores before DB save role=%s scope=%s scores=%s security_score=%.2f",
+            run_id,
+            user_role,
+            analysis_scope,
+            final_scores,
+            security_score,
+        )
         db.add(SkillScore(
             analysis_run_id=run.id,
             user_id=current_user_id,
@@ -371,140 +479,145 @@ async def background_analysis_task(
             overall_score=final_scores.get("overall_score", 0.0),
         ))
         db.commit()
+        logger.info("[run=%s] SkillScore DB save successful", run_id)
 
-        ai_insights = {
-            "llm_problem_solving": llm_result,
-            "llm_skill_scores": llm_skill_scores,
+        if is_recruiter_scoring_mode:
+            ai_insights = {
+                "score_only": True,
+                "failed_tools": failed_tools,
+                "llm_skill_scores": llm_skill_scores,
                 "llm_adjustment_guidance": llm_adjustment_guidance,
-            "failed_tools": failed_tools,
-        }
-
-        try:
-            score_row = (
-                db.query(SkillScore)
-                .filter(
-                    SkillScore.analysis_run_id == run.id,
-                    SkillScore.user_id == current_user_id,
-                )
-                .first()
-            )
-            metric_rows = db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id == run.id).all()
-            findings_rows = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).all()
-            if score_row:
-                ai_insights["learning_recommendations"] = build_learning_recommendations(
-                    run,
-                    score_row,
-                    metric_rows,
-                    findings_rows,
-                )
-        except Exception:
-            logging.exception("Learning recommendations generation failed")
-        try:
-            security_report = {
-                "total_findings": len(findings),
-                "severity_distribution": {},
-                "owasp_distribution": {},
-                "top_vulnerable_files": {},
             }
-            file_counts = {}
-            for finding in findings:
-                sev = finding.get("severity") or "UNKNOWN"
-                security_report["severity_distribution"][sev] = security_report["severity_distribution"].get(sev, 0) + 1
-                cat = finding.get("owasp_category") or "Unknown"
-                security_report["owasp_distribution"][cat] = security_report["owasp_distribution"].get(cat, 0) + 1
-                fp = finding.get("file_path") or "unknown"
-                file_counts[fp] = file_counts.get(fp, 0) + 1
-
-            security_report["top_vulnerable_files"] = dict(sorted(file_counts.items(), key=lambda x: x[1], reverse=True)[:5])
-            security_report["categorized_findings"] = group_findings_by_severity_and_file(findings)
-            security_report["security_score"] = security_score
-            security_report["security_score_breakdown"] = security_score_breakdown
-            security_report["failed_tools"] = failed_tools
-            ai_insights["security_report"] = security_report
-
-            analysis_payload = {
-                "scores": final_scores,
-                "aggregate_metrics": code_intelligence_result.get("aggregate_metrics", {}),
+        else:
+            ai_insights = {
+                "llm_problem_solving": llm_result,
+                "llm_skill_scores": llm_skill_scores,
+                "llm_adjustment_guidance": llm_adjustment_guidance,
+                "failed_tools": failed_tools,
             }
 
-            guidance = await generate_insights(
-                role=user_role,
-                analysis_result=analysis_payload,
-                security_report=security_report,
-                doc_id=STANDARDS_DOC_ID,
-            )
-            if isinstance(guidance, dict):
-                ai_insights.update(guidance)
-        except Exception:
-            logging.exception("AI insights generation failed")
+        if not skip_insights:
+            logger.info("[run=%s] Developer insight generation started", run_id)
+            try:
+                score_row = (
+                    db.query(SkillScore)
+                    .filter(
+                        SkillScore.analysis_run_id == run.id,
+                        SkillScore.user_id == current_user_id,
+                    )
+                    .first()
+                )
+                metric_rows = db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id == run.id).all()
+                findings_rows = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).all()
+                if score_row:
+                    ai_insights["learning_recommendations"] = build_learning_recommendations(
+                        run,
+                        score_row,
+                        metric_rows,
+                        findings_rows,
+                    )
+            except Exception:
+                logger.exception("[run=%s] Learning recommendations generation failed", run_id)
+            try:
+                security_report = {
+                    "total_findings": len(findings),
+                    "severity_distribution": {},
+                    "owasp_distribution": {},
+                    "top_vulnerable_files": {},
+                }
+                file_counts = {}
+                for finding in findings:
+                    sev = finding.get("severity") or "UNKNOWN"
+                    security_report["severity_distribution"][sev] = security_report["severity_distribution"].get(sev, 0) + 1
+                    cat = finding.get("owasp_category") or "Unknown"
+                    security_report["owasp_distribution"][cat] = security_report["owasp_distribution"].get(cat, 0) + 1
+                    fp = finding.get("file_path") or "unknown"
+                    file_counts[fp] = file_counts.get(fp, 0) + 1
 
-        skills_insights = ai_insights.get("skills_insights") or {}
-        if not isinstance(skills_insights, dict):
-            skills_insights = {}
-        for skill in ("code_quality", "maintainability", "architecture"):
-            entry = llm_adjustment_guidance.get(skill, {})
-            if not entry:
-                continue
-            # lines = []
-            # confidence = entry.get("confidence", 0.0) or 0.0
-            # if entry.get("ignored"):
-            #     lines.append(f"LLM adjustment ignored due to low confidence ({confidence:.2f}).")
-            # else:
-            #     lines.append(
-            #         f"Score changed by {entry.get('applied_delta', 0.0):.2f} points (confidence: {confidence:.0%})"
-            #     )
-            # if entry.get("reason"):
-            #     lines.append(f"Code-based reason: {entry.get('reason')}")
-            # if entry.get("evidence"):
-            #     lines.append(f"Evidence: {', '.join(entry.get('evidence') or [])}")
-            # lines.append(
-            #     f"Overall impact from this adjustment: {entry.get('overall_impact', 0.0):+0.2f} points."
-            # )
-            # lines.append(
-            #     f"Overall change: {entry.get('overall_delta', 0.0):+0.2f} points."
-            # )
-            lines = []
+                security_report["top_vulnerable_files"] = dict(sorted(file_counts.items(), key=lambda x: x[1], reverse=True)[:5])
+                security_report["categorized_findings"] = group_findings_by_severity_and_file(findings)
+                security_report["security_score"] = security_score
+                security_report["security_score_breakdown"] = security_score_breakdown
+                security_report["failed_tools"] = failed_tools
+                ai_insights["security_report"] = security_report
 
-            confidence = entry.get("confidence", 0.0) or 0.0
-            delta = entry.get("applied_delta", 0.0)
+                analysis_payload = {
+                    "scores": final_scores,
+                    "aggregate_metrics": code_intelligence_result.get("aggregate_metrics", {}),
+                }
 
-            # AI Adjustment Section
-            lines.append("AI Adjustment:")
-            if entry.get("ignored"):
-                lines.append(f"- Ignored due to low confidence ({confidence:.2f})")
-            else:
-                direction = "increased" if delta > 0 else "decreased"
-                lines.append(f"- Score {direction} by {abs(delta):.2f}")
-                lines.append(f"- Confidence: {confidence:.0%}")
+                guidance = await generate_insights(
+                    role=user_role,
+                    analysis_result=analysis_payload,
+                    security_report=security_report,
+                    doc_id=STANDARDS_DOC_ID,
+                )
+                if isinstance(guidance, dict):
+                    ai_insights.update(guidance)
+            except Exception:
+                logger.exception("[run=%s] AI insights generation failed", run_id)
 
-            if entry.get("reason"):
-                lines.append(f"- Reason: {entry.get('reason')}")
+            skills_insights = ai_insights.get("skills_insights") or {}
+            if not isinstance(skills_insights, dict):
+                skills_insights = {}
+            for skill in ("code_quality", "maintainability", "architecture"):
+                entry = llm_adjustment_guidance.get(skill, {})
+                if not entry:
+                    continue
+                lines = []
 
-            # Static Analysis Section
-            base = base_scores.get(skill, 0.0)
+                confidence = entry.get("confidence", 0.0) or 0.0
+                delta = entry.get("applied_delta", 0.0)
 
-            lines.append("")
-            lines.append("Static Analysis Summary:")
-            lines.append(f"- Base score: {base:.1f}")
+                # AI Adjustment Section
+                lines.append("AI Adjustment:")
+                if entry.get("ignored"):
+                    lines.append(f"- Ignored due to low confidence ({confidence:.2f})")
+                else:
+                    direction = "increased" if delta > 0 else "decreased"
+                    lines.append(f"- Score {direction} by {abs(delta):.2f}")
+                    lines.append(f"- Confidence: {confidence:.0%}")
 
-            evidence = entry.get("evidence") or []
-            if evidence:
-                for e in evidence:
-                    lines.append(f"- {e}")
-            existing = skills_insights.get(skill) or []
-            if not isinstance(existing, list):
-                existing = []
-            skills_insights[skill] = lines + existing
-        ai_insights["skills_insights"] = skills_insights
+                if entry.get("reason"):
+                    lines.append(f"- Reason: {entry.get('reason')}")
+
+                # Static Analysis Section
+                base = base_scores.get(skill, 0.0)
+
+                lines.append("")
+                lines.append("Static Analysis Summary:")
+                lines.append(f"- Base score: {base:.1f}")
+
+                evidence = entry.get("evidence") or []
+                if evidence:
+                    for e in evidence:
+                        lines.append(f"- {e}")
+                existing = skills_insights.get(skill) or []
+                if not isinstance(existing, list):
+                    existing = []
+                skills_insights[skill] = lines + existing
+            ai_insights["skills_insights"] = skills_insights
+            logger.info("[run=%s] Developer insight generation finished", run_id)
+        else:
+            logger.info("[run=%s] Recruiter mode: skipped AI insights and learning recommendations", run_id)
 
         run.ai_insights = ai_insights
         run.status = "completed"
         run.completed_at = datetime.now(timezone.utc)
+        repo_analysis = (
+            db.query(RepositoryAnalysis)
+            .filter(RepositoryAnalysis.last_run_id == run.id)
+            .first()
+        )
+        if repo_analysis:
+            repo_analysis.analysis_status = "completed"
+            repo_analysis.analyzed_at = run.completed_at
         db.commit()
+        logger.info("[run=%s] Background analysis completed successfully", run_id)
 
     except LLMError as exc:
         error_text = str(exc)
-        logging.error("LLM error in background task", exc_info=True)
+        logger.exception("[run=%s] LLM error in background task", run_id)
 
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
         if run:
@@ -514,10 +627,19 @@ async def background_analysis_task(
                 "error_reason": "llm_failed",
                 "error_message": error_text,
             }
+            repo_analysis = (
+                db.query(RepositoryAnalysis)
+                .filter(RepositoryAnalysis.last_run_id == run.id)
+                .first()
+            )
+            if repo_analysis:
+                repo_analysis.analysis_status = "failed"
+                repo_analysis.analyzed_at = run.completed_at
             db.commit()
+            logger.info("[run=%s] Failure status persisted after LLM error", run_id)
     except Exception as exc:
         error_text = str(exc)
-        logging.error("Background task error", exc_info=True)
+        logger.exception("[run=%s] Background task error", run_id)
 
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
         if run:
@@ -529,6 +651,15 @@ async def background_analysis_task(
                 run.ai_insights = {"error_reason": "not_found", "error_message": error_text}
             else:
                 run.ai_insights = {"error_reason": "unknown", "error_message": error_text}
+            repo_analysis = (
+                db.query(RepositoryAnalysis)
+                .filter(RepositoryAnalysis.last_run_id == run.id)
+                .first()
+            )
+            if repo_analysis:
+                repo_analysis.analysis_status = "failed"
+                repo_analysis.analyzed_at = run.completed_at
             db.commit()
+            logger.info("[run=%s] Failure status persisted after background task error", run_id)
     finally:
         db.close()

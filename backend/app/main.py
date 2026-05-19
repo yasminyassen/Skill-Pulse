@@ -18,6 +18,7 @@ from app.api import github_oauth
 from app.api import analysis
 from app.api import security_report
 from app.api import repos
+from app.api import github_classroom
 
 from app.core.rate_limiter import limiter
 from slowapi.middleware import SlowAPIMiddleware
@@ -30,7 +31,6 @@ from ai_services.learning.resource_seeder import seed_learning_resources
 from app.api.profile import router as profile_router
 
 
- 
 
 
 @asynccontextmanager
@@ -77,3 +77,5 @@ app.include_router(analysis.router)
 app.include_router(security_report.router)
 app.include_router(repos.router)
 app.include_router(profile_router)
+app.include_router(github_classroom.router)
+

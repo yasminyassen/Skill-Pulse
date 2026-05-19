@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     openrouter_api_url: str = "https://openrouter.ai/api/v1"
     llm_max_retries: int = 1
     llm_context_limit: int = 32000
+    analysis_version: str = "v1"
 
     class Config:
         env_file = ".env"

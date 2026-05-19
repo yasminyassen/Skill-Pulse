@@ -7,16 +7,20 @@ from datetime import datetime, timezone
 from fastapi import Request, APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from typing import Optional
 from pydantic import BaseModel
+
+from sqlalchemy import func
+
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 from app.db.database import get_db
-from app.db.models import Repository, AnalysisRun, SecurityFinding, CodeMetrics, SkillScore, User
-from app.core.auth_utils import get_current_user, decrypt_github_token
+from app.db.models import Repository, AnalysisRun, SecurityFinding, CodeMetrics, SkillScore, User, RecruiterCandidate
+from app.core.auth_utils import get_current_user, decrypt_github_token, require_role
 from app.core.rate_limiter import limiter
 
 from app.services.github_client import (
@@ -53,6 +57,20 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 class RepoRequest(BaseModel):
     repo_url: str
     branch: str = "main"
+
+
+class RecruiterCandidateRow(BaseModel):
+    candidate_name: str
+    github_login: str
+    overall_score: float
+    code_quality: float
+    problem_solving: float
+    architecture: float
+    maintainability: float
+    security: float
+    repo_count: int
+    contribution_count: int
+    run_id: int
 
 
 def compute_repository_display_score(code_score: float | None, security_score: float | None) -> float | None:
@@ -389,6 +407,58 @@ async def get_analysis_history(
         })
 
     return {"history": result}
+
+
+@router.get("/recruiter/candidates", response_model=list[RecruiterCandidateRow])
+async def get_recruiter_candidates(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["recruiter"])),
+):
+    rows = (
+        db.query(AnalysisRun, Repository, SkillScore, RecruiterCandidate)
+        .join(Repository, AnalysisRun.repository_id == Repository.id)
+        .join(
+            SkillScore,
+            (SkillScore.analysis_run_id == AnalysisRun.id) & (SkillScore.user_id == current_user.id),
+        )
+        .join(RecruiterCandidate, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
+        .filter(AnalysisRun.user_id == current_user.id)
+        .filter(AnalysisRun.status == "completed")
+        .all()
+    )
+
+    run_ids = [run.id for run, _, _, _ in rows]
+    loc_by_run = {}
+    if run_ids:
+        loc_by_run = dict(
+            db.query(
+                CodeMetrics.analysis_run_id,
+                func.coalesce(func.sum(CodeMetrics.lines_of_code), 0),
+            )
+            .filter(CodeMetrics.analysis_run_id.in_(run_ids))
+            .group_by(CodeMetrics.analysis_run_id)
+            .all()
+        )
+
+    repo_counts = Counter(candidate.candidate_name for _, _, _, candidate in rows)
+
+    response: list[RecruiterCandidateRow] = []
+    for run, _, score, candidate in rows:
+        response.append(RecruiterCandidateRow(
+            candidate_name=candidate.candidate_name,
+            github_login=candidate.github_login or "",
+            overall_score=float(score.overall_score or 0.0),
+            code_quality=float(score.code_quality_score or 0.0),
+            problem_solving=float(score.problem_solving_score or 0.0),
+            architecture=float(score.architecture_score or 0.0),
+            maintainability=float(score.maintainability_score or 0.0),
+            security=float(score.security_awareness_score or 0.0),
+            repo_count=int(repo_counts.get(candidate.candidate_name, 1)),
+            contribution_count=int(loc_by_run.get(run.id, 0)),
+            run_id=run.id,
+        ))
+
+    return response
 
 
 @router.get("/{analysis_run_id}/detailed-metrics")
