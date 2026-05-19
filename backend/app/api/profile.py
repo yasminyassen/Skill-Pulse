@@ -15,6 +15,7 @@ from typing import Optional
 from app.db.database import get_db
 from app.db.models import User, AnalysisRun
 from app.core.auth_utils import get_current_user
+from app.db.models import User, AnalysisRun, SkillScore, CodeMetrics, SecurityFinding, RefreshToken
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -129,13 +130,25 @@ async def update_profile(
     return {"message": "Profile updated successfully", **changed}
 
 
-
 @router.delete("")
 async def delete_account(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Hard-delete the current user's account."""
+    
+    run_ids = [r.id for r in db.query(AnalysisRun.id)
+               .filter(AnalysisRun.user_id == current_user.id).all()]
+    
+    if run_ids:
+        db.query(SkillScore).filter(SkillScore.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(AnalysisRun).filter(AnalysisRun.user_id == current_user.id).delete(synchronize_session=False)
+    
+    db.query(RefreshToken).filter(RefreshToken.user_id == current_user.id).delete(synchronize_session=False)
+    db.query(SkillScore).filter(SkillScore.user_id == current_user.id).delete(synchronize_session=False)
+    
     db.delete(current_user)
     db.commit()
+    
     return {"message": "Account deleted successfully"}
