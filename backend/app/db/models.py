@@ -27,7 +27,8 @@ class User(Base):
     github_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     github_refresh_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
+    organization = Column(String, nullable=True)
+    job_title    = Column(String, nullable=True)
     analysis_runs = relationship("AnalysisRun", back_populates="user")
 
 class Repository(Base):
@@ -117,3 +118,4 @@ class RefreshToken(Base):
     token = Column(String, unique=True, index=True)  
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+

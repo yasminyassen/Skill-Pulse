@@ -6,13 +6,24 @@ import RoleSelection from './pages/RoleSelection';
 import NotFound from './pages/NotFound';
 import RepositoryAnalysis from "./pages/RepositoryAnalysis";
 
-// Dashboard placeholders — replace these with real pages as you build them
-import DeveloperDashboard from './pages/Dashboard/DeveloperDashboard';
+// Dashboard pages
+import DeveloperProfile from './pages/Dashboard/DeveloperDashboard';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
 import RecruiterDashboard from './pages/Dashboard/RecruiterDashboard';
 import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
 import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
 import DeveloperLearning from './pages/Dashboard/DeveloperLearning';
+
+import AccountSettings from './pages/Dashboard/AccountSettings';
+import ConnectedRepositories from './pages/Dashboard/ConnectedRepositories';
+
+
+// ── Analysis detail page (View button destination) ───────────────────────────
+// Uses the same RepositoryAnalysis page but can be extended to a dedicated
+// detail view later. The :analysisId param is passed via the URL so the
+// page can scroll-to / highlight the matching run.
+import AnalysisDetail from './pages/AnalysisDetail';
+
 
 function App() {
   return (
@@ -25,15 +36,20 @@ function App() {
         <Route path="/select-role" element={<RoleSelection />} />
 
         {/* ── Developer routes ── */}
-        {/* First page shown after login → analysis page */}
         <Route path="/dashboard/developer" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/developer/analysis" element={<RepositoryAnalysis />} />
+
+        {/* ── Analysis detail — /analysis/:analysisId ── */}
+        <Route path="/analysis/:analysisId" element={<AnalysisDetail />} />
+
         <Route path="/dashboard/developer/skills" element={<DeveloperSkills />} />
-        {/* Future pages — each will get its own component */}
         <Route path="/dashboard/developer/security" element={<DeveloperSecurity />} />
-        <Route path="/dashboard/developer/requirements" element={<DeveloperDashboard />} />
         <Route path="/dashboard/developer/learning" element={<DeveloperLearning />} />
-        <Route path="/dashboard/developer/profile" element={<DeveloperDashboard />} />
+        <Route path="/dashboard/developer/profile" element={<DeveloperProfile />} />
+
+        <Route path="/settings/account" element={<AccountSettings />} />
+        <Route path="/settings/repositories" element={<ConnectedRepositories />} />
+        
 
         {/* ── Manager routes ── */}
         <Route path="/dashboard/manager" element={<RepositoryAnalysis />} />

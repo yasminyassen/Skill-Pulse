@@ -27,6 +27,11 @@ from slowapi import _rate_limit_exceeded_handler
 from ai_services.rag.rag_seeder import seed_standards
 from ai_services.learning.resource_seeder import seed_learning_resources
 
+from app.api.profile import router as profile_router
+
+
+ 
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -71,3 +76,4 @@ app.include_router(github_oauth.router)
 app.include_router(analysis.router)
 app.include_router(security_report.router)
 app.include_router(repos.router)
+app.include_router(profile_router)

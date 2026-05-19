@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from fastapi import Request, APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from typing import Optional
+from pydantic import BaseModel
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 if ROOT_DIR not in sys.path:
@@ -698,6 +700,226 @@ async def get_learning_recommendations(
     return payload
 
 
+class UpdateProfileRequest(BaseModel):
+    organization: Optional[str] = None
+    job_title: Optional[str] = None
+
+
+@router.patch("/profile")
+async def update_profile(
+    data: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if data.organization is not None:
+        current_user.organization = data.organization.strip()
+    if data.job_title is not None:
+        current_user.job_title = data.job_title.strip()
+
+    db.commit()
+    db.refresh(current_user)
+
+    return {
+        "organization": current_user.organization,
+        "job_title":    current_user.job_title,
+    }
+
+@router.get("/profile-dashboard")
+async def get_profile_dashboard(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Aggregated profile dashboard for the current developer.
+
+    Returns:
+      user            – profile info
+      integrations    – connected services
+      progress_overview – overall/best/most-improved/focus stats
+      skill_timeline  – per-analysis score history (for the line chart)
+      recent_improvements – latest skill deltas
+      recent_activity – latest analysis runs & commits
+      settings        – placeholder links
+    """
+
+    # ── 1. Fetch all completed SkillScore rows for this user 
+    rows = (
+        db.query(SkillScore, AnalysisRun, Repository)
+        .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
+        .join(Repository,  AnalysisRun.repository_id  == Repository.id)
+        .filter(
+            SkillScore.user_id == current_user.id,
+            AnalysisRun.status == "completed",
+        )
+        .order_by(AnalysisRun.completed_at.asc())   # asc for timeline
+        .all()
+    )
+
+    # ── 2. User block ─────────────────────────────────────────────────────────
+    github_login = None
+    if current_user.github_access_token:
+        try:
+            _, github_login = await resolve_github_identity(db, current_user)
+        except Exception:
+            pass
+
+    user_block = {
+        "id":           current_user.id,
+        "full_name":    current_user.full_name,
+        "username":     current_user.username,
+        "email":        current_user.work_email,
+        "role":         current_user.role.value if current_user.role else None,
+        "avatar_url":   current_user.avatar_url,
+        "github_login": github_login,
+        "member_since": current_user.created_at.isoformat() if current_user.created_at else None,
+       
+        "organization": current_user.organization,
+        "job_title":    current_user.job_title,
+        
+    }
+
+    
+    integrations_block = {
+        "github": {
+            "connected": bool(current_user.github_access_token),
+            "login":     github_login,
+        },
+    }
+
+    # ── 4. Skill timeline 
+    SKILL_KEYS = ["code_quality", "maintainability", "architecture", "problem_solving", "security_awareness"]
+
+    skill_timeline = []
+    for skill_score, run, repo in rows:
+        skill_timeline.append({
+            "date":            run.completed_at.isoformat() if run.completed_at else None,
+            "analysis_id":     run.id,
+            "repo_name":       repo.name,
+            "code_quality":    round(safe_float(skill_score.code_quality_score),    2),
+            "maintainability": round(safe_float(skill_score.maintainability_score), 2),
+            "architecture":    round(safe_float(skill_score.architecture_score),    2),
+            "problem_solving": round(safe_float(skill_score.problem_solving_score), 2),
+            "security":        round(safe_float(skill_score.security_awareness_score), 2),
+            "overall":         round(safe_float(skill_score.overall_score),         2),
+        })
+
+    # ── 5. Progress overview 
+    if not rows:
+        progress_overview = {
+            "overall_delta": 0.0,
+            "best_skill":    None,
+            "best_skill_score": 0.0,
+            "most_improved": None,
+            "most_improved_delta": 0.0,
+            "focus_area":    None,
+        }
+        recent_improvements = []
+    else:
+        latest  = rows[-1].SkillScore
+        previous = rows[-2].SkillScore if len(rows) > 1 else None
+
+        dim_labels = {
+            "code_quality":    "Code Quality",
+            "maintainability": "Maintainability",
+            "architecture":    "Architecture",
+            "problem_solving": "Problem Solving",
+            "security":        "Security",
+        }
+
+        current_scores = {
+            "code_quality":    safe_float(latest.code_quality_score),
+            "maintainability": safe_float(latest.maintainability_score),
+            "architecture":    safe_float(latest.architecture_score),
+            "problem_solving": safe_float(latest.problem_solving_score),
+            "security":        safe_float(latest.security_awareness_score),
+        }
+
+        prev_scores = {
+            "code_quality":    safe_float(previous.code_quality_score)    if previous else 0.0,
+            "maintainability": safe_float(previous.maintainability_score) if previous else 0.0,
+            "architecture":    safe_float(previous.architecture_score)    if previous else 0.0,
+            "problem_solving": safe_float(previous.problem_solving_score) if previous else 0.0,
+            "security":        safe_float(previous.security_awareness_score) if previous else 0.0,
+        }
+
+        deltas = {k: round(current_scores[k] - prev_scores[k], 2) for k in current_scores}
+
+        best_key   = max(current_scores, key=lambda k: current_scores[k])
+        worst_key  = min(current_scores, key=lambda k: current_scores[k])
+        most_imp_k = max(deltas,         key=lambda k: deltas[k])
+
+        overall_delta = round(
+            safe_float(latest.overall_score) - safe_float(previous.overall_score if previous else latest.overall_score),
+            2,
+        )
+
+        progress_overview = {
+            "overall_delta":      overall_delta,
+            "best_skill":         dim_labels[best_key],
+            "best_skill_score":   round(current_scores[best_key], 1),
+            "most_improved":      dim_labels[most_imp_k],
+            "most_improved_delta": deltas[most_imp_k],
+            "focus_area":         dim_labels[worst_key],
+        }
+
+        recent_improvements = [
+            {
+                "skill":    dim_labels[k],
+                "score":    round(current_scores[k], 1),
+                "previous": round(prev_scores[k],    1),
+                "delta":    deltas[k],
+            }
+            for k in dim_labels
+        ]
+
+    # ── 6. Recent activity
+    recent_runs = (
+        db.query(AnalysisRun, Repository)
+        .join(Repository, AnalysisRun.repository_id == Repository.id)
+        .filter(AnalysisRun.user_id == current_user.id)
+        .order_by(AnalysisRun.triggered_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    recent_activity = []
+    for run, repo in recent_runs:
+        score_row = (
+            db.query(SkillScore)
+            .filter(
+                SkillScore.analysis_run_id == run.id,
+                SkillScore.user_id         == current_user.id,
+            )
+            .first()
+        )
+        recent_activity.append({
+            "type":        "repository_analyzed",
+            "repo_name":   repo.name,
+            "full_name":   repo.full_name,
+            "branch":      run.branch,
+            "status":      run.status,
+            "triggered_at": run.triggered_at.isoformat() if run.triggered_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "score":       round(safe_float(score_row.overall_score), 1) if score_row else None,
+            "analysis_id": run.id,
+        })
+
+    # ── 7. Settings 
+    settings_block = {
+        "account_settings":         "/settings/account",
+        "connected_repositories":   "/settings/repositories",
+        
+    }
+
+    return {
+        "user":                 user_block,
+        "integrations":         integrations_block,
+        "progress_overview":    progress_overview,
+        "skill_timeline":       skill_timeline,
+        "recent_improvements":  recent_improvements,
+        "recent_activity":      recent_activity,
+        "settings":             settings_block,
+    }
 @router.get("/{analysis_id}")
 async def get_analysis_result(
     analysis_id: int,
@@ -908,3 +1130,5 @@ async def get_skills_summary(
             "github_login": repos_list[0]["analysis_context"].get("github_login") if repos_list else None,
         },
     }
+
+
