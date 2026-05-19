@@ -8,6 +8,7 @@ from app.core.auth_utils import get_current_user
 from app.db.models import User
 from fastapi import Request
 from app.core.rate_limiter import limiter
+from app.services.security_service import compute_security_score_breakdown
 
 
 router = APIRouter(prefix="/security-report", tags=["security"])
@@ -43,7 +44,6 @@ def get_security_report(
 
     run = db.query(AnalysisRun).filter(AnalysisRun.id == analysis_id).first()
     failed_tools = []
-    security_score_breakdown = None
     if isinstance(run.ai_insights, dict):
         security_report = run.ai_insights.get("security_report", {})
         failed_tools = (
@@ -51,11 +51,20 @@ def get_security_report(
             or security_report.get("failed_tools")
             or []
         )
-        security_score_breakdown = security_report.get("security_score_breakdown")
 
     findings = db.query(SecurityFinding).filter(
         SecurityFinding.analysis_run_id == analysis_id
     ).all()
+    security_score_inputs = [
+        {
+            "severity": f.severity,
+            "cwe": f.cwe,
+            "file_path": f.file_path,
+            "tool": f.tool,
+        }
+        for f in findings
+    ]
+    security_score_breakdown = compute_security_score_breakdown(security_score_inputs)
 
     if not findings:
         return {

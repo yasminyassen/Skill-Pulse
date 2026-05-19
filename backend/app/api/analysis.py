@@ -539,11 +539,6 @@ async def get_detailed_metrics_breakdown(
         ai_insights = dict(ai_insights)
         ai_insights.pop("final_categorized_findings", None)
 
-    if isinstance(ai_insights, dict):
-        report = ai_insights.get("security_report")
-        if isinstance(report, dict) and "security_score_breakdown" in report:
-            security_breakdown = report["security_score_breakdown"]
-
     analysis_context = await build_personal_repo_context(
         db,
         current_user,
@@ -630,12 +625,6 @@ async def get_learning_recommendations(
     if run.status != "completed":
         raise HTTPException(status_code=400, detail="Analysis run is not completed")
 
-    ai_insights = run.ai_insights or {}
-    if isinstance(ai_insights, dict):
-        cached = ai_insights.get("learning_recommendations")
-        if isinstance(cached, dict) and cached:
-            return cached
-
     score_row = (
         db.query(SkillScore)
         .filter(
@@ -649,8 +638,58 @@ async def get_learning_recommendations(
 
     metric_rows = db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id == run.id).all()
     findings = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).all()
+    total_loc = sum(row.lines_of_code or 0 for row in metric_rows)
+    security_score_inputs = [
+        {
+            "severity": f.severity,
+            "cwe": f.cwe,
+            "file_path": f.file_path,
+            "tool": f.tool,
+        }
+        for f in findings
+    ]
+    security_breakdown = compute_security_score_breakdown(security_score_inputs, total_loc)
+    score_row.security_awareness_score = security_breakdown["overall"]
+
+    ai_insights = run.ai_insights or {}
+    if isinstance(ai_insights, dict):
+        cached = ai_insights.get("learning_recommendations")
+        if isinstance(cached, dict) and cached:
+            cached = dict(cached)
+            scores = dict(cached.get("scores") or {})
+            scores["security_score"] = security_breakdown["overall"]
+            cached["scores"] = scores
+            cached["security_score_breakdown"] = security_breakdown
+
+            skill_gaps = []
+            for gap in cached.get("skill_gaps") or []:
+                if not isinstance(gap, dict):
+                    continue
+                gap = dict(gap)
+                if gap.get("domain") == "Security":
+                    security_score = security_breakdown["overall"]
+                    security_gap = max(0.0, 100.0 - security_score)
+                    gap["score"] = round(security_score, 2)
+                    gap["gap"] = round(security_gap, 2)
+                    gap["priority"] = "High" if security_score < 82 else ("Medium" if security_score < 88 else "Low")
+                    gap["target_difficulty"] = "Advanced" if security_gap >= 20 else ("Intermediate" if security_gap >= 10 else "Beginner")
+                    gap["estimated_gain"] = 10 if security_gap >= 20 else (6 if security_gap >= 10 else 3)
+                skill_gaps.append(gap)
+            cached["skill_gaps"] = skill_gaps
+
+            security_focus = dict(cached.get("security_focus") or {})
+            security_focus["enabled"] = security_breakdown["overall"] < 82
+            security_focus["threshold"] = 82
+            cached["security_focus"] = security_focus
+
+            ai_insights["learning_recommendations"] = cached
+            run.ai_insights = ai_insights
+            db.commit()
+            return cached
 
     payload = build_learning_recommendations(run, score_row, metric_rows, findings)
+    payload["security_score_breakdown"] = security_breakdown
+
     if isinstance(ai_insights, dict):
         ai_insights["learning_recommendations"] = payload
         run.ai_insights = ai_insights

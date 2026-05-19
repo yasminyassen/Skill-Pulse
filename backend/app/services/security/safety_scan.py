@@ -28,7 +28,7 @@ def _get_safety_version() -> int:
     return 3  # default fallback
 
 
-def _parse_v2(output: str) -> list:
+def _parse_v2(output: str, file_path: str) -> list:
     findings = []
 
     try:
@@ -45,7 +45,7 @@ def _parse_v2(output: str) -> list:
                             findings.append({
                                 "tool": "safety",
                                 "rule": str(vuln[4]),
-                                "file_path": "requirements.txt",
+                                "file_path": file_path,
                                 "severity": "HIGH",
                                 "description": vuln[3],
                                 "line_number": 0,
@@ -63,7 +63,7 @@ def _parse_v2(output: str) -> list:
     return findings
 
 
-def _parse_v3(output: str) -> list:
+def _parse_v3(output: str, file_path: str) -> list:
     findings = []
 
     try:
@@ -91,7 +91,7 @@ def _parse_v3(output: str) -> list:
             findings.append({
                 "tool": "safety",
                 "rule": str(vuln.get("vulnerability_id") or vuln.get("id") or ""),
-                "file_path": "requirements.txt",
+                "file_path": file_path,
                 "severity": "HIGH",
                 "description": vuln.get("advisory") or vuln.get("description") or "",
                 "line_number": 0,
@@ -105,111 +105,144 @@ def _parse_v3(output: str) -> list:
     return findings
 
 
+def _find_requirement_files(repo_path: str) -> list[tuple[str, str]]:
+    ignored_dirs = {"venv", ".venv", "__pycache__", "node_modules", ".git"}
+    requirement_files: list[tuple[str, str]] = []
+
+    for root, dirs, files in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in ignored_dirs]
+
+        for name in files:
+            lower_name = name.lower()
+            if lower_name == "requirements.txt" or (
+                lower_name.startswith("requirements-") and lower_name.endswith(".txt")
+            ):
+                abs_path = os.path.join(root, name)
+                rel_path = os.path.relpath(abs_path, repo_path).replace("\\", "/")
+                requirement_files.append((abs_path, rel_path))
+
+    return sorted(requirement_files, key=lambda item: item[1])
+
+
 def run_safety(repo_path: str) -> list:
     # Ensure safety binary exists
     if not shutil.which("safety"):
         print("safety: executable not found, skipping")
         return []
 
-    # Ensure requirements.txt exists
-    req_file = os.path.join(repo_path, "requirements.txt")
-    if not os.path.exists(req_file):
+    requirement_files = _find_requirement_files(repo_path)
+    if not requirement_files:
         print("safety: no requirements.txt found, skipping")
         return []
 
     version = _get_safety_version()
     print(f"safety: detected version major={version}")
+    print(
+        "safety: requirement files found => "
+        + ", ".join(rel_path for _, rel_path in requirement_files)
+    )
 
     env = os.environ.copy()
     env["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
 
-    # Prepare command list based on version
-    if version >= 3:
-        commands_to_try = [
-            ["safety", "scan", "-r", req_file, "--json"],
-            ["safety", "check", "-r", req_file, "--json"],
-        ]
-    else:
-        commands_to_try = [
-            ["safety", "check", "-r", req_file, "--json"],
-        ]
+    all_findings = []
 
-    for cmd in commands_to_try:
-        print(f"safety: trying — {' '.join(cmd)}")
+    for req_file, rel_path in requirement_files:
+        # Prepare command list based on version
+        if version >= 3:
+            commands_to_try = [
+                ["safety", "scan", "-r", req_file, "--json"],
+                ["safety", "check", "-r", req_file, "--json"],
+            ]
+        else:
+            commands_to_try = [
+                ["safety", "check", "-r", req_file, "--json"],
+            ]
 
-        stderr_file = tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".txt",
-            delete=False,
-            encoding="utf-8"
-        )
-        stderr_path = stderr_file.name
-        stderr_file.close()
+        parsed_for_file = []
 
-        try:
-            with open(stderr_path, "w", encoding="utf-8") as err_fh:
-                result = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=err_fh,
-                    text=True,
-                    timeout=120,
-                    env=env,
-                )
+        for cmd in commands_to_try:
+            print(f"safety: trying — {' '.join(cmd)}")
 
-            output = result.stdout or ""
+            stderr_file = tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".txt",
+                delete=False,
+                encoding="utf-8"
+            )
+            stderr_path = stderr_file.name
+            stderr_file.close()
 
-            with open(stderr_path, "r", encoding="utf-8", errors="replace") as f:
-                stderr = f.read()
-
-        except subprocess.TimeoutExpired:
-            print("safety: scan timed out")
-            return []
-        except Exception as e:
-            print(f"safety: execution failed — {e}")
-            return []
-        finally:
             try:
-                os.unlink(stderr_path)
-            except Exception:
-                pass
+                with open(stderr_path, "w", encoding="utf-8") as err_fh:
+                    result = subprocess.run(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=err_fh,
+                        text=True,
+                        timeout=120,
+                        env=env,
+                    )
 
-        # Always log stderr for debugging
-        if stderr.strip():
-            print(f"safety: stderr =>\n{stderr}")
+                output = result.stdout or ""
 
-        print(f"safety: exit={result.returncode}, stdout_len={len(output)}")
+                with open(stderr_path, "r", encoding="utf-8", errors="replace") as f:
+                    stderr = f.read()
 
-        stderr_lower = stderr.lower()
+            except subprocess.TimeoutExpired:
+                print(f"safety: scan timed out for {rel_path}")
+                break
+            except Exception as e:
+                print(f"safety: execution failed for {rel_path} — {e}")
+                break
+            finally:
+                try:
+                    os.unlink(stderr_path)
+                except Exception:
+                    pass
 
-        # Detect authentication requirement
-        if "safety auth login" in stderr_lower or (
-            "api key" in stderr_lower and "authentication" in stderr_lower
-        ):
-            print("safety: authentication required")
-            return []
+            # Always log stderr for debugging
+            if stderr.strip():
+                print(f"safety: stderr =>\n{stderr}")
 
-        # Detect known crash (typer conflict)
-        if "typer" in stderr_lower and "rich_utils" in stderr_lower:
-            print("safety: dependency crash detected (typer conflict)")
-            return []
+            print(f"safety: exit={result.returncode}, stdout_len={len(output)}")
 
-        # Detect generic crash (no stdout + non-zero exit)
-        if result.returncode != 0 and not output.strip():
-            print("safety: command failed with no output — likely crash")
-            continue
+            stderr_lower = stderr.lower()
 
-        # Parse valid output
-        if output.strip():
-            print(f"safety: parsing output (v{version})")
-            # try v3 first, fallback to v2
-            parsed = _parse_v3(output)
-            if parsed:
-                return parsed
+            # Detect authentication requirement
+            if "safety auth login" in stderr_lower or (
+                "api key" in stderr_lower and "authentication" in stderr_lower
+            ):
+                print("safety: authentication required")
+                return all_findings
 
-            return _parse_v2(output)
+            # Detect known crash (typer conflict)
+            if "typer" in stderr_lower and "rich_utils" in stderr_lower:
+                print("safety: dependency crash detected (typer conflict)")
+                break
 
-        print("safety: no stdout, trying next command...")
+            # Detect generic crash (no stdout + non-zero exit)
+            if result.returncode != 0 and not output.strip():
+                print("safety: command failed with no output — likely crash")
+                continue
 
-    print("safety: all commands failed or returned no usable output")
-    return []
+            # Parse valid output
+            if output.strip():
+                print(f"safety: parsing output (v{version}) for {rel_path}")
+                # try v3 first, fallback to v2
+                parsed_for_file = _parse_v3(output, rel_path)
+                if not parsed_for_file:
+                    parsed_for_file = _parse_v2(output, rel_path)
+                break
+
+            print("safety: no stdout, trying next command...")
+
+        all_findings.extend(parsed_for_file)
+        print(f"safety: parsed findings for {rel_path} => {len(parsed_for_file)}")
+
+    if not all_findings:
+        print("safety: all commands failed or returned no usable output")
+    else:
+        print(f"safety: total parsed findings={len(all_findings)}")
+
+    return all_findings

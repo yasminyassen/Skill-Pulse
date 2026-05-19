@@ -1,6 +1,7 @@
 import subprocess
 import json
 import os
+import shutil
 
 from app.core.bandit_cwe_mapping import BANDIT_TO_CWE
 from app.core.security_mapping import CWE_TO_OWASP
@@ -21,10 +22,13 @@ def _relative_path(file_path: str, repo_path: str) -> str:
         return rel.replace("\\", "/")
     except ValueError:
         # relpath can fail on Windows if paths are on different drives
-        return file_path
+        return file_path.replace("\\", "/")
 
 
 def run_bandit(repo_path):
+    if not shutil.which("bandit"):
+        print("bandit: executable not found, skipping")
+        return []
 
     result = subprocess.run(
         [
@@ -38,11 +42,40 @@ def run_bandit(repo_path):
     )
 
     findings = []
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+
+    print(
+        f"bandit: exit={result.returncode}, stdout_len={len(stdout)}, stderr_len={len(stderr)}"
+    )
 
     try:
-        data = json.loads(result.stdout)
+        data = json.loads(stdout)
     except Exception:
+        data = None
+        decoder = json.JSONDecoder()
+        for idx, char in enumerate(stdout):
+            if char != "{":
+                continue
+            try:
+                data, _ = decoder.raw_decode(stdout[idx:])
+                print("bandit: recovered JSON after non-JSON stdout prefix")
+                break
+            except Exception:
+                continue
+
+    if data is None:
+        if stderr.strip():
+            print(f"bandit: stderr =>\n{stderr.strip()[:1000]}")
+        if stdout.strip():
+            print(f"bandit: invalid JSON stdout preview =>\n{stdout.strip()[:1000]}")
+        print("bandit: failed to parse JSON output")
         return findings
+
+    if result.returncode not in {0, 1} and not data.get("results"):
+        if stderr.strip():
+            print(f"bandit: failed stderr =>\n{stderr.strip()[:1000]}")
+        print("bandit: non-standard exit with no results")
 
     for issue in data.get("results", []):
 

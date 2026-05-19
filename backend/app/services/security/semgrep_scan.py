@@ -34,6 +34,9 @@ def run_semgrep(repo_path):
             "semgrep executable not found. Install semgrep or set SEMGREP_PATH to the semgrep executable."
         )
 
+    print(f"semgrep: using executable => {semgrep_path}")
+    print("semgrep: config=p/security-audit, include=*.py, exclude=tests")
+
     result = subprocess.run(
         [
             semgrep_path,
@@ -52,20 +55,31 @@ def run_semgrep(repo_path):
     )
 
     findings = []
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+
+    print(
+        f"semgrep: exit={result.returncode}, stdout_len={len(stdout)}, stderr_len={len(stderr)}"
+    )
+    if stderr.strip():
+        print(f"semgrep: stderr =>\n{stderr.strip()[:1000]}")
 
     try:
-        data = json.loads(result.stdout)
+        data = json.loads(stdout)
     except Exception as exc:
-        stderr = (result.stderr or "").strip()
+        if stdout.strip():
+            print(f"semgrep: invalid JSON stdout preview =>\n{stdout.strip()[:1000]}")
         raise RuntimeError(
             f"semgrep did not return valid JSON (exit={result.returncode}): {stderr[:500]}"
         ) from exc
 
     if result.returncode not in {0, 1} and not data.get("results"):
-        stderr = (result.stderr or "").strip()
         raise RuntimeError(f"semgrep failed (exit={result.returncode}): {stderr[:500]}")
 
-    for issue in data.get("results", []):
+    raw_results = data.get("results", [])
+    print(f"semgrep: raw findings count={len(raw_results)}")
+
+    for issue in raw_results:
 
         metadata = issue.get("extra", {}).get("metadata", {}) or {}
 

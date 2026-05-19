@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import math
 import os
 
 
@@ -56,22 +57,30 @@ def _component_score(
     cwe_weight: dict[str, float],
     total_loc: int | None = None,
     use_density: bool = False,
+    saturation_scale: float = 80.0,
 ) -> float:
     if not findings:
         return 100.0
 
-    penalty = 0.0
+    raw_risk = 0.0
     for finding in findings:
         sev = normalize_severity(finding.get("severity"))
-        penalty += severity_weight.get(sev, severity_weight["MEDIUM"]) * cwe_weight.get(finding.get("cwe"), 1.0)
+        raw_risk += severity_weight.get(sev, severity_weight["MEDIUM"]) * cwe_weight.get(finding.get("cwe"), 1.0)
+
+    unique_files = len(set(finding.get("file_path") for finding in findings if finding.get("file_path")))
+    repeated_findings = max(0, len(findings) - unique_files)
+
+    # Convert accumulated risk into a capped, non-linear penalty. This prevents
+    # medium/low repeated findings from collapsing a score to zero too quickly.
+    penalty = 100.0 * (1.0 - math.exp(-raw_risk / max(saturation_scale, 1.0)))
+
+    repetition_factor = 1.0 + min(0.18, repeated_findings * 0.01)
+    spread_factor = 1.0 + min(0.18, max(0, unique_files - 1) * 0.025)
+    penalty *= repetition_factor * spread_factor
 
     if use_density:
-        density = len(findings) / max(total_loc or 1, 1)
-        penalty *= min(1.6, 1 + density * 30)
-
-        unique_files = len(set(finding.get("file_path") for finding in findings))
-        repeated_findings = max(0, len(findings) - unique_files)
-        penalty *= 1 + repeated_findings * 0.03
+        findings_per_kloc = len(findings) / max((total_loc or 1) / 1000.0, 1.0)
+        penalty *= min(1.25, 1.0 + findings_per_kloc * 0.025)
 
     return round(max(0.0, 100.0 - min(100.0, penalty)), 2)
 
@@ -83,9 +92,9 @@ def compute_security_score_breakdown(findings: list[dict], total_loc: int = 1000
     code_score = _component_score(
         code_findings,
         severity_weight={
-            "HIGH": 12,
-            "MEDIUM": 6,
-            "LOW": 2,
+            "HIGH": 9,
+            "MEDIUM": 4,
+            "LOW": 1,
         },
         cwe_weight={
             "CWE-79": 1.5,
@@ -94,16 +103,18 @@ def compute_security_score_breakdown(findings: list[dict], total_loc: int = 1000
         },
         total_loc=total_loc,
         use_density=True,
+        saturation_scale=85,
     )
 
     dependency_score = _component_score(
         dependency_findings,
         severity_weight={
-            "HIGH": 8,
-            "MEDIUM": 4,
-            "LOW": 1.5,
+            "HIGH": 5,
+            "MEDIUM": 2.5,
+            "LOW": 0.8,
         },
         cwe_weight={},
+        saturation_scale=90,
     )
 
     overall = round((code_score * 0.6) + (dependency_score * 0.4), 2)
