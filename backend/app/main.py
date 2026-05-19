@@ -25,11 +25,13 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from ai_services.rag.rag_seeder import seed_standards
+from ai_services.learning.resource_seeder import seed_learning_resources
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     seed_standards()
+    seed_learning_resources()
     yield
 
 

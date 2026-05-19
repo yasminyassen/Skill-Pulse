@@ -1,0 +1,572 @@
+[
+  {
+    "id": "clean-code-book",
+    "title": "Clean Code: A Handbook of Agile Software Craftsmanship",
+    "provider": "Robert C. Martin",
+    "type": "Book",
+    "difficulty": "Intermediate",
+    "topics": ["maintainability", "refactoring", "clean-code", "readability"],
+    "duration": "10h",
+    "rating": 4.7,
+    "url": "https://www.informit.com/store/clean-code-a-handbook-of-agile-software-craftsmanship-9780132350884",
+    "description": "Practical guidance on writing readable, maintainable code with clear functions, naming, and low duplication.",
+    "tags": {
+      "skills": ["code quality", "maintainability"],
+      "concepts": ["naming", "function size", "duplication"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["long functions", "duplicate logic", "readability"]
+    }
+  },
+  {
+    "id": "refactoring-book",
+    "title": "Refactoring: Improving the Design of Existing Code",
+    "provider": "Martin Fowler",
+    "type": "Book",
+    "difficulty": "Intermediate",
+    "topics": ["refactoring", "code smells", "maintainability"],
+    "duration": "12h",
+    "rating": 4.6,
+    "url": "https://martinfowler.com/books/refactoring.html",
+    "description": "Catalog of refactoring patterns with clear motivations and examples for reducing complexity and improving design.",
+    "tags": {
+      "skills": ["refactoring", "maintainability"],
+      "concepts": ["code smells", "complexity", "design improvement"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["high complexity", "long functions", "duplicate logic"]
+    }
+  },
+  {
+    "id": "refactoring-guru",
+    "title": "Refactoring Guru",
+    "provider": "Refactoring Guru",
+    "type": "Articles",
+    "difficulty": "Beginner",
+    "topics": ["refactoring", "code smells", "design patterns"],
+    "duration": "6h",
+    "rating": 4.5,
+    "url": "https://refactoring.guru/refactoring",
+    "description": "Clear explanations of refactoring techniques and common code smells with practical guidance.",
+    "tags": {
+      "skills": ["refactoring", "code quality"],
+      "concepts": ["code smells", "design patterns"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["long functions", "duplicate logic", "high complexity"]
+    }
+  },
+  {
+    "id": "design-patterns-book",
+    "title": "Design Patterns: Elements of Reusable Object-Oriented Software",
+    "provider": "Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides",
+    "type": "Book",
+    "difficulty": "Advanced",
+    "topics": ["architecture", "design patterns", "object-oriented"],
+    "duration": "14h",
+    "rating": 4.5,
+    "url": "https://www.pearson.com/en-us/subject-catalog/p/design-patterns-elements-of-reusable-object-oriented-software/P200000003479",
+    "description": "Foundational patterns for building flexible, reusable, and maintainable architectures.",
+    "tags": {
+      "skills": ["architecture"],
+      "concepts": ["patterns", "coupling", "abstraction"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["high coupling", "architecture drift"]
+    }
+  },
+  {
+    "id": "clean-architecture-book",
+    "title": "Clean Architecture",
+    "provider": "Robert C. Martin",
+    "type": "Book",
+    "difficulty": "Intermediate",
+    "topics": ["architecture", "layering", "boundaries"],
+    "duration": "10h",
+    "rating": 4.5,
+    "url": "https://www.pearson.com/en-us/subject-catalog/p/clean-architecture/P200000003498",
+    "description": "Principles for separating concerns, managing dependencies, and building resilient software systems.",
+    "tags": {
+      "skills": ["architecture"],
+      "concepts": ["separation of concerns", "layering", "dependencies"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["high coupling", "architecture drift", "module boundaries"]
+    }
+  },
+  {
+    "id": "pragmatic-programmer",
+    "title": "The Pragmatic Programmer",
+    "provider": "Andrew Hunt, David Thomas",
+    "type": "Book",
+    "difficulty": "Beginner",
+    "topics": ["engineering practices", "maintainability", "testing"],
+    "duration": "9h",
+    "rating": 4.6,
+    "url": "https://pragprog.com/titles/tpp20/the-pragmatic-programmer-20th-anniversary-edition/",
+    "description": "Practical engineering habits that improve code quality, maintainability, and delivery confidence.",
+    "tags": {
+      "skills": ["engineering fundamentals"],
+      "concepts": ["automation", "testing mindset", "quality"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["low test coverage", "inconsistent practices"]
+    }
+  },
+  {
+    "id": "google-python-style-guide",
+    "title": "Google Python Style Guide",
+    "provider": "Google",
+    "type": "Articles",
+    "difficulty": "Beginner",
+    "topics": ["style", "readability", "documentation"],
+    "duration": "4h",
+    "rating": 4.4,
+    "url": "https://google.github.io/styleguide/pyguide.html",
+    "description": "Comprehensive guide to readable Python code, naming, docstrings, and formatting.",
+    "tags": {
+      "skills": ["code quality", "maintainability"],
+      "concepts": ["docstrings", "style consistency", "naming"],
+      "security_domains": [],
+      "frameworks": ["python"],
+      "issue_categories": ["missing docstrings", "style violations", "readability"]
+    }
+  },
+  {
+    "id": "google-eng-practices",
+    "title": "Google Engineering Practices Documentation",
+    "provider": "Google",
+    "type": "Articles",
+    "difficulty": "Intermediate",
+    "topics": ["code review", "testing", "design"],
+    "duration": "5h",
+    "rating": 4.5,
+    "url": "https://google.github.io/eng-practices/",
+    "description": "Guidance on code review, testing, and engineering practices for sustainable software quality.",
+    "tags": {
+      "skills": ["engineering process"],
+      "concepts": ["code review", "testing", "design docs"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["low test coverage", "inconsistent practices"]
+    }
+  },
+  {
+    "id": "tdd-by-example",
+    "title": "Test-Driven Development: By Example",
+    "provider": "Kent Beck",
+    "type": "Book",
+    "difficulty": "Intermediate",
+    "topics": ["testing", "tdd", "quality"],
+    "duration": "8h",
+    "rating": 4.4,
+    "url": "https://www.pearson.com/en-us/subject-catalog/p/test-driven-development-by-example/P200000002970",
+    "description": "Hands-on guide to building reliable code using test-first development and feedback loops.",
+    "tags": {
+      "skills": ["testing", "problem solving"],
+      "concepts": ["unit tests", "feedback loops"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["low test coverage", "fragile code"]
+    }
+  },
+  {
+    "id": "pytest-docs",
+    "title": "pytest Documentation",
+    "provider": "pytest",
+    "type": "Articles",
+    "difficulty": "Beginner",
+    "topics": ["testing", "python"],
+    "duration": "3h",
+    "rating": 4.3,
+    "url": "https://docs.pytest.org/",
+    "description": "Official documentation for writing effective, maintainable tests in Python.",
+    "tags": {
+      "skills": ["testing"],
+      "concepts": ["unit tests", "fixtures"],
+      "security_domains": [],
+      "frameworks": ["python"],
+      "issue_categories": ["low test coverage", "missing tests"]
+    }
+  },
+  {
+    "id": "owasp-top-10",
+    "title": "OWASP Top 10",
+    "provider": "OWASP",
+    "type": "Security documentation",
+    "difficulty": "Beginner",
+    "topics": ["security", "vulnerabilities"],
+    "duration": "3h",
+    "rating": 4.6,
+    "url": "https://owasp.org/www-project-top-ten/",
+    "description": "Overview of the most critical web application security risks and mitigation guidance.",
+    "tags": {
+      "skills": ["security fundamentals"],
+      "concepts": ["risk awareness", "threat categories"],
+      "security_domains": ["access control", "injection", "authentication", "security logging"],
+      "frameworks": [],
+      "issue_categories": ["security vulnerabilities"]
+    }
+  },
+  {
+    "id": "owasp-cheat-sheet-series",
+    "title": "OWASP Cheat Sheet Series",
+    "provider": "OWASP",
+    "type": "Security documentation",
+    "difficulty": "Intermediate",
+    "topics": ["secure coding", "best practices"],
+    "duration": "6h",
+    "rating": 4.7,
+    "url": "https://cheatsheetseries.owasp.org/",
+    "description": "Actionable secure coding checklists and guidance across common vulnerability classes.",
+    "tags": {
+      "skills": ["secure coding"],
+      "concepts": ["secure defaults", "input validation"],
+      "security_domains": ["injection", "authentication", "access control"],
+      "frameworks": [],
+      "issue_categories": ["security vulnerabilities"]
+    }
+  },
+  {
+    "id": "owasp-authentication-cheat-sheet",
+    "title": "OWASP Authentication Cheat Sheet",
+    "provider": "OWASP",
+    "type": "Security documentation",
+    "difficulty": "Intermediate",
+    "topics": ["authentication", "security"],
+    "duration": "2h",
+    "rating": 4.6,
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html",
+    "description": "Guidance on secure authentication flows, session management, and credential handling.",
+    "tags": {
+      "skills": ["authentication security"],
+      "concepts": ["sessions", "password storage", "mfa"],
+      "security_domains": ["authentication"],
+      "frameworks": [],
+      "issue_categories": ["weak authentication"]
+    }
+  },
+  {
+    "id": "owasp-access-control-cheat-sheet",
+    "title": "OWASP Access Control Cheat Sheet",
+    "provider": "OWASP",
+    "type": "Security documentation",
+    "difficulty": "Intermediate",
+    "topics": ["access control", "authorization"],
+    "duration": "2h",
+    "rating": 4.6,
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html",
+    "description": "Best practices for enforcing authorization checks and preventing broken access control.",
+    "tags": {
+      "skills": ["access control security"],
+      "concepts": ["authorization", "least privilege"],
+      "security_domains": ["access control"],
+      "frameworks": [],
+      "issue_categories": ["broken access control"]
+    }
+  },
+  {
+    "id": "owasp-injection-cheat-sheet",
+    "title": "OWASP Injection Prevention Cheat Sheet",
+    "provider": "OWASP",
+    "type": "Security documentation",
+    "difficulty": "Intermediate",
+    "topics": ["injection", "secure coding"],
+    "duration": "2h",
+    "rating": 4.6,
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Injection_Prevention_Cheat_Sheet.html",
+    "description": "Practical prevention strategies for SQL injection and other injection flaws.",
+    "tags": {
+      "skills": ["secure coding"],
+      "concepts": ["parameterization", "validation"],
+      "security_domains": ["injection"],
+      "frameworks": [],
+      "issue_categories": ["injection"]
+    }
+  },
+  {
+    "id": "portswigger-web-security-academy",
+    "title": "Web Security Academy",
+    "provider": "PortSwigger",
+    "type": "Courses",
+    "difficulty": "Intermediate",
+    "topics": ["web security", "hands-on labs"],
+    "duration": "12h",
+    "rating": 4.8,
+    "url": "https://portswigger.net/web-security",
+    "description": "Interactive labs covering common web vulnerabilities with practical exploitation and fixes.",
+    "tags": {
+      "skills": ["web security"],
+      "concepts": ["attack simulation", "secure coding"],
+      "security_domains": ["injection", "authentication", "access control"],
+      "frameworks": [],
+      "issue_categories": ["security vulnerabilities"]
+    }
+  },
+  {
+    "id": "nist-800-63b",
+    "title": "NIST SP 800-63B Digital Identity Guidelines",
+    "provider": "NIST",
+    "type": "Security documentation",
+    "difficulty": "Advanced",
+    "topics": ["authentication", "identity"],
+    "duration": "4h",
+    "rating": 4.4,
+    "url": "https://pages.nist.gov/800-63-3/sp800-63b.html",
+    "description": "Standards for secure identity, authentication, and credential lifecycle management.",
+    "tags": {
+      "skills": ["authentication security"],
+      "concepts": ["identity assurance", "mfa"],
+      "security_domains": ["authentication"],
+      "frameworks": [],
+      "issue_categories": ["weak authentication"]
+    }
+  },
+  {
+    "id": "microsoft-sdl",
+    "title": "Microsoft Security Development Lifecycle",
+    "provider": "Microsoft",
+    "type": "Security documentation",
+    "difficulty": "Intermediate",
+    "topics": ["secure development", "process"],
+    "duration": "3h",
+    "rating": 4.4,
+    "url": "https://www.microsoft.com/en-us/securityengineering/sdl/",
+    "description": "Process guidance for building secure software from design through deployment.",
+    "tags": {
+      "skills": ["secure development process"],
+      "concepts": ["threat modeling", "secure design"],
+      "security_domains": ["secure design"],
+      "frameworks": [],
+      "issue_categories": ["insecure design"]
+    }
+  },
+  {
+    "id": "clean-code-video-freecodecamp",
+    "title": "Clean Code - Uncle Bob",
+    "provider": "UnityCoin",
+    "type": "Videos",
+    "difficulty": "Intermediate",
+    "topics": ["clean-code", "maintainability"],
+    "duration": "1h 48m",
+    "rating": 4.8,
+    "url": "https://www.youtube.com/watch?v=7EmboKQH8lM",
+    "description": "Lecture on writing clean, maintainable code with emphasis on readability and refactoring.",
+    "tags": {
+      "skills": ["code quality", "maintainability"],
+      "concepts": ["code smells", "naming conventions"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["long functions", "duplicate logic", "readability"]
+    }
+  },
+  {
+    "id": "refactoring-video-traversy",
+    "title": "Refactoring Code: Improve Existing Code",
+    "provider": "DevBookClub ",
+    "type": "Videos",
+    "difficulty": "Beginner",
+    "topics": ["refactoring", "code-smells"],
+    "duration": "8h 33m",
+    "rating": 4.6,
+    "url": "https://youtube.com/playlist?list=PLH1fn6y2samvyaQW5NvQzGUfR5TOIOw5T&si=EEYf3rfiNjyscVrI",
+    "description": "Introductory refactoring walkthrough focused on cleaning up and improving existing code.",
+    "tags": {
+      "skills": ["maintainability"],
+      "concepts": ["refactoring", "code cleanup"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["long functions", "duplicate logic"]
+    }
+  },
+  {
+    "id": "system-design-video-gaurav-sen",
+    "title": "System Design Fundamentals",
+    "provider": "Gaurav Sen",
+    "type": "Videos",
+    "difficulty": "Beginner",
+    "topics": ["system-design", "architecture"],
+    "duration": "8 m",
+    "rating": 4.7,
+    "url": "https://www.youtube.com/watch?v=xpDnVSmNFX0",
+    "description": "Foundational concepts for designing scalable systems and understanding architectural tradeoffs.",
+    "tags": {
+      "skills": ["architecture"],
+      "concepts": ["scalability", "distributed systems"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["architecture drift"]
+    }
+  },
+  {
+    "id": "microservices-vs-monolith-video",
+    "title": "Microservices vs Monolith",
+    "provider": "SpringDeveloper",
+    "type": "Videos",
+    "difficulty": "Intermediate",
+    "topics": ["microservices", "architecture"],
+    "duration": "1h 49m",
+    "rating": 4.7,
+    "url": "https://www.youtube.com/watch?v=5q8B6lYhFvE",
+    "description": "Comparison of monoliths and microservices with guidance on tradeoffs and coupling.",
+    "tags": {
+      "skills": ["architecture"],
+      "concepts": ["monolith", "microservices"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["high coupling", "architecture drift"]
+    }
+  },
+  {
+    "id": "design-patterns-video-derek-banas",
+    "title": "Design Patterns Explained Simply",
+    "provider": "Programming with Mosh",
+    "type": "Videos",
+    "difficulty": "Intermediate",
+    "topics": ["design-patterns", "architecture"],
+    "duration": "1h 20m",
+    "rating": 4.6,
+    "url": "https://www.youtube.com/watch?v=NU_1StN5Tkk",
+    "description": "Overview of common design patterns and when to apply them for maintainable architecture.",
+    "tags": {
+      "skills": ["architecture"],
+      "concepts": ["singleton", "factory", "observer"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["architecture drift"]
+    }
+  },
+  {
+    "id": "owasp-top10-video",
+    "title": "OWASP Top 10: What Is The OWASP Top 10 (Security Risks and Vulnerabilities)",
+    "provider": "Vinsolev Academy",
+    "type": "Videos",
+    "difficulty": "Advanced",
+    "topics": ["security", "owasp"],
+    "duration": "39m",
+    "rating": 4.9,
+    "url": "https://www.youtube.com/watch?v=HJZ_zHGFpes",
+    "description": "Comprehensive walkthrough of the OWASP Top 10 vulnerabilities including XSS, SQL Injection, SSRF, and broken authentication.",
+    "tags": {
+      "skills": ["security fundamentals"],
+      "concepts": ["xss", "sql injection", "csrf", "ssrf"],
+      "security_domains": ["owasp top 10"],
+      "frameworks": [],
+      "issue_categories": ["security vulnerabilities", "weak authentication", "injection"]
+    }
+  },
+  {
+    "id": "sql-injection-video-wsa",
+    "title": "Running an SQL Injection Attack - Computerphile",
+    "provider": "Computerphile",
+    "type": "Videos",
+    "difficulty": "Intermediate",
+    "topics": ["sql-injection", "security"],
+    "duration": "17m",
+    "rating": 4.8,
+    "url": "https://www.youtube.com/watch?v=ciNHn38EyRc",
+    "description": "Practical overview of SQL injection risks and defensive coding techniques.",
+    "tags": {
+      "skills": ["secure coding"],
+      "concepts": ["input validation", "parameterization"],
+      "security_domains": ["injection"],
+      "frameworks": [],
+      "issue_categories": ["injection"]
+    }
+  },
+  {
+    "id": "secure-auth-video-okta",
+    "title": "Best Practices for Creating Global Session and Authentication Policies",
+    "provider": "Okta",
+    "type": "Videos",
+    "difficulty": "Intermediate",
+    "topics": ["authentication", "security"],
+    "duration": "6m",
+    "rating": 4.7,
+    "url": "https://www.youtube.com/watch?v=QJXiVtdEt1g",
+    "description": "Learn authentication policy, session security, MFA, and secure credential handling best practices using Okta.",
+    "tags": {
+      "skills": ["authentication security"],
+      "concepts": ["jwt", "session management", "mfa"],
+      "security_domains": ["authentication"],
+      "frameworks": ["okta"],
+      "issue_categories": ["weak authentication"]
+    }
+  },
+  {
+    "id": "big-o-video-cs-dojo",
+    "title": "Big O Notation Explained",
+    "provider": "Derek Banas",
+    "type": "Videos",
+    "difficulty": "Beginner",
+    "topics": ["algorithms", "time-complexity"],
+    "duration": "20m",
+    "rating": 4.7,
+    "url": "https://www.youtube.com/watch?v=V6mKVRU1evU",
+    "description": "Clear introduction to algorithmic complexity and performance reasoning.",
+    "tags": {
+      "skills": ["problem solving"],
+      "concepts": ["big o", "time complexity"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["high complexity"]
+    }
+  },
+   {
+    "id": "problem-decomposition-video-mit",
+    "title": "How To Think Like A Programmer",
+    "provider": "Coding Tech",
+    "type": "Videos",
+    "difficulty": "Intermediate",
+    "topics": ["problem-solving", "decomposition"],
+    "duration": "1h",
+    "rating": 4.6,
+    "url": "https://www.youtube.com/watch?v=azcrPFhaY9k",
+    "description": "Strategies for decomposing complex engineering and programming problems into manageable parts.",
+    "tags": {
+      "skills": ["problem solving"],
+      "concepts": ["decomposition", "abstraction"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["high complexity"]
+    }
+  },
+  {
+    "id": "scalable-systems-video-bytebytego",
+    "title": "System Design Fundamentals",
+    "provider": "ByteByteGo",
+    "type": "Videos",
+    "difficulty": "Advanced",
+    "topics": ["scalability", "architecture"],
+    "duration": "9h 27m",
+    "rating": 4.9,
+    "url": "https://youtube.com/playlist?list=PLCRMIe5FDPsd0gVs500xeOewfySTsmEjf&si=JgHka4qyy4mOlh-e",
+    "description": "Overview of designing scalable systems, from load balancing to caching.",
+    "tags": {
+      "skills": ["architecture"],
+      "concepts": ["load balancing", "caching"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["architecture drift"]
+    }
+  },
+  {
+    "id": "database-design-video-freecodecamp",
+    "title": "Database Design Course - Learn how to design and plan a database for beginners",
+    "provider": "freeCodeCamp",
+    "type": "Videos",
+    "difficulty": "Intermediate",
+    "topics": ["databases", "architecture"],
+    "duration": "8h 7m",
+    "rating": 4.7,
+    "url": "https://www.youtube.com/watch?v=ztHopE5Wnpc",
+    "description": "Foundational database design concepts covering normalization and indexing.",
+    "tags": {
+      "skills": ["architecture"],
+      "concepts": ["normalization", "indexing"],
+      "security_domains": [],
+      "frameworks": [],
+      "issue_categories": ["architecture drift"]
+    }
+  }
+]

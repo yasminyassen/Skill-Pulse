@@ -21,6 +21,7 @@ from app.services.github_client import (
 from app.services.code_intelligence import analyze_python_files
 from app.services.llm_client import analyze_problem_solving, analyze_skill_scores, LLMError
 from app.services.metrics import build_unified_schema
+from app.services.learning_recommendations import build_learning_recommendations
 from ai_services.insights.ai_insights import generate_insights
 from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
 from app.core.auth_utils import decrypt_github_token
@@ -377,6 +378,27 @@ async def background_analysis_task(
                 "llm_adjustment_guidance": llm_adjustment_guidance,
             "failed_tools": failed_tools,
         }
+
+        try:
+            score_row = (
+                db.query(SkillScore)
+                .filter(
+                    SkillScore.analysis_run_id == run.id,
+                    SkillScore.user_id == current_user_id,
+                )
+                .first()
+            )
+            metric_rows = db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id == run.id).all()
+            findings_rows = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).all()
+            if score_row:
+                ai_insights["learning_recommendations"] = build_learning_recommendations(
+                    run,
+                    score_row,
+                    metric_rows,
+                    findings_rows,
+                )
+        except Exception:
+            logging.exception("Learning recommendations generation failed")
         try:
             security_report = {
                 "total_findings": len(findings),

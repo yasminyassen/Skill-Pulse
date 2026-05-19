@@ -1,3 +1,4 @@
+#config
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -21,13 +22,15 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = "V4b5gxkYREWRMc3NDzwbPzypjCtasGVSKzdNiSn8xSQ="
     GITLEAKS_PATH: str = "gitleaks"
     SEMGREP_PATH: str = "semgrep"
-
     ai_mode: str = "openrouter"
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "qwen3:14b"
-    openrouter_api_key: str = "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"
+    openrouter_api_key: str = ""
     openrouter_model: str = "qwen/qwen3-14b"
     openrouter_api_url: str = "https://openrouter.ai/api/v1"
+    llm_max_retries: int = 1
+    llm_context_limit: int = 32000
+
     class Config:
         env_file = ".env"
      

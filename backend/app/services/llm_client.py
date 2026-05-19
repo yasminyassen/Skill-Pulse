@@ -571,6 +571,93 @@ def _is_valid_skill_scores(resp: dict) -> bool:
     return all(isinstance((resp[k] or {}).get("adjustment"), (int, float)) for k in SKILLS)
 
 
+def _is_valid_learning_rank(resp: dict) -> bool:
+    if not resp or "ranked" not in resp:
+        return False
+    ranked = resp.get("ranked")
+    if not isinstance(ranked, list):
+        return False
+    return all(isinstance(item, dict) and item.get("id") for item in ranked)
+
+
+def _deterministic_learning_rank(payload: dict) -> dict:
+    resources = payload.get("resources") if isinstance(payload, dict) else []
+    if not isinstance(resources, list):
+        resources = []
+
+    def _score(item: dict) -> float:
+        try:
+            return float(item.get("score", 0.0) or 0.0)
+        except Exception:
+            return 0.0
+
+    ordered = sorted(
+        (r for r in resources if isinstance(r, dict) and r.get("id")),
+        key=lambda r: (_score(r), str(r.get("id"))),
+        reverse=True,
+    )
+
+    return {
+        "ranked": [
+            {
+                "id": r.get("id"),
+                "explanation": "Ranked by semantic relevance, quality, and fit.",
+            }
+            for r in ordered
+        ]
+    }
+
+
+def _call_learning_rank_once(payload: dict, ai_mode: str) -> dict:
+    if ai_mode == "ollama":
+        url, model = _ollama_config()
+        body = {
+            "model": model,
+            "task": "learning_resource_ranking",
+            "payload": payload,
+            "response_format": "json",
+            "instructions": (
+                "Return JSON with key 'ranked' containing a list of objects with: "
+                "id (string), explanation (string), expected_gain (optional int). "
+                "Rank by relevance to issues, quality, and difficulty fit."
+            ),
+        }
+        jr = _post_with_retry(f"{url.rstrip('/')}/llm", body, max_retries=2)
+        return jr if isinstance(jr, dict) else {}
+
+    url, key, model = _openrouter_config()
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Return only strict JSON. No markdown. No extra keys."},
+            {
+                "role": "user",
+                "content": (
+                    "You are ranking learning resources for a developer based on analysis results.\n\n"
+                    "Return ONLY a JSON object with this exact structure:\n\n"
+                    "{\n"
+                    "  \"ranked\": [\n"
+                    "    {\"id\": \"...\", \"explanation\": \"...\", \"expected_gain\": 0-20}\n"
+                    "  ]\n"
+                    "}\n\n"
+                    "Rules:\n"
+                    "- Use only resource IDs provided in the input.\n"
+                    "- Sort most relevant first.\n"
+                    "- Explanation: 1 sentence, concrete, no fluff.\n"
+                    "- expected_gain is optional; omit if unsure.\n\n"
+                    "Input:\n"
+                    f"{json.dumps(payload)}"
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    jr = _post_with_retry(f"{url.rstrip('/')}/chat/completions", body, headers=headers, max_retries=2)
+    return _extract_openrouter_resp(jr)
+
+
 # ---------------------------------------------------------------------------
 # Public analysis functions
 # ---------------------------------------------------------------------------
@@ -725,3 +812,37 @@ def analyze_skill_scores(
             "reason": entry.get("reason", ""),
         }
     return out
+
+
+def rank_learning_resources(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Rank learning resources with LLM guidance and a deterministic fallback.
+    """
+    if not isinstance(payload, dict):
+        return {"ranked": []}
+
+    fallback = _deterministic_learning_rank(payload)
+    resources = payload.get("resources")
+    if not isinstance(resources, list) or not resources:
+        return fallback
+
+    ai_mode = (os.environ.get("AI_MODE") or "openrouter").lower()
+    max_retries = _max_retries()
+
+    resp = {}
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = _call_learning_rank_once(payload, ai_mode)
+        except LLMError as exc:
+            logger.warning("learning_rank attempt %d/%d failed: %s", attempt, max_retries, exc)
+            resp = {}
+
+        if _is_valid_learning_rank(resp):
+            return resp
+
+        logger.warning("learning_rank attempt %d/%d returned invalid payload", attempt, max_retries)
+        resp = {}
+        if attempt < max_retries:
+            time.sleep(2 ** (attempt - 1))
+
+    return fallback

@@ -42,6 +42,7 @@ from app.services.security_service import (
     compute_security_score_breakdown,
     group_findings_by_severity_and_file,
 )
+from app.services.learning_recommendations import build_learning_recommendations
 
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -609,6 +610,53 @@ async def get_detailed_metrics_breakdown(
         "completed_at": run.completed_at,
         "ai_insights": ai_insights,
     }
+
+
+@router.get("/{analysis_run_id}/learning-recommendations")
+async def get_learning_recommendations(
+    analysis_run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    run = (
+        db.query(AnalysisRun)
+        .filter(AnalysisRun.id == analysis_run_id)
+        .first()
+    )
+
+    if not run or (run.status == "completed" and not score_belongs_to_user(db, run.id, current_user.id)) or (run.status != "completed" and run.user_id != current_user.id):
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+
+    if run.status != "completed":
+        raise HTTPException(status_code=400, detail="Analysis run is not completed")
+
+    ai_insights = run.ai_insights or {}
+    if isinstance(ai_insights, dict):
+        cached = ai_insights.get("learning_recommendations")
+        if isinstance(cached, dict) and cached:
+            return cached
+
+    score_row = (
+        db.query(SkillScore)
+        .filter(
+            SkillScore.analysis_run_id == run.id,
+            SkillScore.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not score_row:
+        raise HTTPException(status_code=404, detail="Skill scores not found")
+
+    metric_rows = db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id == run.id).all()
+    findings = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).all()
+
+    payload = build_learning_recommendations(run, score_row, metric_rows, findings)
+    if isinstance(ai_insights, dict):
+        ai_insights["learning_recommendations"] = payload
+        run.ai_insights = ai_insights
+        db.commit()
+
+    return payload
 
 
 @router.get("/{analysis_id}")
