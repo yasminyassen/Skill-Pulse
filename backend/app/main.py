@@ -29,10 +29,6 @@ from ai_services.rag.rag_seeder import seed_standards
 from ai_services.learning.resource_seeder import seed_learning_resources
 
 from app.api.profile import router as profile_router
-
-
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     seed_standards()
@@ -78,4 +74,3 @@ app.include_router(security_report.router)
 app.include_router(repos.router)
 app.include_router(profile_router)
 app.include_router(github_classroom.router)
-

@@ -29,7 +29,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     organization = Column(String, nullable=True)
     job_title    = Column(String, nullable=True)
-    analysis_runs = relationship("AnalysisRun", back_populates="user")
+    analysis_runs = relationship("AnalysisRun", back_populates="user", cascade="all, delete-orphan")
 
 class Repository(Base):
     __tablename__ = "repositories"
@@ -60,9 +60,9 @@ class AnalysisRun(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     repository = relationship("Repository", back_populates="analysis_runs")
-    code_metrics = relationship("CodeMetrics", back_populates="analysis_run")
-    security_findings = relationship("SecurityFinding", back_populates="analysis_run")
-    skill_scores = relationship("SkillScore", back_populates="analysis_run")
+    code_metrics = relationship("CodeMetrics", back_populates="analysis_run", cascade="all, delete-orphan")
+    security_findings = relationship("SecurityFinding", back_populates="analysis_run", cascade="all, delete-orphan")
+    skill_scores = relationship("SkillScore", back_populates="analysis_run", cascade="all, delete-orphan")
     user = relationship("User", back_populates="analysis_runs")
     ai_insights = Column(JSON, nullable=True)
     recruiter_candidate = relationship("RecruiterCandidate", back_populates="analysis_run", uselist=False)
