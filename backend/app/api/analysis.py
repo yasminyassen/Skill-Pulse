@@ -19,7 +19,7 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 from app.db.database import get_db
-from app.db.models import Repository, AnalysisRun, SecurityFinding, CodeMetrics, SkillScore, User, RecruiterCandidate
+from app.db.models import Repository, AnalysisRun, SecurityFinding, CodeMetrics, SkillScore, User, RecruiterCandidate, RepositoryAnalysis
 from app.core.auth_utils import get_current_user, decrypt_github_token, require_role
 from app.core.rate_limiter import limiter
 
@@ -85,6 +85,16 @@ def compute_repository_display_score(code_score: float | None, security_score: f
     code_weight = 0.7
     security_weight = 0.3
     return round((code * code_weight) + (security * security_weight), 2)
+
+
+MIN_AWARE_DATETIME = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _run_sort_time(run: AnalysisRun) -> datetime:
+    value = run.completed_at or run.triggered_at or MIN_AWARE_DATETIME
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 @router.post("/run")
@@ -427,7 +437,40 @@ async def get_recruiter_candidates(
         .all()
     )
 
-    run_ids = [run.id for run, _, _, _ in rows]
+    active_run_by_repo = {
+        row.repository_id: row.last_run_id
+        for row in (
+            db.query(RepositoryAnalysis)
+            .filter(
+                RepositoryAnalysis.user_id == current_user.id,
+                RepositoryAnalysis.last_run_id.isnot(None),
+            )
+            .all()
+        )
+    }
+
+    latest_by_candidate: dict[str, tuple[AnalysisRun, Repository, SkillScore, RecruiterCandidate]] = {}
+    for run, repo, score, candidate in rows:
+        active_run_id = active_run_by_repo.get(run.repository_id)
+        if active_run_id is not None and active_run_id != run.id:
+            continue
+
+        candidate_key = (candidate.github_login or candidate.candidate_name or "").strip().lower()
+        if not candidate_key:
+            candidate_key = str(run.id)
+
+        existing = latest_by_candidate.get(candidate_key)
+        if existing:
+            existing_run = existing[0]
+            existing_time = _run_sort_time(existing_run)
+            incoming_time = _run_sort_time(run)
+            if existing_time >= incoming_time:
+                continue
+
+        latest_by_candidate[candidate_key] = (run, repo, score, candidate)
+
+    latest_rows = list(latest_by_candidate.values())
+    run_ids = [run.id for run, _, _, _ in latest_rows]
     loc_by_run = {}
     if run_ids:
         loc_by_run = dict(
@@ -443,7 +486,11 @@ async def get_recruiter_candidates(
     repo_counts = Counter(candidate.candidate_name for _, _, _, candidate in rows)
 
     response: list[RecruiterCandidateRow] = []
-    for run, _, score, candidate in rows:
+    for run, _, score, candidate in sorted(
+        latest_rows,
+        key=lambda item: _run_sort_time(item[0]),
+        reverse=True,
+    ):
         response.append(RecruiterCandidateRow(
             candidate_name=candidate.candidate_name,
             github_login=candidate.github_login or "",
@@ -459,6 +506,84 @@ async def get_recruiter_candidates(
         ))
 
     return response
+
+
+@router.delete("/recruiter/analysis/{analysis_id}")
+@router.delete("/recruiter/candidates/{analysis_id}")
+async def delete_recruiter_candidate_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["recruiter"])),
+):
+    run = (
+        db.query(AnalysisRun)
+        .filter(
+            AnalysisRun.id == analysis_id,
+            AnalysisRun.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+
+    repo_analysis = (
+        db.query(RepositoryAnalysis)
+        .filter(
+            RepositoryAnalysis.last_run_id == analysis_id,
+            RepositoryAnalysis.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    try:
+        if repo_analysis:
+            if repo_analysis.results_path and os.path.exists(repo_analysis.results_path):
+                if os.path.isdir(repo_analysis.results_path):
+                    import shutil
+                    shutil.rmtree(repo_analysis.results_path)
+                else:
+                    os.remove(repo_analysis.results_path)
+            db.delete(repo_analysis)
+
+        (
+            db.query(RecruiterCandidate)
+            .filter(RecruiterCandidate.analysis_run_id == analysis_id)
+            .delete(synchronize_session=False)
+        )
+        (
+            db.query(CodeMetrics)
+            .filter(CodeMetrics.analysis_run_id == analysis_id)
+            .delete(synchronize_session=False)
+        )
+        (
+            db.query(SecurityFinding)
+            .filter(SecurityFinding.analysis_run_id == analysis_id)
+            .delete(synchronize_session=False)
+        )
+        (
+            db.query(SkillScore)
+            .filter(
+                SkillScore.analysis_run_id == analysis_id,
+                SkillScore.user_id == current_user.id,
+            )
+            .delete(synchronize_session=False)
+        )
+        db.delete(run)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logging.exception(
+            "Failed to delete recruiter candidate analysis run_id=%s user_id=%s",
+            analysis_id,
+            current_user.id,
+        )
+        raise HTTPException(status_code=500, detail="Failed to delete candidate analysis")
+
+    return {
+        "deleted": True,
+        "analysis_id": analysis_id,
+        "analysis_exists": False,
+    }
 
 
 @router.get("/{analysis_run_id}/detailed-metrics")

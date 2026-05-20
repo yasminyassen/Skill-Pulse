@@ -101,6 +101,22 @@ const sortRows = (rows: CandidateRow[], key: SortKey, dir: SortDirection) => {
   return dir === "asc" ? sorted : sorted.reverse();
 };
 
+const candidateKey = (row: CandidateRow) => (
+  (row.github_login || row.candidate_name || String(row.run_id)).trim().toLowerCase()
+);
+
+const latestCandidateRows = (rows: CandidateRow[]) => {
+  const byCandidate = new Map<string, CandidateRow>();
+  rows.forEach((row) => {
+    const key = candidateKey(row);
+    const existing = byCandidate.get(key);
+    if (!existing || row.run_id > existing.run_id) {
+      byCandidate.set(key, row);
+    }
+  });
+  return Array.from(byCandidate.values());
+};
+
 export default function CandidateEvaluation() {
   const [candidates, setCandidates] = useState<CandidateRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -109,21 +125,32 @@ export default function CandidateEvaluation() {
   const [sortKey, setSortKey] = useState<SortKey>("overall_score");
   const [sortDir, setSortDir] = useState<SortDirection>("desc");
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<CandidateRow | null>(null);
 
   useEffect(() => {
     let active = true;
-    (async () => {
-      setLoading(true);
+
+    const loadCandidates = async (showLoading = false) => {
+      if (showLoading) {
+        setLoading(true);
+      }
       try {
         const res = await api.get("/analysis/recruiter/candidates");
         if (!active) return;
-        setCandidates(Array.isArray(res.data) ? res.data : []);
+        setCandidates(latestCandidateRows(Array.isArray(res.data) ? res.data : []));
       } finally {
-        if (active) setLoading(false);
+        if (active && showLoading) setLoading(false);
       }
-    })();
+    };
+
+    loadCandidates(true);
+    const interval = window.setInterval(() => {
+      loadCandidates();
+    }, 5000);
+
     return () => {
       active = false;
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -162,11 +189,12 @@ export default function CandidateEvaluation() {
     setSortDir("desc");
   };
 
-  const handleDelete = async (runId: number) => {
-    if (!window.confirm("Delete this candidate analysis history?")) {
+  const handleDelete = async () => {
+    if (!deleteTarget) {
       return;
     }
 
+    const runId = deleteTarget.run_id;
     setDeletingIds((prev) => {
       const next = new Set(prev);
       next.add(runId);
@@ -176,6 +204,7 @@ export default function CandidateEvaluation() {
     try {
       await api.delete(`/analysis/recruiter/candidates/${runId}`);
       setCandidates((prev) => prev.filter((row) => row.run_id !== runId));
+      setDeleteTarget(null);
     } finally {
       setDeletingIds((prev) => {
         const next = new Set(prev);
@@ -507,7 +536,7 @@ export default function CandidateEvaluation() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDelete(row.run_id)}
+                        onClick={() => setDeleteTarget(row)}
                         disabled={deletingIds.has(row.run_id)}
                         style={{
                           borderRadius: "10px",
@@ -519,8 +548,18 @@ export default function CandidateEvaluation() {
                           fontWeight: 600,
                           cursor: deletingIds.has(row.run_id) ? "not-allowed" : "pointer",
                           opacity: deletingIds.has(row.run_id) ? 0.6 : 1,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "8px",
                         }}
                       >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 6h18" />
+                          <path d="M8 6V4h8v2" />
+                          <path d="M19 6l-1 14H6L5 6" />
+                          <path d="M10 11v5" />
+                          <path d="M14 11v5" />
+                        </svg>
                         {deletingIds.has(row.run_id) ? "Deleting..." : "Delete"}
                       </button>
                     </div>
@@ -658,6 +697,107 @@ export default function CandidateEvaluation() {
             </div>
           </div>
         </div>
+
+        {deleteTarget && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-candidate-title"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 50,
+              background: "rgba(2,6,23,0.72)",
+              display: "grid",
+              placeItems: "center",
+              padding: "24px",
+            }}
+          >
+            <div style={{
+              width: "min(460px, 100%)",
+              background: cardBg,
+              border: "1px solid rgba(248,113,113,0.35)",
+              borderRadius: "18px",
+              boxShadow: "0 28px 90px rgba(0,0,0,0.45)",
+              padding: "22px",
+            }}>
+              <div style={{ display: "flex", gap: "14px", alignItems: "flex-start" }}>
+                <div style={{
+                  width: "38px",
+                  height: "38px",
+                  borderRadius: "12px",
+                  background: "rgba(248,113,113,0.14)",
+                  color: "#fecaca",
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4h8v2" />
+                    <path d="M19 6l-1 14H6L5 6" />
+                    <path d="M10 11v5" />
+                    <path d="M14 11v5" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 id="delete-candidate-title" style={{ margin: 0, fontSize: "19px", fontWeight: 800 }}>
+                    Delete Candidate Analysis
+                  </h2>
+                  <p style={{ margin: "10px 0 0", color: muted, fontSize: "14px", lineHeight: 1.55 }}>
+                    This will permanently delete the candidate analysis history, scores, recommendations, and cached results. The repository can be analyzed again after deletion.
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "22px" }}>
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={deletingIds.has(deleteTarget.run_id)}
+                  style={{
+                    borderRadius: "10px",
+                    padding: "10px 14px",
+                    background: "rgba(15,23,42,0.8)",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    color: "#f8fafc",
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    cursor: deletingIds.has(deleteTarget.run_id) ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={deletingIds.has(deleteTarget.run_id)}
+                  style={{
+                    borderRadius: "10px",
+                    padding: "10px 14px",
+                    background: "rgba(220,38,38,0.9)",
+                    border: "1px solid rgba(248,113,113,0.5)",
+                    color: "#fff",
+                    fontSize: "13px",
+                    fontWeight: 800,
+                    cursor: deletingIds.has(deleteTarget.run_id) ? "not-allowed" : "pointer",
+                    opacity: deletingIds.has(deleteTarget.run_id) ? 0.65 : 1,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4h8v2" />
+                    <path d="M19 6l-1 14H6L5 6" />
+                  </svg>
+                  {deletingIds.has(deleteTarget.run_id) ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </DashboardLayout>
   );
