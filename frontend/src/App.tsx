@@ -25,6 +25,7 @@ import ConnectedRepositories from './pages/Dashboard/ConnectedRepositories';
 // page can scroll-to / highlight the matching run.
 import AnalysisDetail from './pages/AnalysisDetail';
 
+import ManagerRequirements from './pages/Dashboard/ManagerRequirements'
 
 function App() {
   return (
@@ -56,7 +57,7 @@ function App() {
         <Route path="/dashboard/manager" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/manager/analysis" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/manager/security" element={<ManagerDashboard />} />
-        <Route path="/dashboard/manager/requirements" element={<ManagerDashboard />} />
+        <Route path="/dashboard/manager/requirements" element={<ManagerRequirements/>} />
         <Route path="/dashboard/manager/profile" element={<ManagerDashboard />} />
         <Route path="/dashboard/manager/team" element={<ManagerDashboard />} />
 

@@ -2,18 +2,18 @@ from operator import or_
 import re
 from fastapi import APIRouter, Depends, HTTPException, Response, Cookie , status
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, validator
 from app.db.database import get_db
 from app.db.models import User, RefreshToken
 from app.core.auth_utils import hash_password, verify_password, create_access_token, create_refresh_token, hash_refresh_token, decode_access_token, get_current_user
 from passlib.hash import argon2
-from app.db.models import UserRole
+from app.db.models import UserRole, DeveloperSpecialization
 from app.core.config import settings
 from datetime import datetime, timedelta, timezone
 from fastapi import Request
 from slowapi.util import get_remote_address
 from app.core.rate_limiter import limiter
-from pydantic import BaseModel, EmailStr, Field, validator
+from typing import Optional
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,6 +32,7 @@ class UserRegister(BaseModel):
     full_name: str = Field(..., min_length=3, max_length=100)
     work_email: EmailStr
     role: UserRole
+    specialization: Optional[DeveloperSpecialization] = None
     
     password: str = Field(..., min_length=8)
 
@@ -52,6 +53,29 @@ class UserRegister(BaseModel):
         if not re.search(r"[ !@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]", v):
             raise ValueError('Password must contain at least one special character (@#$%...)')
         return v
+    
+    @validator('specialization', always=True)
+    def check_specialization(cls, v, values):
+        role = values.get('role')
+        if role == UserRole.developer and not v:
+            raise ValueError('Specialization is required for developers')
+        if role != UserRole.developer:
+            return None 
+        return v
+
+class ProfileComplete(BaseModel):
+    role: UserRole
+    specialization: Optional[DeveloperSpecialization] = None
+
+    @validator('specialization', always=True)
+    def check_specialization(cls, v, values):
+        role = values.get('role')
+        if role == UserRole.developer and not v:
+            raise ValueError('Specialization is required for developers')
+        if role != UserRole.developer:
+            return None
+        return v
+
 class UserLogin(BaseModel):
     username: str
     password: str
@@ -70,6 +94,18 @@ def update_role(data: RoleUpdate, current_user=Depends(get_current_user), db: Se
     db.commit()
     return {"message": "Role updated", "role": data.role.value}
 
+@router.patch("/complete-profile")
+def complete_profile(data: ProfileComplete, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    current_user.role = data.role
+    current_user.specialization = data.specialization
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "message": "Profile completed successfully", 
+        "role": current_user.role.value, 
+        "specialization": current_user.specialization.value if current_user.specialization else None
+    }
+
 
 @router.get("/whoami-full")
 def whoami_full(current_user=Depends(get_current_user)):
@@ -79,7 +115,8 @@ def whoami_full(current_user=Depends(get_current_user)):
         "full_name": current_user.full_name,
         "work_email": current_user.work_email,
         "avatar_url": getattr(current_user, "avatar_url", None),
-        "role": current_user.role.value if current_user.role else None 
+        "role": current_user.role.value if current_user.role else None,
+        "specialization": current_user.specialization.value if getattr(current_user, "specialization", None) else None
     }
 
 
@@ -102,7 +139,8 @@ def register(request: Request, user: UserRegister, db: Session = Depends(get_db)
         username=user.username,
         work_email=user.work_email,
         hashed_password=hash_password(user.password),
-        role=user.role
+        role=user.role,
+        specialization=user.specialization
     )
 
     db.add(new_user)
@@ -281,5 +319,3 @@ def who_am_i(current_user = Depends(get_current_user)):
         "username": current_user.username,
         "role": current_user.role.value if current_user.role else None
     }
-    
-    

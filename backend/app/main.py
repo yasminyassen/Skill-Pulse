@@ -18,6 +18,7 @@ from app.api import github_oauth
 from app.api import analysis
 from app.api import security_report
 from app.api import repos
+from app.api import requirements
 from app.api import github_classroom
 
 from app.core.rate_limiter import limiter
@@ -74,3 +75,5 @@ app.include_router(security_report.router)
 app.include_router(repos.router)
 app.include_router(profile_router)
 app.include_router(github_classroom.router)
+
+app.include_router(requirements.router)

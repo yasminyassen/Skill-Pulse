@@ -139,6 +139,7 @@ export const register = async (data: {
   work_email: string;
   role: string;
   password: string;
+  specialization?: string;
 }) => {
   const response = await api.post("/auth/register", data);
   return response.data;

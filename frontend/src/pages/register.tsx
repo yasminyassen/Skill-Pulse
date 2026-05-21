@@ -1,9 +1,9 @@
-import type { FormEvent } from "react";
 import React, { useState } from "react";
+import type { FormEvent } from "react";
 import { API_BASE_URL, register } from "../api/auth";
 
 const Register: React.FC = () => {
-  const [form, setForm] = useState({ username: '', full_name: '', work_email: '', role: '', password: '', confirm_password: '' });
+  const [form, setForm] = useState({ username: '', full_name: '', work_email: '', role: '', specialization: '', password: '', confirm_password: '' });
   const [focused, setFocused] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -28,6 +28,7 @@ const Register: React.FC = () => {
     setGithubLoading(true);
     window.location.href = `${API_BASE_URL}/auth/github?action=register`;
   };
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
@@ -59,6 +60,11 @@ const Register: React.FC = () => {
       return;
     }
 
+    if (form.role === 'developer' && !form.specialization) {
+      setError("Please select your specialization.");
+      return;
+    }
+
     setLoading(true);
     try {
       await register({
@@ -66,6 +72,7 @@ const Register: React.FC = () => {
         full_name: form.full_name,
         work_email: form.work_email,
         role: form.role,
+        specialization: form.role === 'developer' ? form.specialization : undefined,
         password: form.password,
       });
       setSuccess(true);
@@ -336,7 +343,6 @@ const Register: React.FC = () => {
                 Connect your GitHub and get AI-powered insights into your code quality, security awareness, and skill trajectory.
               </p>
 
-              {/* Feature highlights */}
               <div className="sp-features">
                 <div className="sp-feat">
                   <div className="sp-feat-icon" style={{background:'rgba(196,181,253,0.12)'}}>
@@ -577,6 +583,28 @@ const Register: React.FC = () => {
                     ))}
                   </div>
                 </div>
+
+                {form.role === 'developer' && (
+                  <div className="sp-field">
+                    <label className="sp-field-label">Specialization</label>
+                    <div className="sp-role-group" style={{ flexDirection: 'row', gap: '8px' }}>
+                      {[
+                        { value: 'backend', label: 'Backend' },
+                        { value: 'frontend', label: 'Frontend' },
+                        { value: 'qa', label: 'QA' },
+                      ].map(s => (
+                        <div
+                          key={s.value}
+                          className={`sp-role-option ${form.specialization === s.value ? 'selected' : ''}`}
+                          style={{ flex: 1, justifyContent: 'center', padding: '8px' }}
+                          onClick={() => update('specialization', s.value)}
+                        >
+                          <div className="sp-role-label" style={{ fontSize: '11.5px' }}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="sp-error-wrap">
                   {error && (

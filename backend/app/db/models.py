@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.database import Base
 from datetime import datetime, timedelta
+from sqlalchemy.dialects import postgresql
 import enum
 
 # Roles
@@ -10,6 +11,15 @@ class UserRole(str, enum.Enum):
     developer = "developer"
     manager = "manager"
     recruiter = "recruiter"
+
+class DeveloperSpecialization(str, enum.Enum):
+    backend = "backend"
+    frontend = "frontend"
+    qa = "qa"
+class TaskStatus(str, enum.Enum):
+    todo = "todo"
+    in_progress = "in_progress"
+    done = "done"
 
 class User(Base):
     __tablename__ = "users"
@@ -21,9 +31,10 @@ class User(Base):
     work_email = Column(String, unique=True, index=True, nullable=False) 
     hashed_password = Column(String, nullable=False)
     role = Column(Enum(UserRole), nullable=True, default=None)
+    specialization = Column(Enum(DeveloperSpecialization), nullable=True, default=None)
     avatar_url = Column(String, nullable=True)
-    github_access_token = Column(String, nullable=True)  # stored encrypted
-    github_refresh_token = Column(String, nullable=True)  # stored encrypted
+    github_access_token = Column(String, nullable=True)
+    github_refresh_token = Column(String, nullable=True)
     github_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     github_refresh_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -153,3 +164,95 @@ class RefreshToken(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+class DocumentType(str, enum.Enum):
+    pdf = "pdf"
+    markdown = "markdown"
+    excel = "excel"
+
+
+class DocumentStatus(str, enum.Enum):
+    processing = "processing"
+    extracted = "extracted"
+    failed = "failed"
+
+
+class StoryPriority(str, enum.Enum):
+    critical = "critical"
+    high = "high"
+    medium = "medium"
+    low = "low"
+
+
+class AssignmentStatus(str, enum.Enum):
+    assigned = "assigned"
+    in_progress = "in_progress"
+    completed = "completed"
+    blocked = "blocked"
+
+
+class RequirementDocument(Base):
+    __tablename__ = "requirement_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uploaded_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    repository_id = Column(Integer, ForeignKey("repositories.id"), nullable=True)
+    title = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    file_type = Column(Enum(DocumentType), nullable=False)
+    status = Column(Enum(DocumentStatus), default=DocumentStatus.processing, nullable=False)
+    error_message = Column(Text, nullable=True)
+    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+
+    uploader = relationship("User", foreign_keys=[uploaded_by_id], backref="uploaded_documents")
+    repository = relationship("Repository", foreign_keys=[repository_id], backref="requirement_documents")
+    user_stories = relationship("UserStory", back_populates="document", cascade="all, delete-orphan")
+
+
+
+
+class UserStory(Base):
+    __tablename__ = "user_stories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("requirement_documents.id", ondelete="CASCADE"), nullable=False)
+    story_code = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    feature = Column(String, nullable=False)
+    benefit = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    acceptance_criteria = Column(JSON, nullable=False, default=[])
+    priority = Column(String, nullable=False, default="medium")
+    tags = Column(JSON, nullable=False, default=[])
+
+    technical_tasks = relationship("TechnicalTask", back_populates="story", cascade="all, delete-orphan")
+    document = relationship("RequirementDocument", back_populates="user_stories")
+
+
+class TechnicalTask(Base):
+    __tablename__ = "technical_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    story_id = Column(Integer, ForeignKey("user_stories.id", ondelete="CASCADE"), nullable=False)
+    description = Column(Text, nullable=False)
+    type = Column(postgresql.ENUM('backend', 'frontend', 'qa', name='developerspecialization', create_type=False), nullable=False)
+    status = Column(Enum(TaskStatus), nullable=False, default=TaskStatus.todo)
+    assigned_to = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    ac_ids = Column(JSON, nullable=True, default=[])
+    
+    due_date = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    story = relationship("UserStory", back_populates="technical_tasks")
+
+class RepositoryContributor(Base):
+    __tablename__ = "repository_contributors"
+
+    id = Column(Integer, primary_key=True, index=True)
+    repository_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    repository = relationship("Repository")
+    user = relationship("User")

@@ -39,8 +39,15 @@ const roles = [
   },
 ];
 
+const specializations = [
+  { value: "backend", label: "Backend" },
+  { value: "frontend", label: "Frontend" },
+  { value: "qa", label: "QA" },
+];
+
 const RoleSelection: React.FC = () => {
   const [selected, setSelected] = useState<string>("");
+  const [selectedSpec, setSelectedSpec] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<{username: string; full_name: string; work_email: string; avatar_url?: string} | null>(null);
@@ -54,10 +61,15 @@ const RoleSelection: React.FC = () => {
 
   const handleContinue = async () => {
     if (!selected) { setError("Please select a role to continue."); return; }
+    if (selected === "developer" && !selectedSpec) { setError("Please select a specialization."); return; }
+    
     setError(null);
     setLoading(true);
     try {
-      await api.patch("/auth/role", { role: selected });
+      await api.patch("/auth/complete-profile", { 
+        role: selected, 
+        specialization: selected === "developer" ? selectedSpec : null 
+      });
       if (selected === "manager")        navigate("/dashboard/manager");
       else if (selected === "recruiter") navigate("/dashboard/recruiter");
       else                               navigate("/dashboard/developer");
@@ -83,7 +95,6 @@ const RoleSelection: React.FC = () => {
           position: relative; overflow: hidden;
         }
 
-        /* Orbs */
         .rs-orb1 { position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
           width: 700px; height: 700px;
           background: radial-gradient(circle, rgba(124,58,237,0.2) 0%, transparent 65%);
@@ -102,27 +113,22 @@ const RoleSelection: React.FC = () => {
 
         .rs-content { position: relative; z-index: 2; width: 100%; max-width: 720px; display: flex; flex-direction: column; align-items: center; }
 
-        /* Logo */
         .rs-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
         .rs-logo-bars { display: flex; gap: 3px; align-items: flex-end; }
         .rs-logo-bars span { display: block; width: 4px; border-radius: 2px; }
         .rs-logo-name { font-family: 'Syne', sans-serif; font-size: 19px; font-weight: 800; color: white; letter-spacing: -0.3px; }
         .rs-logo-name em { font-style: normal; color: #c4b5fd; }
 
-        /* Header */
         .rs-title { font-family: 'Syne', sans-serif; font-size: 26px; font-weight: 800; color: white; letter-spacing: -0.8px; margin-bottom: 6px; text-align: center; }
         .rs-title em { font-style: normal; background: linear-gradient(135deg, #c4b5fd, #f472b6, #67e8f9); background-size: 300%; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: rsGrad 5s ease infinite; }
         @keyframes rsGrad { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
         .rs-subtitle { font-size: 13px; color: rgba(196,181,253,0.45); text-align: center; margin-bottom: 28px; line-height: 1.6; max-width: 400px; font-weight: 300; }
 
-        /* Layout */
         .rs-layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; width: 100%; animation: rsUp 0.45s cubic-bezier(0.22,1,0.36,1) both; }
         @keyframes rsUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
 
-        /* Cards base */
         .rs-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(167,139,250,0.14); border-radius: 20px; backdrop-filter: blur(20px); }
 
-        /* Account card */
         .rs-account-card { padding: 24px 20px; }
         .rs-account-label { font-size: 9.5px; font-weight: 700; color: rgba(167,139,250,0.4); letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 16px; }
 
@@ -147,7 +153,6 @@ const RoleSelection: React.FC = () => {
         .rs-info-label { font-size: 9.5px; font-weight: 700; color: rgba(167,139,250,0.35); letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 3px; display: flex; align-items: center; gap: 5px; }
         .rs-info-value { font-size: 12.5px; font-weight: 600; color: rgba(226,232,240,0.75); }
 
-        /* Role card */
         .rs-role-card { padding: 24px 22px; display: flex; flex-direction: column; }
         .rs-role-title { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 800; color: white; letter-spacing: -0.3px; margin-bottom: 3px; }
         .rs-role-subtitle { font-size: 11.5px; color: rgba(196,181,253,0.4); margin-bottom: 16px; line-height: 1.5; }
@@ -168,12 +173,10 @@ const RoleSelection: React.FC = () => {
         .rs-option.selected .rs-radio { border-color: #c4b5fd; background: #c4b5fd; }
         .rs-option.selected .rs-radio::after { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #1e1433; }
 
-        /* Error */
         .rs-error-wrap { height: 34px; margin-top: 10px; }
         .rs-error { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(244,114,182,0.08); border: 1px solid rgba(244,114,182,0.2); border-radius: 9px; font-size: 11px; color: #f472b6; font-weight: 500; height: 100%; animation: rsFade 0.2s ease; }
         @keyframes rsFade { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
 
-        /* Button */
         .rs-btn { width: 100%; height: 46px; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #c4b5fd, #f472b6, #67e8f9); background-size: 300%; border: none; border-radius: 13px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; color: #1e1433; cursor: pointer; transition: all 0.3s; box-shadow: 0 5px 18px rgba(196,181,253,0.2); animation: rsGrad 4s ease infinite; }
         .rs-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(244,114,182,0.3); }
         .rs-btn:disabled { opacity: 0.5; cursor: not-allowed; animation: none; background: rgba(167,139,250,0.2); color: rgba(255,255,255,0.4); box-shadow: none; }
@@ -193,7 +196,6 @@ const RoleSelection: React.FC = () => {
 
         <div className="rs-content">
 
-          {/* Logo */}
           <div className="rs-logo">
             <div className="rs-logo-bars">
               <span style={{height:'10px',background:'#7c3aed'}} />
@@ -211,7 +213,6 @@ const RoleSelection: React.FC = () => {
 
           <div className="rs-layout">
 
-            {/* Account card */}
             <div className="rs-card rs-account-card">
               <div className="rs-account-label">Linked Account</div>
 
@@ -250,24 +251,44 @@ const RoleSelection: React.FC = () => {
               </div>
             </div>
 
-            {/* Role card */}
             <div className="rs-card rs-role-card">
               <div className="rs-role-title">Select your primary role</div>
               <div className="rs-role-subtitle">This defines your dashboard view and can be changed later.</div>
 
               <div className="rs-options">
                 {roles.map(r => (
-                  <div
-                    key={r.value}
-                    className={`rs-option ${selected === r.value ? "selected" : ""}`}
-                    onClick={() => setSelected(r.value)}
-                  >
-                    <div className="rs-option-icon">{r.icon}</div>
-                    <div style={{flex:1}}>
-                      <div className="rs-option-label">{r.label}</div>
-                      <div className="rs-option-desc">{r.desc}</div>
+                  <div key={r.value} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <div
+                      className={`rs-option ${selected === r.value ? "selected" : ""}`}
+                      onClick={() => setSelected(r.value)}
+                    >
+                      <div className="rs-option-icon">{r.icon}</div>
+                      <div style={{flex:1}}>
+                        <div className="rs-option-label">{r.label}</div>
+                        <div className="rs-option-desc">{r.desc}</div>
+                      </div>
+                      <div className="rs-radio" />
                     </div>
-                    <div className="rs-radio" />
+
+                    {selected === "developer" && r.value === "developer" && (
+                      <div style={{ display: "flex", gap: "8px", marginLeft: "46px" }}>
+                        {specializations.map(s => (
+                          <div
+                            key={s.value}
+                            className={`rs-option ${selectedSpec === s.value ? "selected" : ""}`}
+                            style={{ flex: 1, padding: "8px 10px", justifyContent: "center" }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSpec(s.value);
+                            }}
+                          >
+                            <div className="rs-option-label" style={{ fontSize: "11.5px", marginBottom: 0 }}>
+                              {s.label}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

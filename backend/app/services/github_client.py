@@ -366,3 +366,19 @@ def _raise_for_github_error(response: httpx.Response, resource: str = "resource"
         status_code=502,
         detail=f"Unexpected response from GitHub API (HTTP {response.status_code}).",
     )
+
+async def fetch_repo_collaborators(github_token: str | None, full_name: str) -> list[dict]:
+    """Fetch all collaborators (everyone with access) for a given repository."""
+    headers = {**_GITHUB_HEADERS}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{full_name}/collaborators",
+            headers=headers,
+            params={"per_page": 100}
+        )
+
+    _raise_for_github_error(response, resource="repository collaborators")
+    return response.json()
