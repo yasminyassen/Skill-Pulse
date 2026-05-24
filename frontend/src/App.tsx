@@ -14,6 +14,7 @@ import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
 import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
 import RecruiterDashboard from './pages/Dashboard/RecruiterDashboard';
+import RecruiterProfile from './pages/Dashboard/RecruiterProfile';
 
 import AccountSettings from './pages/Dashboard/AccountSettings';
 import ConnectedRepositories from './pages/Dashboard/ConnectedRepositories';
@@ -64,7 +65,7 @@ function App() {
         {/* ── Recruiter routes ── */}
         <Route path="/dashboard/recruiter" element={<RecruiterDashboard />} />
         <Route path="/dashboard/recruiter/analysis" element={<RecruiterDashboard />} />
-        <Route path="/dashboard/recruiter/profile" element={<RecruiterDashboard />} />
+        <Route path="/dashboard/recruiter/profile" element={<RecruiterProfile />} />
         <Route path="/dashboard/recruiter/candidates" element={<CandidateEvaluation />} />
 
         {/* ── Fallback ── */}

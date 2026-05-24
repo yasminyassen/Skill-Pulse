@@ -275,10 +275,20 @@ async def analyze_github_classroom(
             .order_by(RepositoryAnalysis.id.desc())
             .first()
         )
+        
+        
+        last_run_exists = False
+        if existing_analysis and existing_analysis.last_run_id:
+            last_run_exists = (
+                db.query(AnalysisRun)
+                .filter(AnalysisRun.id == existing_analysis.last_run_id)
+                .first()
+            ) is not None
 
         needs_reanalysis = (
             force_reanalyze
             or not existing_analysis
+            or not last_run_exists  
             or existing_analysis.latest_commit_sha != head_sha
             or existing_analysis.analysis_version != analysis_version
             or existing_analysis.analysis_status == "failed"

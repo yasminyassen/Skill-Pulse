@@ -12,7 +12,7 @@ for _p in [_BACKEND_DIR, _CWD]:
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from app.api.recruiter import router as recruiter_router
 from app.api import auth
 from app.api import github_oauth
 from app.api import analysis
@@ -75,5 +75,5 @@ app.include_router(security_report.router)
 app.include_router(repos.router)
 app.include_router(profile_router)
 app.include_router(github_classroom.router)
-
+app.include_router(recruiter_router)
 app.include_router(requirements.router)

@@ -40,6 +40,19 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     organization = Column(String, nullable=True)
     job_title    = Column(String, nullable=True)
+    
+    
+    department              = Column(String,  nullable=True)
+    hiring_focus            = Column(String,  nullable=True)
+
+    security_score_visible  = Column(Boolean, nullable=True, default=True)
+    high_priority_threshold = Column(Integer, nullable=True, default=75)
+    weight_code_quality     = Column(Integer, nullable=True, default=40)
+    weight_security         = Column(Integer, nullable=True, default=30)
+    weight_git_activity     = Column(Integer, nullable=True, default=20)
+    weight_requirements     = Column(Integer, nullable=True, default=10)
+   
+    
     analysis_runs = relationship("AnalysisRun", back_populates="user", cascade="all, delete-orphan")
 
 class Repository(Base):
@@ -151,6 +164,7 @@ class SkillScore(Base):
     security_awareness_score = Column(Float)
     problem_solving_score = Column(Float)
     overall_score = Column(Float)
+    
 
     analysis_run = relationship("AnalysisRun", back_populates="skill_scores")
     user = relationship("User")
