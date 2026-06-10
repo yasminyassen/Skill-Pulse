@@ -1,5 +1,37 @@
-import { useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+
+// ─── Theme Context ─────────────────────────────────────────────────────────
+
+type Theme = "dark" | "light";
+
+const ThemeContext = createContext<{ theme: Theme; toggle: () => void }>({
+  theme: "dark",
+  toggle: () => {},
+});
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, setTheme] = useState<Theme>(
+    () => (localStorage.getItem("sp_theme") as Theme) || "dark"
+  );
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("sp_theme", theme);
+  }, [theme]);
+
+  const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+
+  return (
+    <ThemeContext.Provider value={{ theme, toggle }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+}
+
+export const useTheme = () => useContext(ThemeContext);
+
+// ─── Types ─────────────────────────────────────────────────────────────────
 
 interface NavItem {
   label: string;
@@ -10,6 +42,8 @@ interface NavItem {
 interface DashboardLayoutProps {
   children: React.ReactNode;
 }
+
+// ─── Icons ─────────────────────────────────────────────────────────────────
 
 const icons = {
   repo: (
@@ -58,90 +92,98 @@ const icons = {
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
     </svg>
   ),
+  sun: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="5"/>
+      <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+      <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+    </svg>
+  ),
+  moon: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+  ),
 };
+
+// ─── Nav config ────────────────────────────────────────────────────────────
 
 const navByRole: Record<string, NavItem[]> = {
   developer: [
-    { label: "Repository Analysis", path: "/dashboard/developer/analysis", icon: icons.repo },
-    { label: "Skills", path: "/dashboard/developer/skills", icon: icons.skills },
-    { label: "Security", path: "/dashboard/developer/security", icon: icons.security },
-    { label: "Requirements", path: "/dashboard/developer/requirements", icon: icons.requirements },
-    { label: "Learning", path: "/dashboard/developer/learning", icon: icons.learning },
-    { label: "Profile", path: "/dashboard/developer/profile", icon: icons.profile },
+    { label: "Repository Analysis", path: "/dashboard/developer/analysis",  icon: icons.repo         },
+    { label: "Skills",              path: "/dashboard/developer/skills",     icon: icons.skills       },
+    { label: "Security",            path: "/dashboard/developer/security",   icon: icons.security     },
+    { label: "Requirements",        path: "/dashboard/developer/requirements", icon: icons.requirements },
+    { label: "Learning",            path: "/dashboard/developer/learning",   icon: icons.learning     },
+    { label: "Profile",             path: "/dashboard/developer/profile",    icon: icons.profile      },
   ],
   manager: [
-    { label: "Repository Analysis", path: "/dashboard/manager/analysis", icon: icons.repo },
-    { label: "Security", path: "/dashboard/manager/security", icon: icons.security },
-    { label: "Requirements", path: "/dashboard/manager/requirements", icon: icons.requirements },
-    { label: "Profile", path: "/dashboard/manager/profile", icon: icons.profile },
-    { label: "Team Dashboard", path: "/dashboard/manager/team", icon: icons.team },
+    { label: "Repository Analysis", path: "/dashboard/manager/analysis",    icon: icons.repo         },
+    { label: "Security",            path: "/dashboard/manager/security",     icon: icons.security     },
+    { label: "Requirements",        path: "/dashboard/manager/requirements", icon: icons.requirements },
+    { label: "Profile",             path: "/dashboard/manager/profile",      icon: icons.profile      },
+    { label: "Team Dashboard",      path: "/dashboard/manager/team",         icon: icons.team         },
   ],
   recruiter: [
-    { label: "Repository Analysis", path: "/dashboard/recruiter/analysis", icon: icons.repo },
-    { label: "Profile", path: "/dashboard/recruiter/profile", icon: icons.profile },
-    { label: "Candidate View", path: "/dashboard/recruiter/candidates", icon: icons.candidate },
+    { label: "Repository Analysis", path: "/dashboard/recruiter/analysis",  icon: icons.repo         },
+    { label: "Profile",             path: "/dashboard/recruiter/profile",    icon: icons.profile      },
+    { label: "Candidate View",      path: "/dashboard/recruiter/candidates", icon: icons.candidate    },
   ],
 };
 
-const roleColors: Record<string, string> = {
-  developer: "#6366f1",
-  manager: "#8b5cf6",
-  recruiter: "#a855f7",
-};
+const roleColors: Record<string, string>  = { developer: "#6366f1", manager: "#8b5cf6", recruiter: "#a855f7" };
+const roleLabels: Record<string, string>  = { developer: "Developer", manager: "Manager", recruiter: "Recruiter" };
 
-const roleLabels: Record<string, string> = {
-  developer: "Developer",
-  manager: "Manager",
-  recruiter: "Recruiter",
-};
+// ─── Layout ────────────────────────────────────────────────────────────────
 
-export default function DashboardLayout({ children }: DashboardLayoutProps) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const role = localStorage.getItem("role") || "developer";
-  const fullName = localStorage.getItem("full_name") || "User";
-  const initials = fullName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2);
+function DashboardLayoutInner({ children }: DashboardLayoutProps) {
+  const navigate     = useNavigate();
+  const location     = useLocation();
+  const { theme, toggle } = useTheme();
+
+  const role      = localStorage.getItem("role") || "developer";
+  const fullName  = localStorage.getItem("full_name") || "User";
+  const initials  = fullName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2);
   const [collapsed, setCollapsed] = useState(false);
 
-  const navItems = navByRole[role] || navByRole.developer;
+  const navItems    = navByRole[role] || navByRole.developer;
   const accentColor = roleColors[role];
+  const isLight     = theme === "light";
 
-  const handleSignOut = () => {
-    localStorage.clear();
-    navigate("/login");
-  };
-
+  const handleSignOut = () => { localStorage.clear(); navigate("/login"); };
   const isActive = (path: string) => location.pathname === path;
 
   return (
     <div style={{
       display: "flex",
       minHeight: "100vh",
-      background: "#0a0a0f",
+      background: "var(--bg-base)",
       fontFamily: "'DM Sans', system-ui, sans-serif",
+      transition: "background 0.3s ease",
     }}>
-      {/* Sidebar */}
+      {/* ── Sidebar ── */}
       <aside style={{
         width: collapsed ? "72px" : "240px",
         minHeight: "100vh",
-        background: "rgba(255,255,255,0.02)",
-        borderRight: "1px solid rgba(255,255,255,0.06)",
+        background: "var(--bg-sidebar)",
+        borderRight: "1px solid var(--border-sidebar)",
         display: "flex",
         flexDirection: "column",
-        transition: "width 0.25s cubic-bezier(0.4,0,0.2,1)",
+        transition: "width 0.25s cubic-bezier(0.4,0,0.2,1), background 0.3s ease, border-color 0.3s ease",
         position: "sticky",
         top: 0,
         flexShrink: 0,
         overflow: "hidden",
         backdropFilter: "blur(20px)",
       }}>
-        {/* Logo */}
+
+        {/* Logo row */}
         <div style={{
-          padding: collapsed ? "20px 0" : "20px 20px",
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          borderBottom: "1px solid rgba(255,255,255,0.05)",
+          padding: collapsed ? "20px 0" : "20px",
+          display: "flex", alignItems: "center", gap: "10px",
+          borderBottom: "1px solid var(--border-sidebar)",
           justifyContent: collapsed ? "center" : "space-between",
           minHeight: "65px",
         }}>
@@ -150,18 +192,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <div style={{ display: "flex", gap: "2.5px", alignItems: "flex-end" }}>
                 {[10, 16, 24, 18, 12].map((h, i) => (
                   <span key={i} style={{
-                    display: "block", width: "3.5px", height: `${h}px`,
-                    borderRadius: "2px",
+                    display: "block", width: "3.5px", height: `${h}px`, borderRadius: "2px",
                     background: i < 3 ? accentColor : i === 3 ? "#ec4899" : "#c4b5fd",
                     opacity: i === 4 ? 0.6 : 1,
                   }} />
                 ))}
               </div>
-              <span style={{
-                fontFamily: "'Syne', sans-serif",
-                fontSize: "16px", fontWeight: 800, color: "white",
-                letterSpacing: "-0.3px", whiteSpace: "nowrap",
-              }}>
+              <span style={{ fontFamily: "'Syne', sans-serif", fontSize: "16px", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.3px", whiteSpace: "nowrap" }}>
                 <span style={{ color: accentColor }}>Skill</span>Pulse
               </span>
             </div>
@@ -169,28 +206,18 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           {collapsed && (
             <div style={{ display: "flex", gap: "2px", alignItems: "flex-end" }}>
               {[6, 10, 14].map((h, i) => (
-                <span key={i} style={{
-                  display: "block", width: "3px", height: `${h}px`,
-                  borderRadius: "2px", background: accentColor,
-                }} />
+                <span key={i} style={{ display: "block", width: "3px", height: `${h}px`, borderRadius: "2px", background: accentColor }} />
               ))}
             </div>
           )}
-          <button onClick={() => setCollapsed(!collapsed)} style={{
-            background: "none", border: "none", cursor: "pointer",
-            color: "rgba(255,255,255,0.3)", padding: "4px",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            borderRadius: "6px", transition: "all 0.2s",
-            flexShrink: 0,
-          }}
-            onMouseEnter={e => (e.currentTarget.style.color = "rgba(255,255,255,0.7)")}
-            onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.3)")}
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "6px", transition: "color 0.2s", flexShrink: 0 }}
+            onMouseEnter={e => (e.currentTarget.style.color = "var(--text-primary)")}
+            onMouseLeave={e => (e.currentTarget.style.color = "var(--text-muted)")}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              {collapsed
-                ? <><path d="M9 18l6-6-6-6"/></>
-                : <><path d="M15 18l-6-6 6-6"/></>
-              }
+              {collapsed ? <path d="M9 18l6-6-6-6"/> : <path d="M15 18l-6-6 6-6"/>}
             </svg>
           </button>
         </div>
@@ -198,26 +225,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         {/* Role badge */}
         {!collapsed && (
           <div style={{ padding: "12px 20px 8px" }}>
-            <div style={{
-              display: "inline-flex", alignItems: "center", gap: "6px",
-              background: `${accentColor}15`,
-              border: `1px solid ${accentColor}30`,
-              borderRadius: "20px", padding: "4px 10px",
-            }}>
-              <div style={{
-                width: "6px", height: "6px", borderRadius: "50%",
-                background: accentColor,
-              }} />
-              <span style={{ fontSize: "11px", fontWeight: 600, color: accentColor, letterSpacing: "0.5px" }}>
-                {roleLabels[role]}
-              </span>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: `${accentColor}15`, border: `1px solid ${accentColor}30`, borderRadius: "20px", padding: "4px 10px" }}>
+              <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: accentColor }} />
+              <span style={{ fontSize: "11px", fontWeight: 600, color: accentColor, letterSpacing: "0.5px" }}>{roleLabels[role]}</span>
             </div>
           </div>
         )}
 
-        {/* Nav items */}
+        {/* Nav */}
         <nav style={{ flex: 1, padding: collapsed ? "8px 10px" : "8px 12px", display: "flex", flexDirection: "column", gap: "2px" }}>
-          {navItems.map((item) => {
+          {navItems.map(item => {
             const active = isActive(item.path);
             return (
               <button
@@ -225,38 +242,21 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 onClick={() => navigate(item.path)}
                 title={collapsed ? item.label : undefined}
                 style={{
-                  display: "flex", alignItems: "center",
-                  gap: "10px",
+                  display: "flex", alignItems: "center", gap: "10px",
                   padding: collapsed ? "10px" : "9px 12px",
                   justifyContent: collapsed ? "center" : "flex-start",
                   borderRadius: "10px", border: "none", cursor: "pointer",
                   background: active ? `${accentColor}18` : "transparent",
-                  color: active ? "white" : "rgba(255,255,255,0.45)",
+                  color: active ? "var(--text-nav-active)" : "var(--text-nav)",
                   fontSize: "13.5px", fontWeight: active ? 600 : 400,
                   transition: "all 0.15s",
-                  position: "relative",
-                  width: "100%", textAlign: "left",
-                  whiteSpace: "nowrap",
+                  position: "relative", width: "100%", textAlign: "left", whiteSpace: "nowrap",
                 }}
-                onMouseEnter={e => {
-                  if (!active) {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.05)";
-                    e.currentTarget.style.color = "rgba(255,255,255,0.75)";
-                  }
-                }}
-                onMouseLeave={e => {
-                  if (!active) {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = "rgba(255,255,255,0.45)";
-                  }
-                }}
+                onMouseEnter={e => { if (!active) { e.currentTarget.style.background = "var(--bg-nav-hover)"; e.currentTarget.style.color = "var(--text-secondary)"; } }}
+                onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-nav)"; } }}
               >
                 {active && (
-                  <span style={{
-                    position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)",
-                    width: "3px", height: "18px", borderRadius: "0 3px 3px 0",
-                    background: accentColor,
-                  }} />
+                  <span style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", width: "3px", height: "18px", borderRadius: "0 3px 3px 0", background: accentColor }} />
                 )}
                 <span style={{ color: active ? accentColor : "inherit", flexShrink: 0 }}>{item.icon}</span>
                 {!collapsed && <span>{item.label}</span>}
@@ -265,32 +265,45 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           })}
         </nav>
 
-        {/* User + Sign out */}
-        <div style={{
-          padding: collapsed ? "12px 10px" : "12px",
-          borderTop: "1px solid rgba(255,255,255,0.05)",
-          display: "flex", flexDirection: "column", gap: "6px",
-        }}>
+        {/* Bottom: theme toggle + user + sign out */}
+        <div style={{ padding: collapsed ? "12px 10px" : "12px", borderTop: "1px solid var(--border-sidebar)", display: "flex", flexDirection: "column", gap: "6px" }}>
+
+          {/* Theme toggle */}
+          <button
+            onClick={toggle}
+            title={isLight ? "Switch to Dark Mode" : "Switch to Light Mode"}
+            style={{
+              display: "flex", alignItems: "center", gap: "8px",
+              padding: collapsed ? "10px" : "8px 10px",
+              justifyContent: collapsed ? "center" : "flex-start",
+              borderRadius: "8px", border: "1px solid var(--border)",
+              cursor: "pointer",
+              background: isLight ? "rgba(99,102,241,0.08)" : "rgba(255,255,255,0.04)",
+              color: isLight ? accentColor : "var(--text-muted)",
+              fontSize: "12.5px", fontWeight: 500,
+              transition: "all 0.2s", width: "100%",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = accentColor; e.currentTarget.style.color = accentColor; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = isLight ? accentColor : "var(--text-muted)"; }}
+          >
+            {isLight ? icons.moon : icons.sun}
+            {!collapsed && <span>{isLight ? "Dark Mode" : "Light Mode"}</span>}
+          </button>
+
+          {/* User info */}
           {!collapsed && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: "10px",
-              padding: "8px 10px", borderRadius: "10px",
-              background: "rgba(255,255,255,0.03)",
-            }}>
-              <div style={{
-                width: "32px", height: "32px", borderRadius: "50%", flexShrink: 0,
-                background: `linear-gradient(135deg, ${accentColor}, #ec4899)`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "12px", fontWeight: 700, color: "white",
-              }}>{initials}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px", borderRadius: "10px", background: "var(--bg-user)" }}>
+              <div style={{ width: "32px", height: "32px", borderRadius: "50%", flexShrink: 0, background: `linear-gradient(135deg, ${accentColor}, #ec4899)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700, color: "white" }}>
+                {initials}
+              </div>
               <div style={{ overflow: "hidden" }}>
-                <div style={{ fontSize: "12.5px", fontWeight: 600, color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {fullName}
-                </div>
-                <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)" }}>{roleLabels[role]}</div>
+                <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fullName}</div>
+                <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{roleLabels[role]}</div>
               </div>
             </div>
           )}
+
+          {/* Sign out */}
           <button
             onClick={handleSignOut}
             title={collapsed ? "Sign Out" : undefined}
@@ -299,18 +312,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               padding: collapsed ? "10px" : "8px 10px",
               justifyContent: collapsed ? "center" : "flex-start",
               borderRadius: "8px", border: "none", cursor: "pointer",
-              background: "transparent",
-              color: "rgba(255,255,255,0.3)",
+              background: "transparent", color: "var(--text-muted)",
               fontSize: "13px", transition: "all 0.15s", width: "100%",
             }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = "rgba(239,68,68,0.1)";
-              e.currentTarget.style.color = "#f87171";
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = "rgba(255,255,255,0.3)";
-            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.1)"; e.currentTarget.style.color = "#f87171"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-muted)"; }}
           >
             {icons.signout}
             {!collapsed && <span>Sign Out</span>}
@@ -318,10 +324,20 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* ── Main ── */}
       <main style={{ flex: 1, minHeight: "100vh", overflowY: "auto" }}>
         {children}
       </main>
     </div>
+  );
+}
+
+// ─── Export with provider ──────────────────────────────────────────────────
+
+export default function DashboardLayout({ children }: DashboardLayoutProps) {
+  return (
+    <ThemeProvider>
+      <DashboardLayoutInner>{children}</DashboardLayoutInner>
+    </ThemeProvider>
   );
 }
