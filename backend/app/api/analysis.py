@@ -491,10 +491,14 @@ async def get_recruiter_candidates(
         key=lambda item: _run_sort_time(item[0]),
         reverse=True,
     ):
+        recruiter_overall = compute_repository_display_score(
+            score.overall_score,
+            score.security_awareness_score,
+        )
         response.append(RecruiterCandidateRow(
             candidate_name=candidate.candidate_name,
             github_login=candidate.github_login or "",
-            overall_score=float(score.overall_score or 0.0),
+            overall_score=float(recruiter_overall or 0.0),
             code_quality=float(score.code_quality_score or 0.0),
             problem_solving=float(score.problem_solving_score or 0.0),
             architecture=float(score.architecture_score or 0.0),

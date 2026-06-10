@@ -71,8 +71,8 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_story_assignments_id'), 'story_assignments', ['id'], unique=False)
-    op.drop_index('ix_analysis_runs_commit_sha', table_name='analysis_runs')
-    op.drop_index('ix_analysis_runs_contribution_cache', table_name='analysis_runs')
+    op.execute("DROP INDEX IF EXISTS ix_analysis_runs_commit_sha")
+    op.execute("DROP INDEX IF EXISTS ix_analysis_runs_contribution_cache")
     # ### end Alembic commands ###
 
 

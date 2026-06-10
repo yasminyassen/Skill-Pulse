@@ -1,7 +1,7 @@
 """ recruiter_fields
 
 Revision ID: c6fe7e863631
-Revises: 9cfc54df3e59
+Revises: 8670bc648ccd, 9caea9779afb
 Create Date: 2026-05-25 00:39:00.369036
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'c6fe7e863631'
-down_revision: Union[str, None] = '9cfc54df3e59'
+down_revision: Union[str, tuple[str, str], None] = ('8670bc648ccd', '9caea9779afb')
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

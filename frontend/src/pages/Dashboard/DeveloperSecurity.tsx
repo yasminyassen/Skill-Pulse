@@ -126,6 +126,24 @@ function ScoreRing({ value, size = 80 }: { value: number; size?: number }) {
   );
 }
 
+function DeltaBadge({ delta, large = false }: { delta: number; large?: boolean }) {
+  if (!Number.isFinite(delta) || Math.abs(delta) < 0.05) return null;
+  const pos = delta > 0;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "4px",
+      padding: large ? "4px 10px" : "2px 7px",
+      borderRadius: "20px",
+      background: pos ? "rgba(52,211,153,0.15)" : "rgba(248,113,113,0.12)",
+      color: pos ? "#34d399" : "#f87171",
+      fontSize: large ? "13px" : "11px",
+      fontWeight: 700,
+    }}>
+      {pos ? "▲" : "▼"} {pos ? "+" : ""}{Math.abs(delta).toFixed(1)} pts
+    </span>
+  );
+}
+
 function SkeletonCard() {
   return (
     <div className="dim-card">
@@ -284,6 +302,11 @@ export default function DeveloperSecurity() {
   const [report, setReport] = useState<SecurityReport | null>(null);
   const [aggregateSecurityScore, setAggregateSecurityScore] = useState<number | null>(null);
   const [aggregateBreakdown, setAggregateBreakdown] = useState<SecurityScoreBreakdown | null>(null);
+  const [aggregateSecurityDelta, setAggregateSecurityDelta] = useState<number | null>(null);
+  const [aggregateBreakdownDeltas, setAggregateBreakdownDeltas] = useState<{
+    code_security: number;
+    dependency_security: number;
+  } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -310,6 +333,31 @@ export default function DeveloperSecurity() {
 
         setAggregateSecurityScore(scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : null);
         setAggregateBreakdown(averageBreakdowns(breakdowns));
+        const orderedDetails = repoList
+          .map((repo, index) => ({ repo, detail: details[index] }))
+          .filter(item => typeof item.detail?.scores?.security_score === "number")
+          .sort((a, b) => {
+            const aTime = a.repo.completed_at ? new Date(a.repo.completed_at).getTime() : 0;
+            const bTime = b.repo.completed_at ? new Date(b.repo.completed_at).getTime() : 0;
+            return (bTime - aTime) || (b.repo.analysis_id - a.repo.analysis_id);
+          });
+        const latest = orderedDetails[0]?.detail;
+        const previous = orderedDetails[1]?.detail;
+        setAggregateSecurityDelta(
+          latest && previous
+            ? safeNumber(latest.scores.security_score) - safeNumber(previous.scores.security_score)
+            : null,
+        );
+        const latestBreakdown = latest?.scores?.security_score_breakdown;
+        const previousBreakdown = previous?.scores?.security_score_breakdown;
+        setAggregateBreakdownDeltas(
+          latestBreakdown && previousBreakdown
+            ? {
+              code_security: safeNumber(latestBreakdown.code_security) - safeNumber(previousBreakdown.code_security),
+              dependency_security: safeNumber(latestBreakdown.dependency_security) - safeNumber(previousBreakdown.dependency_security),
+            }
+            : null,
+        );
       } finally {
         setLoadingRepos(false);
       }
@@ -445,9 +493,16 @@ export default function DeveloperSecurity() {
               {loadingRepos ? (
                 <div className="sk" style={{ width: "80px", height: "40px" }} />
               ) : (
-                <div style={{ fontSize: "42px", fontWeight: 800, color: "white", lineHeight: 1, letterSpacing: "-2px" }}>
-                  {aggregateSecurityScore == null ? "--" : score.toFixed(1)}
-                </div>
+                <>
+                  <div style={{ fontSize: "42px", fontWeight: 800, color: "white", lineHeight: 1, letterSpacing: "-2px" }}>
+                    {aggregateSecurityScore == null ? "--" : score.toFixed(1)}
+                  </div>
+                  {aggregateSecurityDelta != null && (
+                    <div style={{ marginTop: "4px", display: "flex", justifyContent: "flex-end" }}>
+                      <DeltaBadge delta={aggregateSecurityDelta} large />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -468,11 +523,13 @@ export default function DeveloperSecurity() {
                   label: "Code Security",
                   value: breakdown.code_security,
                   sub: `${breakdown.finding_counts.code_security} findings`,
+                  delta: aggregateBreakdownDeltas?.code_security ?? 0,
                 },
                 {
                   label: "Dependency Security",
                   value: breakdown.dependency_security,
                   sub: `${breakdown.finding_counts.dependency_security} findings`,
+                  delta: aggregateBreakdownDeltas?.dependency_security ?? 0,
                 },
               ].map(item => (
                 <div key={item.label} style={{ flex: 1, minWidth: "180px", display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
@@ -481,6 +538,7 @@ export default function DeveloperSecurity() {
                     <div style={{ fontSize: "13px", fontWeight: 600, color: "rgba(255,255,255,0.75)", marginBottom: "4px" }}>
                       {item.label}
                     </div>
+                    <DeltaBadge delta={item.delta} />
                     <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)" }}>{item.sub}</div>
                   </div>
                 </div>

@@ -275,17 +275,30 @@ async def background_analysis_task(
                     _add("style_violations", metrics.get("style_violations"))
                     _add("unused_variables", metrics.get("unused_variables"))
                     _add("avg_cyclomatic_complexity", metrics.get("avg_cyclomatic_complexity"))
+                    _add("avg_type_annotation_coverage", metrics.get("avg_type_annotation_coverage"))
+                    _add("magic_numbers", metrics.get("magic_numbers"))
+                    _add("dead_code_symbols", metrics.get("dead_code_symbols"))
                 elif skill == "maintainability":
                     _add("avg_docstring_coverage", metrics.get("avg_docstring_coverage"))
                     _add("avg_comment_ratio", metrics.get("avg_comment_ratio"))
                     _add("long_functions", metrics.get("long_functions"))
                     _add("too_many_params", metrics.get("too_many_params"))
                     _add("avg_maintainability_index", metrics.get("avg_maintainability_index"))
+                    _add("avg_official_maintainability_index", metrics.get("avg_official_maintainability_index"))
+                    _add("avg_halstead_volume", metrics.get("avg_halstead_volume"))
+                    _add("mutable_globals", metrics.get("mutable_globals"))
+                    _add("broad_exceptions", metrics.get("broad_exceptions"))
+                    _add("swallowed_exceptions", metrics.get("swallowed_exceptions"))
                 elif skill == "architecture":
                     _add("import_coupling_total", metrics.get("import_coupling_total"))
+                    _add("efferent_coupling_total", metrics.get("efferent_coupling_total"))
+                    _add("circular_import_count", metrics.get("circular_import_count"))
                     _add("max_inheritance_depth", metrics.get("max_inheritance_depth"))
                     _add("avg_nesting_depth", metrics.get("avg_nesting_depth"))
                     _add("avg_function_size", metrics.get("avg_function_size"))
+                    _add("avg_class_lcom", metrics.get("avg_class_lcom"))
+                    _add("god_classes", metrics.get("god_classes"))
+                    _add("class_count", metrics.get("class_count"))
 
                 return entries
 
@@ -435,13 +448,7 @@ async def background_analysis_task(
             metrics = file_report.get("metrics", {})
             maintainability_index = max(
                 0.0,
-                min(
-                    100.0,
-                    (metrics.get("docstring_coverage", 0.0) * 100)
-                    - (metrics.get("duplication_score", 0.0) * 50)
-                    - (metrics.get("style_violations", 0.0) * 2)
-                    - (metrics.get("avg_nesting_depth", 0.0) * 2),
-                ),
+                min(100.0, float(metrics.get("maintainability_index", 0.0) or 0.0)),
             )
 
             db.add(CodeMetrics(
