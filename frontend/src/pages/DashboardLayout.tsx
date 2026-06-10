@@ -112,35 +112,35 @@ const icons = {
 
 const navByRole: Record<string, NavItem[]> = {
   developer: [
-    { label: "Repository Analysis", path: "/dashboard/developer/analysis",  icon: icons.repo         },
-    { label: "Skills",              path: "/dashboard/developer/skills",     icon: icons.skills       },
-    { label: "Security",            path: "/dashboard/developer/security",   icon: icons.security     },
+    { label: "Repository Analysis", path: "/dashboard/developer/analysis",    icon: icons.repo         },
+    { label: "Skills",              path: "/dashboard/developer/skills",       icon: icons.skills       },
+    { label: "Security",            path: "/dashboard/developer/security",     icon: icons.security     },
     { label: "Requirements",        path: "/dashboard/developer/requirements", icon: icons.requirements },
-    { label: "Learning",            path: "/dashboard/developer/learning",   icon: icons.learning     },
-    { label: "Profile",             path: "/dashboard/developer/profile",    icon: icons.profile      },
+    { label: "Learning",            path: "/dashboard/developer/learning",     icon: icons.learning     },
+    { label: "Profile",             path: "/dashboard/developer/profile",      icon: icons.profile      },
   ],
   manager: [
-    { label: "Repository Analysis", path: "/dashboard/manager/analysis",    icon: icons.repo         },
-    { label: "Security",            path: "/dashboard/manager/security",     icon: icons.security     },
-    { label: "Requirements",        path: "/dashboard/manager/requirements", icon: icons.requirements },
-    { label: "Profile",             path: "/dashboard/manager/profile",      icon: icons.profile      },
-    { label: "Team Dashboard",      path: "/dashboard/manager/team",         icon: icons.team         },
+    { label: "Repository Analysis", path: "/dashboard/manager/analysis",      icon: icons.repo         },
+    { label: "Security",            path: "/dashboard/manager/security",       icon: icons.security     },
+    { label: "Requirements",        path: "/dashboard/manager/requirements",   icon: icons.requirements },
+    { label: "Profile",             path: "/dashboard/manager/profile",        icon: icons.profile      },
+    { label: "Team Dashboard",      path: "/dashboard/manager/team",           icon: icons.team         },
   ],
   recruiter: [
-    { label: "Repository Analysis", path: "/dashboard/recruiter/analysis",  icon: icons.repo         },
-    { label: "Profile",             path: "/dashboard/recruiter/profile",    icon: icons.profile      },
-    { label: "Candidate View",      path: "/dashboard/recruiter/candidates", icon: icons.candidate    },
+    { label: "Repository Analysis", path: "/dashboard/recruiter/analysis",    icon: icons.repo         },
+    { label: "Profile",             path: "/dashboard/recruiter/profile",      icon: icons.profile      },
+    { label: "Candidate View",      path: "/dashboard/recruiter/candidates",   icon: icons.candidate    },
   ],
 };
 
-const roleColors: Record<string, string>  = { developer: "#6366f1", manager: "#8b5cf6", recruiter: "#a855f7" };
-const roleLabels: Record<string, string>  = { developer: "Developer", manager: "Manager", recruiter: "Recruiter" };
+const roleColors: Record<string, string> = { developer: "#6366f1", manager: "#8b5cf6", recruiter: "#a855f7" };
+const roleLabels: Record<string, string> = { developer: "Developer", manager: "Manager", recruiter: "Recruiter" };
 
 // ─── Layout ────────────────────────────────────────────────────────────────
 
 function DashboardLayoutInner({ children }: DashboardLayoutProps) {
-  const navigate     = useNavigate();
-  const location     = useLocation();
+  const navigate  = useNavigate();
+  const location  = useLocation();
   const { theme, toggle } = useTheme();
 
   const role      = localStorage.getItem("role") || "developer";
@@ -151,6 +151,9 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
   const navItems    = navByRole[role] || navByRole.developer;
   const accentColor = roleColors[role];
   const isLight     = theme === "light";
+
+  // Sidebar width as a number so we can use it for the margin offset
+  const sidebarWidth = collapsed ? 72 : 240;
 
   const handleSignOut = () => { localStorage.clear(); navigate("/login"); };
   const isActive = (path: string) => location.pathname === path;
@@ -163,18 +166,20 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
       fontFamily: "'DM Sans', system-ui, sans-serif",
       transition: "background 0.3s ease",
     }}>
-      {/* ── Sidebar ── */}
+
+      {/* ── Sidebar (fixed) ── */}
       <aside style={{
-        width: collapsed ? "72px" : "240px",
-        minHeight: "100vh",
+        position: "fixed",
+        top: 0,
+        left: 0,
+        width: `${sidebarWidth}px`,
+        height: "100vh",
         background: "var(--bg-sidebar)",
         borderRight: "1px solid var(--border-sidebar)",
         display: "flex",
         flexDirection: "column",
         transition: "width 0.25s cubic-bezier(0.4,0,0.2,1), background 0.3s ease, border-color 0.3s ease",
-        position: "sticky",
-        top: 0,
-        flexShrink: 0,
+        zIndex: 100,
         overflow: "hidden",
         backdropFilter: "blur(20px)",
       }}>
@@ -186,6 +191,7 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
           borderBottom: "1px solid var(--border-sidebar)",
           justifyContent: collapsed ? "center" : "space-between",
           minHeight: "65px",
+          flexShrink: 0,
         }}>
           {!collapsed && (
             <div style={{ display: "flex", alignItems: "center", gap: "9px" }}>
@@ -224,7 +230,7 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
 
         {/* Role badge */}
         {!collapsed && (
-          <div style={{ padding: "12px 20px 8px" }}>
+          <div style={{ padding: "12px 20px 8px", flexShrink: 0 }}>
             <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: `${accentColor}15`, border: `1px solid ${accentColor}30`, borderRadius: "20px", padding: "4px 10px" }}>
               <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: accentColor }} />
               <span style={{ fontSize: "11px", fontWeight: 600, color: accentColor, letterSpacing: "0.5px" }}>{roleLabels[role]}</span>
@@ -232,8 +238,8 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
           </div>
         )}
 
-        {/* Nav */}
-        <nav style={{ flex: 1, padding: collapsed ? "8px 10px" : "8px 12px", display: "flex", flexDirection: "column", gap: "2px" }}>
+        {/* Nav — scrollable if needed */}
+        <nav style={{ flex: 1, padding: collapsed ? "8px 10px" : "8px 12px", display: "flex", flexDirection: "column", gap: "2px", overflowY: "auto" }}>
           {navItems.map(item => {
             const active = isActive(item.path);
             return (
@@ -251,6 +257,7 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
                   fontSize: "13.5px", fontWeight: active ? 600 : 400,
                   transition: "all 0.15s",
                   position: "relative", width: "100%", textAlign: "left", whiteSpace: "nowrap",
+                  flexShrink: 0,
                 }}
                 onMouseEnter={e => { if (!active) { e.currentTarget.style.background = "var(--bg-nav-hover)"; e.currentTarget.style.color = "var(--text-secondary)"; } }}
                 onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-nav)"; } }}
@@ -266,7 +273,7 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
         </nav>
 
         {/* Bottom: theme toggle + user + sign out */}
-        <div style={{ padding: collapsed ? "12px 10px" : "12px", borderTop: "1px solid var(--border-sidebar)", display: "flex", flexDirection: "column", gap: "6px" }}>
+        <div style={{ padding: collapsed ? "12px 10px" : "12px", borderTop: "1px solid var(--border-sidebar)", display: "flex", flexDirection: "column", gap: "6px", flexShrink: 0 }}>
 
           {/* Theme toggle */}
           <button
@@ -324,8 +331,14 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
         </div>
       </aside>
 
-      {/* ── Main ── */}
-      <main style={{ flex: 1, minHeight: "100vh", overflowY: "auto" }}>
+      {/* ── Main — offset by sidebar width ── */}
+      <main style={{
+        marginLeft: `${sidebarWidth}px`,
+        flex: 1,
+        minHeight: "100vh",
+        overflowY: "auto",
+        transition: "margin-left 0.25s cubic-bezier(0.4,0,0.2,1)",
+      }}>
         {children}
       </main>
     </div>

@@ -47,6 +47,185 @@ const CheckIcon = () => (
   </svg>
 );
 
+const UploadIcon = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    <polyline points="17 8 12 3 7 8"/>
+    <line x1="12" y1="3" x2="12" y2="15"/>
+  </svg>
+);
+
+const FileIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/>
+  </svg>
+);
+
+const XIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18"/>
+    <line x1="6" y1="6" x2="18" y2="18"/>
+  </svg>
+);
+
+// ─── Custom File Upload Zone ──────────────────────────────────────────────
+
+function FileUploadZone({
+  file,
+  onChange,
+}: {
+  file: File | null;
+  onChange: (f: File | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    const dropped = e.dataTransfer.files?.[0];
+    if (dropped) onChange(dropped);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragging(true); };
+  const handleDragLeave = () => setDragging(false);
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <div>
+      <label style={{
+        fontSize: 12, letterSpacing: "0.6px", textTransform: "uppercase" as const,
+        color: "rgba(167,139,250,0.8)", fontWeight: 700, display: "block", marginBottom: 10,
+      }}>
+        Candidate file (.csv, .xlsx, .xls)
+      </label>
+
+      {/* Hidden real input */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".csv,.xlsx,.xls"
+        style={{ display: "none" }}
+        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+      />
+
+      {!file ? (
+        /* Drop zone */
+        <div
+          onClick={() => inputRef.current?.click()}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          style={{
+            border: `2px dashed ${dragging ? "rgba(99,102,241,0.7)" : "rgba(99,102,241,0.25)"}`,
+            borderRadius: 14,
+            padding: "28px 20px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 10,
+            cursor: "pointer",
+            background: dragging ? "rgba(99,102,241,0.07)" : "rgba(99,102,241,0.03)",
+            transition: "all 0.2s",
+            userSelect: "none",
+          }}
+          onMouseEnter={e => {
+            if (!dragging) {
+              (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(99,102,241,0.5)";
+              (e.currentTarget as HTMLDivElement).style.background = "rgba(99,102,241,0.06)";
+            }
+          }}
+          onMouseLeave={e => {
+            if (!dragging) {
+              (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(99,102,241,0.25)";
+              (e.currentTarget as HTMLDivElement).style.background = "rgba(99,102,241,0.03)";
+            }
+          }}
+        >
+          <div style={{
+            width: 52, height: 52, borderRadius: "50%",
+            background: "rgba(99,102,241,0.12)",
+            border: "1px solid rgba(99,102,241,0.2)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "rgba(167,139,250,0.8)",
+          }}>
+            <UploadIcon />
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+              Drop your file here, or{" "}
+              <span style={{ color: "#a78bfa", textDecoration: "underline", textUnderlineOffset: 3 }}>browse</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+              Supports .csv, .xlsx, .xls
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* File selected state */
+        <div style={{
+          border: "1px solid rgba(99,102,241,0.35)",
+          borderRadius: 14,
+          padding: "14px 16px",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          background: "rgba(99,102,241,0.06)",
+        }}>
+          <div style={{
+            width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+            background: "rgba(99,102,241,0.15)",
+            border: "1px solid rgba(99,102,241,0.25)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "#a78bfa",
+          }}>
+            <FileIcon />
+          </div>
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {file.name}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+              {formatSize(file.size)}
+            </div>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange(null);
+              if (inputRef.current) inputRef.current.value = "";
+            }}
+            style={{
+              width: 28, height: 28, borderRadius: 8, border: "1px solid rgba(248,113,113,0.25)",
+              background: "rgba(248,113,113,0.08)", color: "rgba(248,113,113,0.8)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", flexShrink: 0, transition: "all 0.15s",
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = "rgba(248,113,113,0.18)";
+              e.currentTarget.style.color = "#f87171";
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = "rgba(248,113,113,0.08)";
+              e.currentTarget.style.color = "rgba(248,113,113,0.8)";
+            }}
+          >
+            <XIcon />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────
+
 export default function RecruiterDashboard() {
   const location = useLocation();
   const isCandidateView = location.pathname.includes("/candidates");
@@ -166,6 +345,13 @@ export default function RecruiterDashboard() {
     } else {
       setError(typeof detail === "string" ? detail : "Request failed. Please try again.");
     }
+  };
+
+  const handleFileChange = (f: File | null) => {
+    setUploadFile(f);
+    setShowPreview(false);
+    setPreviewRows([]);
+    setPreviewSkipped([]);
   };
 
   const handlePreview = async () => {
@@ -316,32 +502,20 @@ export default function RecruiterDashboard() {
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.1fr) minmax(0,0.9fr)", gap: 22 }}>
             {card(
               <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                <div>
-                  <label style={{ fontSize: 12, letterSpacing: "0.6px", textTransform: "uppercase" as const, color: "rgba(167,139,250,0.8)", fontWeight: 700 }}>
-                    Candidate file (.csv, .xlsx, .xls)
-                  </label>
-                  <input
-                    type="file"
-                    accept=".csv,.xlsx,.xls"
-                    onChange={(e) => {
-                      setUploadFile(e.target.files?.[0] ?? null);
-                      setShowPreview(false);
-                      setPreviewRows([]);
-                      setPreviewSkipped([]);
-                    }}
-                    style={{
-                      marginTop: 8, width: "100%",
-                      background: "var(--bg-input)",
-                      border: "1px solid rgba(99,102,241,0.25)",
-                      color: "var(--text-primary)",
-                      borderRadius: 12, padding: "12px 14px", fontSize: 13,
-                    }}
-                  />
-                  <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
-                    Required columns: <code style={{ background: "var(--bg-card-hover)", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>candidate_name</code>, <code style={{ background: "var(--bg-card-hover)", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>repo_url</code>. Optional: <code style={{ background: "var(--bg-card-hover)", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>branch</code>.
-                  </div>
-                  <a href="/recruiter-candidate-template.csv" download style={{ display: "inline-block", marginTop: 8, fontSize: 12, color: "#a78bfa", textDecoration: "none" }}>
-                    Download CSV template
+
+                {/* Custom file upload zone */}
+                <FileUploadZone file={uploadFile} onChange={handleFileChange} />
+
+                {/* Helper text */}
+                <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+                  Required columns:{" "}
+                  <code style={{ background: "var(--bg-card-hover)", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>candidate_name</code>,{" "}
+                  <code style={{ background: "var(--bg-card-hover)", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>repo_url</code>.
+                  {" "}Optional:{" "}
+                  <code style={{ background: "var(--bg-card-hover)", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>branch</code>.
+                  <br />
+                  <a href="/recruiter-candidate-template.csv" download style={{ color: "#a78bfa", textDecoration: "none", display: "inline-block", marginTop: 4 }}>
+                    Download CSV template ↓
                   </a>
                 </div>
 
@@ -371,8 +545,9 @@ export default function RecruiterDashboard() {
                     height: 46, borderRadius: 12, border: "none",
                     background: "linear-gradient(135deg,#6366f1,#ec4899)",
                     color: "white", fontWeight: 700, fontSize: 14,
-                    cursor: loading ? "not-allowed" : "pointer",
-                    opacity: loading ? 0.7 : 1,
+                    cursor: loading || !uploadFile ? "not-allowed" : "pointer",
+                    opacity: loading || !uploadFile ? 0.5 : 1,
+                    transition: "opacity 0.2s",
                   }}
                 >
                   {loading && !showPreview ? "Reading file…" : "Preview candidates"}
