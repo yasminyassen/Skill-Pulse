@@ -10,7 +10,6 @@ const Register: React.FC = () => {
   const [showConfirm, setShowConfirm] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -75,7 +74,7 @@ const Register: React.FC = () => {
         specialization: form.role === 'developer' ? form.specialization : undefined,
         password: form.password,
       });
-      setSuccess(true);
+      window.location.href = `/verify-email?email=${encodeURIComponent(form.work_email)}`;
     } catch (err: unknown) {
       const axiosError = err as {
         response?: {
@@ -98,77 +97,6 @@ const Register: React.FC = () => {
       setLoading(false);
     }
   };
-
-  // ── Success screen ──────────────────────────────────────────────────
-  if (success) return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: #0f0c1a; }
-        .sp-success-page {
-          min-height: 100vh; display: flex; align-items: center; justify-content: center;
-          background: #0f0c1a; font-family: 'DM Sans', sans-serif; padding: 24px;
-          position: relative; overflow: hidden;
-        }
-        .sp-orb {
-          position: fixed; border-radius: 50%;
-          background: radial-gradient(circle, rgba(124,58,237,0.22) 0%, transparent 65%);
-          width: 700px; height: 700px; top: -200px; left: -150px; pointer-events: none;
-        }
-        .sp-grid {
-          position: fixed; inset: 0;
-          background-image: linear-gradient(rgba(167,139,250,0.04) 1px, transparent 1px),
-                            linear-gradient(90deg, rgba(167,139,250,0.04) 1px, transparent 1px);
-          background-size: 48px 48px; pointer-events: none;
-        }
-        .sp-success-card {
-          background: rgba(255,255,255,0.04); border: 1px solid rgba(167,139,250,0.15);
-          border-radius: 24px; padding: 56px 48px; text-align: center;
-          max-width: 420px; width: 100%; position: relative; z-index: 2;
-          animation: popIn 0.4s cubic-bezier(0.22,1,0.36,1) both;
-          backdrop-filter: blur(20px);
-        }
-        @keyframes popIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        .sp-success-icon {
-          width: 64px; height: 64px; background: rgba(167,139,250,0.1);
-          border-radius: 50%; display: flex; align-items: center; justify-content: center;
-          margin: 0 auto 20px; border: 1px solid rgba(167,139,250,0.2);
-        }
-        .sp-success-title { font-family: 'Syne', sans-serif; font-size: 24px; font-weight: 800; color: white; margin-bottom: 8px; letter-spacing: -0.5px; }
-        .sp-success-sub { font-size: 14px; color: rgba(196,181,253,0.5); margin-bottom: 28px; line-height: 1.7; }
-        .sp-signin-btn {
-          display: inline-flex; align-items: center; gap: 8px;
-          padding: 13px 28px;
-          background: linear-gradient(135deg, #7c3aed, #a855f7);
-          color: white; border: none; border-radius: 13px;
-          font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600;
-          cursor: pointer; transition: all 0.2s;
-          box-shadow: 0 6px 20px rgba(124,58,237,0.3);
-        }
-        .sp-signin-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(124,58,237,0.4); }
-      `}</style>
-      <div className="sp-success-page">
-        <div className="sp-orb" />
-        <div className="sp-grid" />
-        <div className="sp-success-card">
-          <div className="sp-success-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#c4b5fd" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
-            </svg>
-          </div>
-          <div className="sp-success-title">Account created!</div>
-          <div className="sp-success-sub">Welcome to SkillPulse.<br/>Sign in to start your skill analysis.</div>
-          <button className="sp-signin-btn" onClick={() => window.location.href = '/login'}>
-            Sign in now
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 12h14M12 5l7 7-7 7"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-    </>
-  );
 
   // ── Main register page ──────────────────────────────────────────────
   return (

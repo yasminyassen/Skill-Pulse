@@ -40,7 +40,10 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     organization = Column(String, nullable=True)
     job_title    = Column(String, nullable=True)
-    
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verification_code = Column(String, nullable=True)
+    reset_password_token = Column(String, nullable=True)
+    reset_password_expires_at = Column(DateTime(timezone=True), nullable=True)
     
     department              = Column(String,  nullable=True)
     hiring_focus            = Column(String,  nullable=True)

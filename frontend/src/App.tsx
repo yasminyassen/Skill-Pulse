@@ -3,6 +3,9 @@ import GitHubCallback from './pages/GitHubCallback';
 import Login from './pages/Login';
 import NotFound from './pages/NotFound';
 import Register from './pages/register';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import RepositoryAnalysis from "./pages/RepositoryAnalysis";
 import RoleSelection from './pages/RoleSelection';
 
@@ -35,6 +38,9 @@ function App() {
         {/* ── Auth pages ── */}
         <Route path="/" element={<Register />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/auth/github/callback" element={<GitHubCallback />} />
         <Route path="/select-role" element={<RoleSelection />} />
 

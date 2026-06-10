@@ -272,7 +272,7 @@ const Login: React.FC = () => {
                 <div className="lg-field">
                   <div className="lg-field-header">
                     <label className="lg-field-label">Password</label>
-                    <a href="#" className="lg-forgot" onClick={e => e.preventDefault()}>Forgot password?</a>
+                    <a href="/forgot-password" className="lg-forgot">Forgot password?</a>
                   </div>
                   <div className={`lg-input-wrap ${passwordFocused ? 'focused' : ''}`}>
                     <span className="lg-input-icon">

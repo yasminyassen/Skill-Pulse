@@ -59,7 +59,7 @@ const RoleSelection: React.FC = () => {
     }).catch(() => {});
   }, []);
 
-  const handleContinue = async () => {
+const handleContinue = async () => {
     if (!selected) { setError("Please select a role to continue."); return; }
     if (selected === "developer" && !selectedSpec) { setError("Please select a specialization."); return; }
     
@@ -70,6 +70,8 @@ const RoleSelection: React.FC = () => {
         role: selected, 
         specialization: selected === "developer" ? selectedSpec : null 
       });
+      localStorage.setItem("role", selected);
+
       if (selected === "manager")        navigate("/dashboard/manager");
       else if (selected === "recruiter") navigate("/dashboard/recruiter");
       else                               navigate("/dashboard/developer");

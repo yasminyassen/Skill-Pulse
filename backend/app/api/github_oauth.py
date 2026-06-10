@@ -203,6 +203,7 @@ async def github_callback(
             github_refresh_token=encrypted_refresh_token,
             github_token_expires_at=github_token_expires_at,
             github_refresh_token_expires_at=github_refresh_token_expires_at,
+            is_verified=True,
         )
         db.add(db_user)
         db.commit()

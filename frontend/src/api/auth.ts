@@ -38,6 +38,9 @@ const isRefreshableRequest = (url?: string) => {
   return !(
     url.includes("/auth/login") ||
     url.includes("/auth/register") ||
+    url.includes("/auth/verify-email") ||
+    url.includes("/auth/forgot-password") ||
+    url.includes("/auth/reset-password") ||
     url.includes("/auth/refresh") ||
     url.includes("/auth/github")
   );
@@ -142,6 +145,30 @@ export const register = async (data: {
   specialization?: string;
 }) => {
   const response = await api.post("/auth/register", data);
+  return response.data;
+};
+
+// ── Verify Email ──────────────────────────────────────────────────────────────
+export const verifyEmail = async (data: {
+  work_email: string;
+  code: string;
+}) => {
+  const response = await api.post("/auth/verify-email", data);
+  return response.data;
+};
+
+// ── Forgot Password ──────────────────────────────────────────────────────────
+export const forgotPassword = async (data: { email: string }) => {
+  const response = await api.post("/auth/forgot-password", data);
+  return response.data;
+};
+
+// ── Reset Password ───────────────────────────────────────────────────────────
+export const resetPassword = async (data: {
+  token: string;
+  new_password: string;
+}) => {
+  const response = await api.post("/auth/reset-password", data);
   return response.data;
 };
 
