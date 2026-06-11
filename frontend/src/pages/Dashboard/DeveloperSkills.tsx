@@ -10,13 +10,33 @@ interface SkillsSummary {
   repos: Array<{ analysis_id: number; repo_name: string; full_name: string; branch: string; completed_at: string | null; is_private: boolean; analysis_context?: AnalysisContext }>;
 }
 interface AnalysisContext { has_github_identity: boolean; github_login: string | null; is_private: boolean; user_contributed: boolean; commit_count_sample: number; latest_commit_at: string | null; }
+interface ArchitectureMetricEntry {
+  score: number;
+  method?: string;
+  confidence?: number;
+  reason?: string;
+  details?: Record<string, unknown>;
+}
 interface DetailedAnalysis {
   analysis_run_id: number; repo: string; branch: string; status: string;
   scores: { code_quality: number; maintainability: number; architecture: number; security_score: number; problem_solving: number; overall: number };
   detailed_metrics: {
     code_quality: { python_files: number; total_loc: number; avg_cyclomatic_complexity: number; avg_duplication_score: number; style_violations: number; unused_variables: number };
     maintainability: { avg_docstring_coverage: number; missing_docstrings: number; avg_maintainability_index: number; avg_comment_ratio: number; long_functions: number; too_many_params: number };
-    architecture: { import_coupling_total: number; max_inheritance_depth: number; avg_nesting_depth: number; avg_function_size: number; deep_nesting: number };
+    architecture: {
+      overall?: number;
+      note?: string;
+      layer_count_srp?: ArchitectureMetricEntry;
+      repository_pattern?: ArchitectureMetricEntry;
+      dependency_injection?: ArchitectureMetricEntry;
+      circular_imports?: ArchitectureMetricEntry;
+      open_closed_readiness?: ArchitectureMetricEntry;
+      swappable_components?: ArchitectureMetricEntry;
+      module_decomposition?: ArchitectureMetricEntry;
+      god_class_function?: ArchitectureMetricEntry;
+      coupling?: ArchitectureMetricEntry;
+      cohesion?: ArchitectureMetricEntry;
+    };
     problem_solving: { test_files: number; avg_test_function_ratio: number; avg_cyclomatic_complexity: number; long_functions: number };
   };
   security: { findings_count: number; severity_distribution: { HIGH: number; MEDIUM: number; LOW: number } };
@@ -30,16 +50,65 @@ interface DetailedAnalysis {
   completed_at: string | null; analysis_context?: AnalysisContext;
 }
 
+const ARCHITECTURE_METHOD_LABELS: Record<string, string> = {
+  LLM: "AI semantic review",
+  "LLM + AST": "Hybrid · AI + structure",
+  "LLM + AST (radon)": "Hybrid · AI + complexity",
+  "pydeps + import-linter": "Tool-based · import graph",
+  AST: "Static · structure map",
+};
+
+type ArchitectureMetricMeta = {
+  key: keyof DetailedAnalysis["detailed_metrics"]["architecture"];
+  label: string;
+  description: string;
+  evaluation: "llm" | "hybrid" | "static";
+};
+
+const ARCHITECTURE_METRICS: ArchitectureMetricMeta[] = [
+  { key: "layer_count_srp", label: "Layer Count / SRP", description: "Logical layering and single-responsibility separation", evaluation: "llm" },
+  { key: "repository_pattern", label: "Repository Pattern", description: "Data-access abstraction vs scattered persistence logic", evaluation: "llm" },
+  { key: "dependency_injection", label: "Dependency Injection", description: "Injected dependencies vs inline/hard-coded construction", evaluation: "llm" },
+  { key: "circular_imports", label: "Circular Imports", description: "Import cycles detected by pydeps and import-linter", evaluation: "static" },
+  { key: "open_closed_readiness", label: "Open/Closed Readiness", description: "Extensibility without modifying core modules", evaluation: "llm" },
+  { key: "swappable_components", label: "Swappable Components", description: "Abstractions that allow replacing implementations", evaluation: "llm" },
+  { key: "module_decomposition", label: "Module Decomposition", description: "Domain-aligned module boundaries (structure + AI review)", evaluation: "hybrid" },
+  { key: "god_class_function", label: "God Class / Function", description: "Multi-domain responsibilities and cyclomatic complexity", evaluation: "hybrid" },
+  { key: "coupling", label: "Coupling", description: "Semantic coupling and inline concrete service usage", evaluation: "hybrid" },
+  { key: "cohesion", label: "Cohesion", description: "Functional relatedness within modules and classes", evaluation: "llm" },
+];
+
 const scoreColor = (s: number) => s >= 80 ? "#34d399" : s >= 60 ? "#fbbf24" : "#f87171";
 const fmt = (n: number, decimals = 1) => Number.isFinite(n) ? n.toFixed(decimals) : "—";
 const pct = (n: number) => `${Math.round((n || 0) * 100)}%`;
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const normalize = (v: number, low: number, high: number) => high <= low ? 0 : clamp01((v - low) / (high - low));
 
+const formatArchSub = (entry?: ArchitectureMetricEntry, meta?: ArchitectureMetricMeta) => {
+  if (!entry) return "Not available";
+  const parts: string[] = [];
+  if (entry.method) {
+    parts.push(ARCHITECTURE_METHOD_LABELS[entry.method] || entry.method);
+  } else if (meta) {
+    parts.push(meta.evaluation === "llm" ? "AI semantic review" : meta.evaluation === "hybrid" ? "Hybrid evaluation" : "Tool-based");
+  }
+  if (entry.confidence != null) parts.push(`conf ${Math.round(entry.confidence * 100)}%`);
+  return parts.join(" · ") || "Scored";
+};
+
 const computeComplexityScore = (d: DetailedAnalysis) => {
-  const cq = d.detailed_metrics?.code_quality || {}; const m = d.detailed_metrics?.maintainability || {}; const a = d.detailed_metrics?.architecture || {};
+  const cq = d.detailed_metrics?.code_quality || {};
+  const m = d.detailed_metrics?.maintainability || {};
+  const couplingScore = d.detailed_metrics?.architecture?.coupling?.score;
   const files = Math.max(1, Number(cq.python_files || 0));
-  const penalty = (normalize(Number(cq.avg_cyclomatic_complexity || 0), 5, 40) * 0.30 + normalize(Number(a.avg_function_size || 0), 20, 90) * 0.15 + normalize(Number(a.avg_nesting_depth || 0), 1.5, 6) * 0.15 + normalize(Number(m.long_functions || 0) / files, 0.2, 2.5) * 0.10 + normalize(Number(m.too_many_params || 0) / files, 0.2, 2.5) * 0.10 + normalize(Number(cq.avg_duplication_score || 0), 0.05, 0.4) * 0.10 + normalize(Number(a.import_coupling_total || 0) / files, 2, 15) * 0.10);
+  const couplingPenalty = couplingScore != null ? (100 - couplingScore) / 100 : 0.3;
+  const penalty = (
+    normalize(Number(cq.avg_cyclomatic_complexity || 0), 5, 40) * 0.30
+    + normalize(Number(m.long_functions || 0) / files, 0.2, 2.5) * 0.20
+    + normalize(Number(m.too_many_params || 0) / files, 0.2, 2.5) * 0.15
+    + normalize(Number(cq.avg_duplication_score || 0), 0.05, 0.4) * 0.15
+    + couplingPenalty * 0.20
+  );
   return Math.round(100 * (1 - clamp01(penalty)));
 };
 const avgScore = (metrics: Array<{ value: number }>) => { if (!metrics.length) return 0; return Math.round(metrics.reduce((acc, m) => acc + (Number.isFinite(m.value) ? m.value : 0), 0) / metrics.length); };
@@ -169,18 +238,41 @@ const DIMENSIONS = [
     getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.maintainability || [],
   },
   {
-    key: "architecture" as const, label: "Architecture", desc: "Assesses structure and coupling around the files you contributed to",
+    key: "architecture" as const, label: "Architecture", desc: "Ten-metric pipeline: AI semantic review, hybrid AST signals, and import-graph tools",
     icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
     getMetrics: (d: DetailedAnalysis) => {
-      const a = d.detailed_metrics?.architecture || {}; const adj = d.ai_insights?.llm_adjustment_guidance?.architecture; const confidence = adj?.confidence ?? undefined;
-      const delta = adj && !adj.ignored ? (adj.applied_delta ?? 0) : 0; const s = (base: number) => Math.min(100, Math.max(0, base + delta));
-      const cs = Math.max(0, 100 - (a.import_coupling_total || 0) * 2); const cd = Math.min(100, (a.import_coupling_total || 0) * 2);
-      const ih = Math.max(0, 100 - (a.max_inheritance_depth || 0) * 10); const fn = Math.max(0, 100 - Math.max(0, (a.avg_function_size || 0) - 20) * 2);
-      const sd = Math.min(100, cs + 10);
-      return [{ label: "Class Design", value: sd, adjustedValue: s(sd), confidence, sub: `${cs > 70 ? "Good" : "Needs work"} · ${a.deep_nesting ?? 0} deep nesting` }, { label: "Coupling", value: cd, adjustedValue: s(cd), confidence, sub: `${a.import_coupling_total ?? 0} imports · ${cd > 70 ? "High" : "Low"} coupling` }, { label: "Function Size", value: fn, adjustedValue: s(fn), confidence, sub: `${fmt(a.avg_function_size || 0, 0)} LOC avg · nesting ${fmt(a.avg_nesting_depth || 0, 1)}` }, { label: "Inheritance Depth", value: ih, adjustedValue: s(ih), confidence, sub: `${a.max_inheritance_depth ?? 0} levels max` }];
+      const arch = d.detailed_metrics?.architecture || {};
+      if (arch.note && !arch.layer_count_srp) {
+        return [{ label: "Architecture metrics", value: arch.overall ?? 0, sub: arch.note }];
+      }
+      return ARCHITECTURE_METRICS.map(({ key, label, description, evaluation }) => {
+        const entry = arch[key] as ArchitectureMetricEntry | undefined;
+        const value = entry?.score ?? 0;
+        return {
+          label,
+          value,
+          confidence: entry?.confidence,
+          sub: `${formatArchSub(entry, { key, label, description, evaluation })} · ${description}`,
+        };
+      });
     },
-    getScore: (d: DetailedAnalysis) => { const v = llmScore(d, "architecture"); return v != null ? Math.round(v) : avgScore(DIMENSIONS[2].getMetrics(d)); },
-    getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.architecture || [],
+    getScore: (d: DetailedAnalysis) => {
+      const v = llmScore(d, "architecture");
+      if (v != null) return Math.round(v);
+      const arch = d.detailed_metrics?.architecture;
+      if (arch?.overall != null) return Math.round(arch.overall);
+      return avgScore(DIMENSIONS[2].getMetrics(d));
+    },
+    getInsights: (d: DetailedAnalysis) => {
+      const arch = d.detailed_metrics?.architecture || {};
+      const fromMetrics = ARCHITECTURE_METRICS.flatMap(({ key, label }) => {
+        const entry = arch[key] as ArchitectureMetricEntry | undefined;
+        if (!entry?.reason) return [];
+        return [`${label}: ${entry.reason}`];
+      });
+      if (fromMetrics.length) return fromMetrics;
+      return d.ai_insights?.skills_insights?.architecture || [];
+    },
   },
   {
     key: "problem_solving" as const, label: "Problem Solving", desc: "Analyzes complexity and problem-solving signals in your contribution area",
@@ -370,7 +462,7 @@ export default function DeveloperSkills() {
                         <label className="skl-label">Contribution Signals</label>
                         <div className="metrics-grid">{metrics.map((m, i) => (<MetricBar key={i} label={m.label} value={m.value} sub={m.sub} adjustedValue={(m as any).adjustedValue} confidence={(m as any).confidence} />))}</div>
                       </div>
-                      {(dim.key === "code_quality" || dim.key === "maintainability" || dim.key === "architecture") && (
+                      {(dim.key === "code_quality" || dim.key === "maintainability") && (
                         <div className="legend-bar">
                           {[{ color: "#10b981", label: "Static (rule-based) score" }, { color: "rgba(248,113,113,0.55)", label: "AI penalty zone" }].map(({ color, label }) => (
                             <div key={label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -381,6 +473,24 @@ export default function DeveloperSkills() {
                           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                             <div style={{ display: "flex", gap: 2 }}>{[true, true, true, false, false].map((f, i) => (<div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: f ? "#34d399" : "var(--border-hover)", border: f ? "none" : "1px solid var(--border-hover)" }} />))}</div>
                             <span style={{ fontSize: 11, color: "var(--text-muted)" }}>AI confidence (1–5 dots)</span>
+                          </div>
+                        </div>
+                      )}
+                      {dim.key === "architecture" && (
+                        <div className="legend-bar">
+                          {[
+                            { color: "#818cf8", label: "AI semantic review (LLM)" },
+                            { color: "#34d399", label: "Hybrid (AI + AST/radon)" },
+                            { color: "#fbbf24", label: "Tool-based (import graph)" },
+                          ].map(({ color, label }) => (
+                            <div key={label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                              <div style={{ width: 24, height: 5, borderRadius: 3, background: color }} />
+                              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}</span>
+                            </div>
+                          ))}
+                          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                            <div style={{ display: "flex", gap: 2 }}>{[true, true, true, false, false].map((f, i) => (<div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: f ? "#34d399" : "var(--border-hover)", border: f ? "none" : "1px solid var(--border-hover)" }} />))}</div>
+                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>AI confidence on hybrid/semantic metrics</span>
                           </div>
                         </div>
                       )}

@@ -740,6 +740,29 @@ async def get_detailed_metrics_breakdown(
         ai_insights = dict(ai_insights)
         ai_insights.pop("final_categorized_findings", None)
 
+    stored_arch = ai_insights.get("architecture_metrics") if isinstance(ai_insights, dict) else None
+    architecture_detailed: dict = {}
+    if isinstance(stored_arch, dict) and isinstance(stored_arch.get("metrics"), dict):
+        for metric_key, metric_entry in stored_arch["metrics"].items():
+            if not isinstance(metric_entry, dict):
+                continue
+            architecture_detailed[metric_key] = {
+                "score": round(safe_float(metric_entry.get("score"), 0.0), 2),
+                "method": metric_entry.get("method", ""),
+                "confidence": metric_entry.get("confidence"),
+                "reason": metric_entry.get("reason", ""),
+                "details": metric_entry.get("details", {}),
+            }
+        architecture_detailed["overall"] = round(safe_float(stored_arch.get("overall"), architecture_score), 2)
+        metric_methods = stored_arch.get("metric_methods")
+        if isinstance(metric_methods, dict):
+            architecture_detailed["metric_methods"] = metric_methods
+    else:
+        architecture_detailed = {
+            "overall": round(architecture_score, 2),
+            "note": "Re-run analysis to populate new architecture metrics.",
+        }
+
     analysis_context = await build_personal_repo_context(
         db,
         current_user,
@@ -779,13 +802,7 @@ async def get_detailed_metrics_breakdown(
                 "long_functions": long_functions_total,
                 "too_many_params": too_many_params_total,
             },
-            "architecture": {
-                "import_coupling_total": import_coupling_total,
-                "max_inheritance_depth": max_inheritance_depth,
-                "avg_nesting_depth": _avg(avg_nesting_values),
-                "avg_function_size": _avg(function_size_values),
-                "deep_nesting": deep_nesting_total,
-            },
+            "architecture": architecture_detailed,
             "problem_solving": {
                 "test_files": test_files_total,
                 "avg_test_function_ratio": _avg(test_ratio_values),

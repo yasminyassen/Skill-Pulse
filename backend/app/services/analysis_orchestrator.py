@@ -19,7 +19,16 @@ from app.services.github_client import (
     fetch_authenticated_github_user,
 )
 from app.services.code_intelligence import analyze_python_files
-from app.services.llm_client import analyze_problem_solving, analyze_skill_scores, LLMError
+from app.services.llm_client import (
+    analyze_problem_solving,
+    analyze_skill_scores,
+    analyze_architecture_metrics,
+    LLMError,
+)
+from app.services.architecture_scoring import (
+    compute_static_architecture_metrics,
+    aggregate_architecture_score,
+)
 from app.services.metrics import build_unified_schema
 from app.services.learning_recommendations import build_learning_recommendations
 from ai_services.insights.ai_insights import generate_insights
@@ -165,6 +174,7 @@ async def background_analysis_task(
 
         clone_path = ""
         repo_context: tempfile.TemporaryDirectory | None = None
+        architecture_metrics_result: dict = {}
         try:
             logger.info("[run=%s] Git checkout started branch=%s private=%s", run_id, branch, is_private)
             clone_path, repo_context = _prepare_repo_checkout(
@@ -225,18 +235,24 @@ async def background_analysis_task(
                 llm_result = analyze_problem_solving(python_files, run.commit_sha)
                 logger.info("[run=%s] LLM problem solving finished", run_id)
                 logger.debug("[run=%s] Raw LLM problem solving result: %s", run_id, llm_result)
-                component_scores = [
-                    float((llm_result.get(key) or {}).get("score", 0.0) or 0.0)
-                    for key in ("algorithms", "data_structures", "balanced_complexity", "edge_cases")
-                ]
-                logger.info("[run=%s] LLM problem solving component_scores=%s", run_id, component_scores)
-                if component_scores:
-                    avg_score = sum(component_scores) / len(component_scores)
-                    llm_problem_solving_score = avg_score / 100.0
-                    logger.info(
-                        "[run=%s] llm_problem_solving_score set to: %.3f",
+                if llm_result.get("_llm_valid"):
+                    component_scores = [
+                        float((llm_result.get(key) or {}).get("score", 0.0) or 0.0)
+                        for key in ("algorithms", "data_structures", "balanced_complexity", "edge_cases")
+                    ]
+                    logger.info("[run=%s] LLM problem solving component_scores=%s", run_id, component_scores)
+                    if component_scores:
+                        avg_score = sum(component_scores) / len(component_scores)
+                        llm_problem_solving_score = avg_score / 100.0
+                        logger.info(
+                            "[run=%s] llm_problem_solving_score set to: %.3f",
+                            run_id,
+                            llm_problem_solving_score,
+                        )
+                else:
+                    logger.warning(
+                        "[run=%s] LLM problem solving returned no valid batch; using rule-based fallback",
                         run_id,
-                        llm_problem_solving_score,
                     )
             except LLMError as exc:
                 logger.exception("[run=%s] LLM problem solving failed: %s", run_id, exc)
@@ -255,6 +271,55 @@ async def background_analysis_task(
             )
             code_intelligence_result = analysis_result
             final_scores = analysis_result.get("scores", {})
+
+            aggregate = code_intelligence_result.get("aggregate_metrics", {})
+            file_reports = code_intelligence_result.get("files", [])
+            architecture_metrics_result = {}
+
+            try:
+                logger.info("[run=%s] Architecture scoring started", run_id)
+                static_arch = compute_static_architecture_metrics(
+                    file_reports,
+                    aggregate,
+                    clone_path or None,
+                    python_files,
+                )
+                static_evidence = {
+                    "signals": static_arch.get("signals", {}),
+                    "structural_indices": {
+                        metric_key: (index_entry or {}).get("structural_index")
+                        for metric_key, index_entry in (
+                            static_arch.get("structural_indices") or {}
+                        ).items()
+                    },
+                    "circular_imports": (static_arch.get("circular_imports_signal") or {}).get(
+                        "details", {}
+                    ),
+                }
+                llm_arch = {}
+                try:
+                    llm_arch = analyze_architecture_metrics(
+                        python_files,
+                        static_evidence,
+                        run.commit_sha,
+                    )
+                except LLMError as exc:
+                    logger.warning("[run=%s] Architecture LLM metrics failed: %s", run_id, exc)
+                except Exception as exc:
+                    logger.exception("[run=%s] Unexpected architecture LLM error: %s", run_id, exc)
+
+                architecture_metrics_result = aggregate_architecture_score(static_arch, llm_arch)
+                final_scores["architecture"] = architecture_metrics_result["overall"]
+                final_scores["overall_score"] = compute_overall_score(final_scores)
+                code_intelligence_result["architecture_metrics"] = architecture_metrics_result
+                logger.info(
+                    "[run=%s] Architecture scoring finished overall=%.2f",
+                    run_id,
+                    architecture_metrics_result["overall"],
+                )
+            except Exception as exc:
+                logger.exception("[run=%s] Architecture scoring failed: %s", run_id, exc)
+
             base_scores = dict(final_scores)
             logger.info("[run=%s] Base scores before LLM calibration: %s", run_id, base_scores)
             base_overall = float(base_scores.get("overall_score") or compute_overall_score(base_scores))
@@ -290,15 +355,10 @@ async def background_analysis_task(
                     _add("broad_exceptions", metrics.get("broad_exceptions"))
                     _add("swallowed_exceptions", metrics.get("swallowed_exceptions"))
                 elif skill == "architecture":
-                    _add("import_coupling_total", metrics.get("import_coupling_total"))
-                    _add("efferent_coupling_total", metrics.get("efferent_coupling_total"))
-                    _add("circular_import_count", metrics.get("circular_import_count"))
-                    _add("max_inheritance_depth", metrics.get("max_inheritance_depth"))
-                    _add("avg_nesting_depth", metrics.get("avg_nesting_depth"))
-                    _add("avg_function_size", metrics.get("avg_function_size"))
-                    _add("avg_class_lcom", metrics.get("avg_class_lcom"))
-                    _add("god_classes", metrics.get("god_classes"))
-                    _add("class_count", metrics.get("class_count"))
+                    arch = code_intelligence_result.get("architecture_metrics", {})
+                    for metric_key, metric_entry in (arch.get("metrics") or {}).items():
+                        if isinstance(metric_entry, dict):
+                            _add(metric_key, metric_entry.get("score"))
 
                 return entries
 
@@ -319,7 +379,7 @@ async def background_analysis_task(
                 if not llm_skill_scores:
                     logger.warning("[run=%s] LLM skill calibration returned no scores", run_id)
                 if llm_skill_scores:
-                    for skill in ("code_quality", "maintainability", "architecture"):
+                    for skill in ("code_quality", "maintainability"):
                         base = float(final_scores.get(skill, 0.0) or 0.0)
                         entry = llm_skill_scores.get(skill, {})
                         adjustment = float(entry.get("adjustment", 0.0) or 0.0)
@@ -364,7 +424,7 @@ async def background_analysis_task(
 
             if llm_skill_scores:
                 metrics = code_intelligence_result.get("aggregate_metrics", {})
-                for skill in ("code_quality", "maintainability", "architecture"):
+                for skill in ("code_quality", "maintainability"):
                     entry = llm_skill_scores.get(skill, {})
                     confidence = float(entry.get("confidence", 0.0) or 0.0)
                     reason = entry.get("reason", "")
@@ -385,6 +445,37 @@ async def background_analysis_task(
                         "overall_delta": overall_delta,
                         "ignored": confidence < 0.4,
                     }
+
+            if architecture_metrics_result:
+                arch_metrics = architecture_metrics_result.get("metrics", {})
+                llm_reasons = [
+                    f"{key}: {entry.get('reason')}"
+                    for key, entry in arch_metrics.items()
+                    if isinstance(entry, dict) and entry.get("reason") and entry.get("method") == "LLM"
+                ]
+                llm_adjustment_guidance["architecture"] = {
+                    "requested_adjustment": 0.0,
+                    "applied_delta": round(
+                        float(final_scores.get("architecture", 0.0)) - float(base_scores.get("architecture", 0.0)),
+                        2,
+                    ),
+                    "confidence": round(
+                        sum(
+                            float((arch_metrics.get(k) or {}).get("confidence", 0.0) or 0.0)
+                            for k in ("layer_count_srp", "repository_pattern", "dependency_injection",
+                                      "open_closed_readiness", "swappable_components", "god_class_function")
+                        ) / 6.0,
+                        3,
+                    ),
+                    "reason": " | ".join(llm_reasons[:3]) if llm_reasons else "Architecture scored via dedicated metric pipeline.",
+                    "evidence": _collect_adjustment_evidence(
+                        "architecture",
+                        code_intelligence_result.get("aggregate_metrics", {}),
+                    ),
+                    "overall_impact": 0.0,
+                    "overall_delta": overall_delta,
+                    "ignored": False,
+                }
 
             if (final_scores.get("problem_solving") or 0.0) <= 0.0:
                 calibrated = float((llm_skill_scores.get("problem_solving") or {}).get("score", 0.0) or 0.0)
@@ -494,12 +585,14 @@ async def background_analysis_task(
                 "failed_tools": failed_tools,
                 "llm_skill_scores": llm_skill_scores,
                 "llm_adjustment_guidance": llm_adjustment_guidance,
+                "architecture_metrics": architecture_metrics_result,
             }
         else:
             ai_insights = {
                 "llm_problem_solving": llm_result,
                 "llm_skill_scores": llm_skill_scores,
                 "llm_adjustment_guidance": llm_adjustment_guidance,
+                "architecture_metrics": architecture_metrics_result,
                 "failed_tools": failed_tools,
             }
 

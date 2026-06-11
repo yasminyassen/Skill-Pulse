@@ -173,6 +173,84 @@ def _count_dangerous_patterns(tree: ast.AST) -> int:
     return count
 
 
+_BUILTIN_INSTANTIATION_EXCLUDES = {
+    "Exception", "ValueError", "TypeError", "RuntimeError", "KeyError", "StopIteration",
+    "NotImplementedError", "AttributeError", "ImportError", "OSError", "IOError",
+    "dict", "list", "set", "tuple", "str", "int", "float", "bool", "object", "super",
+    "Optional", "Union", "Any", "Field", "Path", "Decimal", "datetime", "timedelta",
+}
+
+_IO_FACTORY_HINTS = ("connect", "client", "session", "engine", "cursor", "socket", "open", "request")
+
+COMPOSITION_ROOT_BASENAMES = frozenset({
+    "container.py", "di.py", "bootstrap.py", "app_factory.py",
+})
+
+
+def _is_composition_root_path(path: str) -> bool:
+    normalized = (path or "").replace("\\", "/").lower()
+    basename = normalized.rsplit("/", 1)[-1]
+    return basename in COMPOSITION_ROOT_BASENAMES
+
+
+def _count_abstraction_signals(tree: ast.AST) -> int:
+    """Count interfaces/abstractions: Protocol, ABC bases, abstract methods."""
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                base_name = ""
+                if isinstance(base, ast.Name):
+                    base_name = base.id
+                elif isinstance(base, ast.Attribute):
+                    base_name = base.attr
+                if base_name in {"Protocol", "ABC", "ABCMeta"}:
+                    count += 1
+                    break
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for dec in child.decorator_list:
+                        if isinstance(dec, ast.Name) and dec.id == "abstractmethod":
+                            count += 1
+                            break
+                        if isinstance(dec, ast.Attribute) and dec.attr == "abstractmethod":
+                            count += 1
+                            break
+    return count
+
+
+def _is_concrete_instantiation_call(node: ast.Call) -> bool:
+    func = node.func
+    name = None
+    if isinstance(func, ast.Name):
+        name = func.id
+    elif isinstance(func, ast.Attribute):
+        name = func.attr
+    if not name or name in _BUILTIN_INSTANTIATION_EXCLUDES:
+        return False
+    if name[0].isupper():
+        return True
+    lower = name.lower()
+    return any(hint in lower for hint in _IO_FACTORY_HINTS)
+
+
+def _count_inline_concrete_instantiations(tree: ast.AST) -> int:
+    """Detect concrete service/I/O instantiations inside function bodies (not at module scope)."""
+    count = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        stack = list(node.body)
+        while stack:
+            current = stack.pop()
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(current, ast.Call) and _is_concrete_instantiation_call(current):
+                count += 1
+            stack.extend(ast.iter_child_nodes(current))
+    return count
+
+
 def _count_hardcoded_secrets(tree: ast.AST) -> int:
     count = 0
     sensitive = ("secret", "password", "token", "api_key", "apikey", "credential")
@@ -600,6 +678,9 @@ def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) 
         dangerous_patterns = 0
         error_dict_returns = 0
         hardcoded_secrets = 0
+        inline_concrete_instantiations = 0
+        inline_concrete_instantiations_business = 0
+        abstraction_signals = 0
         depends_usage = 0
         repository_classes = 0
         mutable_globals = 0
@@ -625,6 +706,11 @@ def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) 
             dangerous_patterns = _count_dangerous_patterns(tree)
             error_dict_returns = _count_error_dict_returns(tree)
             hardcoded_secrets = _count_hardcoded_secrets(tree)
+            inline_concrete_instantiations = _count_inline_concrete_instantiations(tree)
+            inline_concrete_instantiations_business = (
+                0 if _is_composition_root_path(path) else inline_concrete_instantiations
+            )
+            abstraction_signals = _count_abstraction_signals(tree)
             depends_usage = _count_depends_usage(tree)
             repository_classes = _count_repository_classes(tree)
             class_defs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
@@ -750,6 +836,7 @@ def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) 
         duplication_score = (duplicated_windows / total_windows) if total_windows else 0.0
 
         long_functions = sum(1 for f in functions if f["long_function"])
+        high_cyclomatic_functions = sum(1 for f in functions if f["cyclomatic"] >= 10)
         too_many_params = sum(1 for f in functions if f["too_many_params"])
         deep_nesting = sum(1 for f in functions if f["deep_nesting"])
         test_functions = sum(1 for f in functions if f["is_test_function"])
@@ -802,6 +889,7 @@ def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) 
             "avg_function_size": avg_function_size,
             "avg_nesting_depth": avg_nesting,
             "long_functions": long_functions,
+            "high_cyclomatic_functions": high_cyclomatic_functions,
             "too_many_params": too_many_params,
             "deep_nesting": deep_nesting,
             "style_violations": style_violations,
@@ -823,7 +911,11 @@ def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) 
             "dangerous_patterns": dangerous_patterns,
             "error_dict_returns": error_dict_returns,
             "hardcoded_secrets": hardcoded_secrets,
+            "inline_concrete_instantiations": inline_concrete_instantiations,
+            "inline_concrete_instantiations_business": inline_concrete_instantiations_business,
+            "abstraction_signals": abstraction_signals,
             "depends_usage": depends_usage,
+            "is_composition_root": _is_composition_root_path(path),
             "repository_classes": repository_classes,
             "magic_numbers": magic_numbers,
             "mutable_globals": mutable_globals,
@@ -884,6 +976,7 @@ def _aggregate_metrics(file_reports: list[dict]) -> dict:
             "avg_function_size",
             "avg_nesting_depth",
             "long_functions",
+            "high_cyclomatic_functions",
             "too_many_params",
             "deep_nesting",
             "style_violations",
@@ -905,6 +998,9 @@ def _aggregate_metrics(file_reports: list[dict]) -> dict:
             "dangerous_patterns",
             "error_dict_returns",
             "hardcoded_secrets",
+            "inline_concrete_instantiations",
+            "inline_concrete_instantiations_business",
+            "abstraction_signals",
             "depends_usage",
             "repository_classes",
             "magic_numbers",
@@ -941,6 +1037,7 @@ def _aggregate_metrics(file_reports: list[dict]) -> dict:
         "style_violations": int(sums["style_violations"]),
         "unused_variables": int(sums["unused_variables"]),
         "long_functions": int(sums["long_functions"]),
+        "high_cyclomatic_functions": int(sums["high_cyclomatic_functions"]),
         "too_many_params": int(sums["too_many_params"]),
         "deep_nesting": int(sums["deep_nesting"]),
         "import_coupling_total": int(sums["import_coupling"]),
@@ -1148,7 +1245,6 @@ def _compute_scores(
     • balanced_complexity falls back to rule-based score when problem_solving=0
     """
     aggregate_metrics = aggregate_metrics or _calculate_aggregate_metrics(file_reports)
-    circular_import_count = int(aggregate_metrics.get("circular_import_count", 0))
     dead_code_symbols = int(aggregate_metrics.get("dead_code_symbols", 0))
 
     # ── code quality ────────────────────────────────────────────────────────
@@ -1294,97 +1390,7 @@ def _compute_scores(
         }.items()
     ))
 
-    # ── architecture ────────────────────────────────────────────────────────
-    # Original code built architecture_components then threw them away and
-    # recomputed from only coupling + inheritance. Fixed to use all four.
-    architecture_components = {
-        # import coupling per file: 0-5 fine, 20+ problematic
-        "coupling": _avg_normalized(
-            file_reports, "import_coupling", low=0.0, high=20.0, reverse=True
-        ),
-        "efferent_coupling": _avg_normalized(
-            file_reports, "efferent_coupling", low=0.0, high=12.0, reverse=True
-        ),
-        "circular_imports": _normalize_metric(circular_import_count, 0.0, 3.0, reverse=True),
-        # inheritance depth: 1=flat (good), 5+=deep (bad)
-        "inheritance": _avg_normalized(
-            file_reports, "max_inheritance_depth", low=1.0, high=5.0, reverse=True
-        ),
-        # avg function size: 10 lines=compact, 80+=bloated
-        "function_size": _avg_normalized(
-            file_reports, "avg_function_size", low=10.0, high=80.0, reverse=True
-        ),
-        # avg nesting depth: 1=flat, 6+=deeply nested
-        "modularity": _avg_normalized(
-            file_reports, "avg_nesting_depth", low=1.0, high=6.0, reverse=True
-        ),
-        "cohesion": _avg_normalized(
-            file_reports, "avg_class_lcom", low=0.0, high=0.8, reverse=True
-        ),
-        "god_objects": (
-            _avg_normalized(file_reports, "god_classes", 0.0, 3.0, reverse=True)
-            + _avg_normalized(file_reports, "long_functions", 0.0, 8.0, reverse=True)
-        ) / 2.0,
-        "typed_boundaries": _avg_normalized(
-            file_reports, "type_annotation_coverage", low=0.0, high=0.85
-        ),
-        "global_state": (
-            _avg_normalized(file_reports, "mutable_globals", 0.0, 4.0, reverse=True)
-            + _avg_normalized(file_reports, "global_keywords", 0.0, 3.0, reverse=True)
-        ) / 2.0,
-        "decomposition": _architecture_decomposition_score(file_reports),
-        "dependency_injection": _avg_normalized(
-            file_reports, "depends_usage", low=0.0, high=3.0
-        ),
-        "repository_pattern": _avg_normalized(
-            file_reports, "repository_classes", low=0.0, high=1.0
-        ),
-        "dangerous": _avg_normalized(
-            file_reports, "dangerous_patterns", low=0.0, high=1.0, reverse=True
-        ),
-        "secrets": _avg_normalized(
-            file_reports, "hardcoded_secrets", low=0.0, high=1.0, reverse=True
-        ),
-        "error_responses": _avg_normalized(
-            file_reports, "error_dict_returns", low=0.0, high=2.0, reverse=True
-        ),
-    }
-
-    architecture = _clamp01(sum(
-        architecture_components[k] * w
-        for k, w in {
-            "coupling": 0.06,
-            "efferent_coupling": 0.06,
-            "circular_imports": 0.05,
-            "inheritance": 0.04,
-            "function_size": 0.06,
-            "modularity": 0.06,
-            "cohesion": 0.06,
-            "god_objects": 0.06,
-            "typed_boundaries": 0.10,
-            "global_state": 0.06,
-            "decomposition": 0.12,
-            "dependency_injection": 0.09,
-            "repository_pattern": 0.08,
-            "dangerous": 0.10,
-            "secrets": 0.06,
-            "error_responses": 0.06,
-        }.items()
-    ))
-
-    # A tiny repository cannot provide enough evidence for a near-perfect
-    # architecture score. Semantic LLM calibration may still raise/lower it.
-    evidence = min(
-        1.0,
-        (
-            aggregate_metrics.get("loc", 0) / 250.0
-            + aggregate_metrics.get("function_count", 0) / 15.0
-            + aggregate_metrics.get("class_count", 0) / 5.0
-            + aggregate_metrics.get("file_count", 0) / 6.0
-        ) / 4.0,
-    )
-    architecture_ceiling = 0.65 + (0.25 * evidence)
-    architecture = min(architecture, architecture_ceiling)
+    # Architecture score is computed by architecture_scoring.py in the orchestrator.
 
     # ── problem solving / balanced_complexity ───────────────────────────────
     # If the LLM returned 0 (failed), fall back to the rule-based score so
@@ -1394,15 +1400,14 @@ def _compute_scores(
     else:
         problem_solving = _clamp01(_rule_based_balanced_complexity(file_reports))
 
-    # ── overall ─────────────────────────────────────────────────────────────
-    overall = _clamp01((code_quality + maintainability + architecture + problem_solving) / 4.0)
+    # ── overall (architecture filled in by orchestrator) ────────────────────
+    overall = _clamp01((code_quality + maintainability + problem_solving) / 3.0)
 
     return {
         "code_quality": round(min(100.0, code_quality * 100), 2),
         "maintainability": round(min(100.0, maintainability * 100), 2),
-        "architecture": round(min(100.0, architecture * 100), 2),
+        "architecture": 0.0,
         "problem_solving": round(min(100.0, problem_solving * 100), 2),
         "overall_score": round(min(100.0, overall * 100), 2),
-        # expose which path was taken so callers can log/display it
         "_problem_solving_source": "llm" if problem_solving_score > 0.0 else "rule_based",
     }

@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "qwen/qwen3-14b"
     openrouter_api_url: str = "https://openrouter.ai/api/v1"
-    llm_max_retries: int = 1
+    llm_max_retries: int = 3
     llm_context_limit: int = 32000
     analysis_version: str = "v1"
 

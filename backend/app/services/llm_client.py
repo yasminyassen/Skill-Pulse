@@ -53,9 +53,15 @@ def _llm_timeout() -> httpx.Timeout:
 
 def _max_retries() -> int:
     raw = _get_env("LLM_MAX_RETRIES", "llm_max_retries")
+    if raw:
+        try:
+            return max(1, min(5, int(raw)))
+        except ValueError:
+            pass
     try:
-        return max(1, min(5, int(raw))) if raw else 3
-    except ValueError:
+        from app.core.config import settings
+        return max(1, min(5, int(settings.llm_max_retries)))
+    except Exception:
         return 3
 
 
@@ -246,6 +252,87 @@ def _build_smart_payload(
 
 
 # ---------------------------------------------------------------------------
+# Problem-solving response normalization
+# ---------------------------------------------------------------------------
+
+PROBLEM_SOLVING_KEYS = ("algorithms", "data_structures", "balanced_complexity", "edge_cases")
+
+_PROBLEM_SOLVING_KEY_ALIASES = {
+    "edgeCases": "edge_cases",
+    "balancedComplexity": "balanced_complexity",
+    "dataStructures": "data_structures",
+}
+
+
+def _canonicalize_problem_solving_keys(resp: dict) -> dict:
+    """Map common camelCase aliases to the expected snake_case keys."""
+    if not isinstance(resp, dict):
+        return {}
+    out = dict(resp)
+    for alias, canonical in _PROBLEM_SOLVING_KEY_ALIASES.items():
+        if alias in out and canonical not in out:
+            out[canonical] = out[alias]
+    return out
+
+
+def _coerce_problem_solving_response(resp: dict) -> Tuple[dict, bool, set[str]]:
+    """
+    Normalize LLM output to all required keys.
+
+    Missing keys are inferred from the average score of present keys with
+    reduced confidence so a truncated or partial JSON payload can still be used.
+    Returns (normalized_dict, had_any_valid_score, inferred_keys).
+    """
+    resp = _canonicalize_problem_solving_keys(resp)
+    if not resp:
+        return {}, False, set()
+
+    present_scores: list[float] = []
+    normalized: dict[str, dict] = {}
+    inferred_keys: set[str] = set()
+
+    for key in PROBLEM_SOLVING_KEYS:
+        entry = resp.get(key)
+        if not isinstance(entry, dict):
+            continue
+        score = entry.get("score")
+        if not isinstance(score, (int, float)):
+            continue
+        present_scores.append(float(score))
+        try:
+            confidence = float(entry.get("confidence", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            confidence = 0.5
+        evidence = entry.get("evidence")
+        normalized[key] = {
+            "score": round(max(0.0, min(100.0, float(score))), 2),
+            "confidence": round(max(0.0, min(1.0, confidence)), 3),
+            "evidence": evidence if isinstance(evidence, list) else [],
+        }
+
+    if not present_scores:
+        return {}, False, set()
+
+    fallback_score = sum(present_scores) / len(present_scores)
+    for key in PROBLEM_SOLVING_KEYS:
+        if key in normalized:
+            continue
+        normalized[key] = {
+            "score": round(fallback_score, 2),
+            "confidence": 0.25,
+            "evidence": [],
+        }
+        inferred_keys.add(key)
+        logger.info(
+            "problem_solving: inferred missing key=%s from avg=%.2f",
+            key,
+            fallback_score,
+        )
+
+    return normalized, True, inferred_keys
+
+
+# ---------------------------------------------------------------------------
 # Score merging for multi-batch calls
 # ---------------------------------------------------------------------------
 
@@ -254,9 +341,8 @@ def _merge_problem_solving(results: List[dict]) -> dict:
     Merge multiple problem_solving result dicts from batched calls.
     Uses confidence-weighted average so higher-confidence results dominate.
     """
-    KEYS = ("algorithms", "data_structures", "balanced_complexity", "edge_cases")
     merged = {}
-    for key in KEYS:
+    for key in PROBLEM_SOLVING_KEYS:
         total_weight = 0.0
         weighted_score = 0.0
         all_evidence = []
@@ -282,7 +368,7 @@ def _merge_skill_scores(results: List[dict]) -> dict:
     Merge multiple skill_score adjustment dicts from batched calls.
     Uses confidence-weighted average.
     """
-    SKILLS = ("code_quality", "maintainability", "architecture")
+    SKILLS = ("code_quality", "maintainability")
     merged = {}
     for skill in SKILLS:
         total_weight = 0.0
@@ -522,7 +608,7 @@ def _call_skill_scores_once(
             "aggregate_metrics": aggregate_metrics,
             "response_format": "json",
             "instructions": (
-                "Return JSON with keys: code_quality, maintainability, architecture. "
+                "Return JSON with keys: code_quality, maintainability. "
                 "Each value must be an object with: adjustment (-20 to 20), confidence (0-1), reason (string). "
                 "Do NOT return full scores. Adjustments must be small; if unsure return 0."
             ),
@@ -551,8 +637,7 @@ def _call_skill_scores_once(
                     "Return ONLY valid JSON with this exact structure:\n\n"
                     "{\n"
                     "  \"code_quality\": {\"adjustment\": -20 to 20, \"confidence\": 0-1, \"reason\": \"...\"},\n"
-                    "  \"maintainability\": {\"adjustment\": -20 to 20, \"confidence\": 0-1, \"reason\": \"...\"},\n"
-                    "  \"architecture\": {\"adjustment\": -20 to 20, \"confidence\": 0-1, \"reason\": \"...\"}\n"
+                    "  \"maintainability\": {\"adjustment\": -20 to 20, \"confidence\": 0-1, \"reason\": \"...\"}\n"
                     "}\n\n"
                     "Adjustment rules:\n"
                     "- Small and conservative. Minor: -2 to -5; moderate: -5 to -10; major: -10 to -20.\n"
@@ -566,10 +651,7 @@ def _call_skill_scores_once(
                     "Skill guidelines (static metrics already computed — judge semantics only):\n"
                     "Code Quality: naming clarity beyond snake_case, duplication severity, dead-code risk, magic numbers.\n"
                     "Maintainability: docstring usefulness, exception hierarchy quality, config isolation, global state risk.\n"
-                    "Architecture: layer count/SRP, repository pattern, dependency injection, swappable abstractions,\n"
-                    "open/closed readiness, god-class responsibility mixing, circular-import impact.\n"
-                    "Use aggregate_metrics (halstead, circular_import_count, dead_code_symbols, efferent_coupling_total) as evidence.\n\n"
-                    "STRICT: Do NOT evaluate security issues at all.\n\n"
+                    "STRICT: Do NOT evaluate security or architecture issues at all.\n\n"
                     "Reason: 1-2 sentences with concrete code patterns. No generic statements.\n\n"
                     "Base scores:\n"
                     f"{json.dumps(base_scores)}\n\n"
@@ -590,14 +672,12 @@ def _call_skill_scores_once(
 
 
 def _is_valid_problem_solving(resp: dict) -> bool:
-    KEYS = {"algorithms", "data_structures", "balanced_complexity", "edge_cases"}
-    if not resp or not KEYS.issubset(resp.keys()):
-        return False
-    return all(isinstance((resp[k] or {}).get("score"), (int, float)) for k in KEYS)
+    _, had_valid, _ = _coerce_problem_solving_response(resp)
+    return had_valid
 
 
 def _is_valid_skill_scores(resp: dict) -> bool:
-    SKILLS = {"code_quality", "maintainability", "architecture"}
+    SKILLS = {"code_quality", "maintainability"}
     if not resp or not SKILLS.issubset(resp.keys()):
         return False
     return all(isinstance((resp[k] or {}).get("adjustment"), (int, float)) for k in SKILLS)
@@ -742,14 +822,29 @@ def analyze_problem_solving(
                 logger.warning("problem_solving %s attempt %d/%d failed: %s", batch_label, attempt, max_retries, e)
                 resp = {}
 
-            if _is_valid_problem_solving(resp):
-                logger.info("problem_solving %s batch succeeded on attempt %d", batch_label, attempt)
+            coerced, valid, inferred_keys = _coerce_problem_solving_response(resp)
+            if valid:
+                resp = coerced
+                if inferred_keys:
+                    logger.info(
+                        "problem_solving %s batch succeeded on attempt %d with inferred keys=%s",
+                        batch_label,
+                        attempt,
+                        sorted(inferred_keys),
+                    )
+                else:
+                    logger.info("problem_solving %s batch succeeded on attempt %d", batch_label, attempt)
                 break
 
-            missing = {"algorithms", "data_structures", "balanced_complexity", "edge_cases"} - set(resp.keys())
+            raw = _canonicalize_problem_solving_keys(resp if isinstance(resp, dict) else {})
+            missing = set(PROBLEM_SOLVING_KEYS) - set(raw.keys())
             logger.warning(
-                "problem_solving %s attempt %d/%d: invalid response, missing=%s",
-                batch_label, attempt, max_retries, missing,
+                "problem_solving %s attempt %d/%d: invalid response, missing=%s keys=%s",
+                batch_label,
+                attempt,
+                max_retries,
+                missing,
+                list(raw.keys()),
             )
             resp = {}
             if attempt < max_retries:
@@ -760,8 +855,11 @@ def analyze_problem_solving(
 
     merged = _merge_problem_solving(batch_results) if batch_results else {}
 
-    out: Dict[str, Any] = {"generated_at": int(time.time())}
-    for key_sig in ("algorithms", "data_structures", "balanced_complexity", "edge_cases"):
+    out: Dict[str, Any] = {
+        "generated_at": int(time.time()),
+        "_llm_valid": bool(batch_results),
+    }
+    for key_sig in PROBLEM_SOLVING_KEYS:
         val = merged.get(key_sig) or {}
         out[key_sig] = {
             "score": round(max(0.0, min(100.0, float(val.get("score", 0.0) or 0.0))), 2),
@@ -817,7 +915,7 @@ def analyze_skill_scores(
                 logger.info("skill_scores %s batch succeeded on attempt %d", batch_label, attempt)
                 break
 
-            missing = {"code_quality", "maintainability", "architecture"} - set(resp.keys())
+            missing = {"code_quality", "maintainability"} - set(resp.keys())
             logger.warning(
                 "skill_scores %s attempt %d/%d: invalid response, missing=%s",
                 batch_label, attempt, max_retries, missing,
@@ -832,7 +930,7 @@ def analyze_skill_scores(
     merged = _merge_skill_scores(batch_results) if batch_results else {}
 
     out: Dict[str, Any] = {"generated_at": int(time.time())}
-    for skill in ("code_quality", "maintainability", "architecture"):
+    for skill in ("code_quality", "maintainability"):
         entry = merged.get(skill) or {}
         try:
             adjustment = float(entry.get("adjustment", 0.0) or 0.0)
@@ -844,6 +942,248 @@ def analyze_skill_scores(
             "reason": entry.get("reason", ""),
         }
     return out
+
+
+ARCHITECTURE_LLM_KEYS = (
+    "layer_count_srp",
+    "repository_pattern",
+    "dependency_injection",
+    "open_closed_readiness",
+    "swappable_components",
+    "cohesion",
+    "coupling",
+    "module_decomposition",
+    "god_class_function",
+)
+
+_ARCHITECTURE_SCORING_RULES = (
+    "SEVERITY-DRIVEN RAW SCORING (you output raw scores only; aggregator decides final):\n"
+    "VALID BANDS:\n"
+    "- 85-100: Strong architecture with clear evidence\n"
+    "- 70-84: Good with minor gaps\n"
+    "- 55-69: Partial implementation (score freely in this band)\n"
+    "- 35-54: Weak implementation\n"
+    "- ≤35: Absent or severely missing\n\n"
+    "CAP RULES (aggregator enforces; reflect in your raw score):\n"
+    "- CAP1 (≤18): ONLY when ALL THREE: (A) direct instantiation in business logic, "
+    "(B) no interfaces/abstractions, (C) no dependency injection\n"
+    "- CAP2 (soft ≤35, up to 45 with indirect structural evidence): ONLY when ZERO pattern evidence in codebase\n"
+    "- Partial implementation: score 55-80 freely; strong partial up to 85; weak partial 40-60\n\n"
+    "FORBIDDEN:\n"
+    "- NEVER output 48-52 as neutral/uncertainty\n"
+    "- NEVER use 50 as fallback\n"
+    "- NEVER let confidence affect your score\n"
+    "- Composition roots (container.py, di.py, bootstrap.py, app_factory.py) are valid wiring — NOT violations\n"
+    "- If uncertain, score 30 and state missing evidence explicitly\n\n"
+)
+
+_ARCHITECTURE_METRIC_INSTRUCTIONS = (
+    _ARCHITECTURE_SCORING_RULES +
+    "Score each metric 0-100 with confidence 0-1, a brief reason, and evidence (short strings).\n"
+    "Focus on design intent and semantic relationships — not syntax counts alone.\n\n"
+    "Pure semantic metrics:\n"
+    "- layer_count_srp: logical layering, separation of concerns, single-responsibility adherence\n"
+    "- repository_pattern: whether data access is abstracted behind repositories/ports, not raw SQL/ORM calls everywhere\n"
+    "- dependency_injection: dependencies passed in (constructor/params/protocols) vs constructed inline or imported as globals\n"
+    "- open_closed_readiness: can behavior extend via new types/plugins without editing core modules\n"
+    "- swappable_components: abstractions (interfaces/protocols) that allow replacing implementations\n"
+    "- cohesion: whether code in a module/class/function shares a clear purpose; penalize coincidental grouping "
+    "(unrelated helpers, mixed domains, shared globals without logical unity)\n\n"
+    "Hybrid metrics (use static_evidence as hints, judge semantics yourself):\n"
+    "- coupling: semantic coupling, missing abstractions, cross-layer calls; penalize mixing DB/network/business in one unit\n"
+    "- module_decomposition: whether file/package boundaries reflect real domain boundaries, not just file count\n"
+    "- god_class_function: classes/functions spanning multiple domains (DB + network + business + formatting); "
+    "penalize high complexity that serves unrelated responsibilities\n"
+)
+
+
+def _coerce_architecture_response(resp: dict) -> tuple[dict, bool, set[str]]:
+    """Normalize structure only. Missing keys are flagged — aggregator assigns final scores."""
+    if not isinstance(resp, dict):
+        return {}, False, set()
+
+    present_scores: list[float] = []
+    normalized: dict[str, dict] = {}
+    for key in ARCHITECTURE_LLM_KEYS:
+        entry = resp.get(key)
+        if not isinstance(entry, dict):
+            continue
+        score = entry.get("score")
+        if not isinstance(score, (int, float)):
+            continue
+        try:
+            confidence = float(entry.get("confidence", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            confidence = 0.5
+        evidence = entry.get("evidence")
+        present_scores.append(float(score))
+        normalized[key] = {
+            "score": round(max(0.0, min(100.0, float(score))), 2),
+            "confidence": round(max(0.0, min(1.0, confidence)), 3),
+            "reason": entry.get("reason", ""),
+            "evidence": evidence if isinstance(evidence, list) else [],
+        }
+
+    if not present_scores:
+        return {}, False, set()
+
+    inferred: set[str] = set()
+    for key in ARCHITECTURE_LLM_KEYS:
+        if key in normalized:
+            continue
+        normalized[key] = {
+            "score": None,
+            "confidence": 0.0,
+            "reason": "Missing from LLM response — aggregator will apply uncertain default",
+            "evidence": [],
+            "_aggregator_missing": True,
+        }
+        inferred.add(key)
+    return normalized, True, inferred
+
+
+def _is_valid_architecture_metrics(resp: dict) -> bool:
+    _, had_valid, _ = _coerce_architecture_response(resp)
+    return had_valid
+
+
+def _call_architecture_metrics_once(
+    payload_files: List[Dict[str, Any]],
+    static_evidence: Dict[str, Any],
+    ai_mode: str,
+    commit_sha: str | None,
+) -> dict:
+    keys_csv = ", ".join(ARCHITECTURE_LLM_KEYS)
+    if ai_mode == "ollama":
+        url, model = _ollama_config()
+        body = {
+            "model": model,
+            "files": payload_files,
+            "task": "architecture_metrics",
+            "commit": commit_sha,
+            "static_evidence": static_evidence,
+            "response_format": "json",
+            "instructions": _ARCHITECTURE_METRIC_INSTRUCTIONS,
+        }
+        jr = _post_with_retry(f"{url.rstrip('/')}/llm", body, max_retries=2)
+        return jr if isinstance(jr, dict) else {}
+
+    url, key, model = _openrouter_config()
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Return only strict JSON. No markdown. No extra keys."},
+            {
+                "role": "user",
+                "content": (
+                    "You are a senior software architect reviewing Python code for real design quality.\n\n"
+                    "CRITICAL RULES:\n"
+                    "- Return ONLY raw valid JSON with ALL required keys.\n"
+                    "- Each key maps to an object: score (0-100), confidence (0-1), reason (string), evidence (string array).\n"
+                    "- Judge semantic design intent, not superficial structure.\n"
+                    "- Do NOT reward coincidental cohesion (unrelated code grouped together).\n"
+                    "- Do NOT rely only on import counts or class counts.\n"
+                    "- NEVER use score 50 as a default or uncertainty value.\n"
+                    "- Missing pattern = low score (≤40). Severe violation = very low score (≤20).\n"
+                    "- Score and confidence are independent: low confidence still requires low score when pattern is absent.\n\n"
+                    f"{_ARCHITECTURE_SCORING_RULES}\n"
+                    f"Required keys: {keys_csv}\n\n"
+                    f"{_ARCHITECTURE_METRIC_INSTRUCTIONS}\n\n"
+                    "Static evidence (AST/tools — contextual hints only, verify against code):\n"
+                    f"{json.dumps(static_evidence)}\n\n"
+                    "Files:\n"
+                    f"{json.dumps(payload_files)}"
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "max_tokens": 4500,
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    jr = _post_with_retry(f"{url.rstrip('/')}/chat/completions", body, headers=headers, max_retries=2)
+    return _extract_openrouter_resp(jr)
+
+
+def analyze_architecture_metrics(
+    files: List[Dict[str, Any]],
+    static_evidence: Dict[str, Any],
+    commit_sha: str | None = None,
+) -> Dict[str, Any]:
+    """LLM evaluation for architecture metrics designated as LLM-only."""
+    ai_mode = (os.environ.get("AI_MODE") or "openrouter").lower()
+    max_retries = _max_retries()
+
+    raw_files = []
+    for f in files:
+        snippet = "\n".join((f.get("content", "") or "").splitlines()[:300])
+        raw_files.append({"path": f.get("path"), "snippet": snippet})
+
+    primary_batch, overflow_batch = _build_smart_payload(raw_files)
+    batch_results: list[dict] = []
+
+    for batch_label, batch in [("primary", primary_batch), ("overflow", overflow_batch)]:
+        if not batch:
+            continue
+        resp = {}
+        for attempt in range(1, max_retries + 1):
+            try:
+                resp = _call_architecture_metrics_once(batch, static_evidence, ai_mode, commit_sha)
+            except LLMError as exc:
+                logger.warning("architecture_metrics %s attempt %d failed: %s", batch_label, attempt, exc)
+                resp = {}
+            coerced, valid, inferred = _coerce_architecture_response(resp)
+            if valid:
+                resp = coerced
+                if inferred:
+                    logger.info(
+                        "architecture_metrics %s succeeded with inferred keys=%s",
+                        batch_label,
+                        sorted(inferred),
+                    )
+                break
+            resp = {}
+            if attempt < max_retries:
+                time.sleep(2 ** (attempt - 1))
+        if resp:
+            batch_results.append(resp)
+
+    merged: dict[str, dict] = {}
+    for key in ARCHITECTURE_LLM_KEYS:
+        batch_scores: list[float] = []
+        reasons: list[str] = []
+        evidence: list[str] = []
+        confidences: list[float] = []
+        for resp in batch_results:
+            entry = (resp or {}).get(key) or {}
+            raw_score = entry.get("score")
+            if not isinstance(raw_score, (int, float)):
+                continue
+            batch_scores.append(float(raw_score))
+            confidences.append(float(entry.get("confidence", 0.0) or 0.0))
+            if entry.get("reason"):
+                reasons.append(str(entry.get("reason")))
+            if isinstance(entry.get("evidence"), list):
+                evidence.extend(str(item) for item in entry["evidence"])
+        if batch_scores:
+            merged_score = round(max(0.0, min(100.0, sum(batch_scores) / len(batch_scores))), 2)
+            merged_confidence = round(
+                max(0.0, min(1.0, sum(confidences) / len(confidences))), 3
+            ) if confidences else 0.0
+            merged_reason = " | ".join(reasons) if reasons else ""
+        else:
+            merged_score = None
+            merged_confidence = 0.0
+            merged_reason = "LLM batch missing metric — aggregator applies uncertain default"
+        merged[key] = {
+            "score": merged_score,
+            "confidence": merged_confidence,
+            "reason": merged_reason,
+            "evidence": list(dict.fromkeys(evidence)),
+        }
+
+    merged["generated_at"] = int(time.time())
+    return merged
 
 
 def rank_learning_resources(payload: Dict[str, Any]) -> Dict[str, Any]:

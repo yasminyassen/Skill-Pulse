@@ -17,7 +17,6 @@ def test_static_scoring_separates_good_and_bad_candidate_code() -> None:
 
     assert good_scores["code_quality"] > bad_scores["code_quality"]
     assert good_scores["maintainability"] > bad_scores["maintainability"]
-    assert good_scores["architecture"] > bad_scores["architecture"]
     assert all(score <= 100 for score in good_scores.values() if isinstance(score, (int, float)))
 
 

@@ -59,4 +59,7 @@ pandas==2.2.2
 openpyxl==3.1.2
 pdfplumber==0.11.0
 
-python-multipart==0.0.9
+# Architecture tooling (optional at runtime — graceful fallback if missing)
+import-linter>=2.0
+pydeps>=1.12
+radon>=6.0.1
