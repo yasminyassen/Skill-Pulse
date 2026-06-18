@@ -54,6 +54,7 @@ class User(Base):
     weight_security         = Column(Integer, nullable=True, default=30)
     weight_git_activity     = Column(Integer, nullable=True, default=20)
     weight_requirements     = Column(Integer, nullable=True, default=10)
+    global_team_insights    = Column(JSON, nullable=True)
    
     
     analysis_runs = relationship("AnalysisRun", back_populates="user", cascade="all, delete-orphan")

@@ -63,9 +63,9 @@ function App() {
         {/* ── Manager routes ── */}
         <Route path="/dashboard/manager" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/manager/analysis" element={<RepositoryAnalysis />} />
-        <Route path="/dashboard/manager/security" element={<ManagerDashboard />} />
+        {/* <Route path="/dashboard/manager/security" element={<ManagerDashboard />} /> */}
         <Route path="/dashboard/manager/requirements" element={<ManagerRequirements/>} />
-        <Route path="/dashboard/manager/profile" element={<ManagerDashboard />} />
+        {/* <Route path="/dashboard/manager/profile" element={<ManagerDashboard />} /> */}
         <Route path="/dashboard/manager/team" element={<ManagerDashboard />} />
 
         {/* ── Recruiter routes ── */}

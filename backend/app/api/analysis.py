@@ -19,7 +19,18 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 from app.db.database import get_db
-from app.db.models import Repository, AnalysisRun, SecurityFinding, CodeMetrics, SkillScore, User, RecruiterCandidate, RepositoryAnalysis
+from app.db.models import (
+    Repository,
+    AnalysisRun,
+    SecurityFinding,
+    CodeMetrics,
+    SkillScore,
+    User,
+    UserRole,
+    RecruiterCandidate,
+    RepositoryAnalysis,
+    RepositoryContributor,
+)
 from app.core.auth_utils import get_current_user, decrypt_github_token, require_role
 from app.core.rate_limiter import limiter
 
@@ -29,9 +40,11 @@ from app.services.github_client import (
     get_branch_head_sha,
     get_files_fingerprint,
     fetch_user_repo_contribution_summary,
+    fetch_repository_commit_contributions,
 )
 from app.services.analysis_orchestrator import (
     background_analysis_task,
+    background_manager_team_analysis_task,
     resolve_github_identity,
     build_personal_repo_context,
 )
@@ -97,6 +110,96 @@ def _run_sort_time(run: AnalysisRun) -> datetime:
     return value
 
 
+def _normalise_identity(value: object) -> str | None:
+    if value is None:
+        return None
+    normalised = str(value).strip().lower()
+    return normalised or None
+
+
+def _commit_matches_developer(commit_record: dict, developer: User) -> bool:
+    login = _normalise_identity(commit_record.get("login"))
+    github_id = _normalise_identity(commit_record.get("github_id"))
+    emails = {
+        _normalise_identity(email)
+        for email in (commit_record.get("emails") or [])
+    }
+    emails.discard(None)
+
+    developer_github_id = _normalise_identity(developer.github_id)
+    developer_username = _normalise_identity(developer.username)
+    developer_email = _normalise_identity(developer.work_email)
+
+    return (
+        bool(developer_github_id and github_id == developer_github_id)
+        or bool(developer_username and login == developer_username)
+        or bool(developer_email and developer_email in emails)
+    )
+
+
+def _build_manager_contributor_scopes(
+    developers: list[User],
+    commit_records: list[dict],
+) -> list[dict]:
+    contributor_scopes: list[dict] = []
+
+    for developer in developers:
+        touched_files: set[str] = set()
+        matched_login: str | None = None
+        matched_email: str | None = None
+
+        for record in commit_records:
+            if not _commit_matches_developer(record, developer):
+                continue
+
+            if not matched_login and record.get("login"):
+                matched_login = str(record["login"])
+            if not matched_email and record.get("emails"):
+                matched_email = str(record["emails"][0])
+
+            for file_path in record.get("touched_files") or []:
+                if file_path:
+                    touched_files.add(str(file_path).replace("\\", "/"))
+
+        python_touched_files = sorted(path for path in touched_files if path.endswith(".py"))
+        if not python_touched_files:
+            continue
+
+        contributor_scopes.append({
+            "user_id": developer.id,
+            "contributor_login": matched_login or developer.username or matched_email,
+            "touched_files": sorted(touched_files),
+            "python_touched_files": python_touched_files,
+        })
+
+    return contributor_scopes
+
+
+def _link_repository_contributors(
+    db: Session,
+    repo_id: int,
+    contributor_scopes: list[dict],
+) -> None:
+    for contributor in contributor_scopes:
+        user_id = contributor.get("user_id")
+        if not user_id:
+            continue
+        link_exists = (
+            db.query(RepositoryContributor)
+            .filter(
+                RepositoryContributor.repository_id == repo_id,
+                RepositoryContributor.user_id == user_id,
+            )
+            .first()
+        )
+        if not link_exists:
+            db.add(RepositoryContributor(
+                repository_id=repo_id,
+                user_id=user_id,
+            ))
+    db.commit()
+
+
 @router.post("/run")
 @limiter.limit("2/minute")
 async def run_analysis(
@@ -113,7 +216,9 @@ async def run_analysis(
     repo_name = full_name.split("/")[-1]
     
     token = decrypt_github_token(current_user.github_access_token) if current_user.github_access_token else None
-    is_developer = current_user.role.value == "developer"
+    user_role = current_user.role.value if current_user.role else None
+    is_developer = user_role == "developer"
+    is_manager = user_role == "manager"
 
     if is_developer and not token:
         raise HTTPException(
@@ -152,7 +257,7 @@ async def run_analysis(
             repo_data = await verify_repo_access(None, full_name)
         except HTTPException as e:
             if e.status_code == 404:
-                if current_user.role.value == "recruiter":
+                if user_role == "recruiter":
                     raise HTTPException(
                         status_code=403,
                         detail={"recruiter_private_repo": True}
@@ -196,7 +301,7 @@ async def run_analysis(
 
     is_private = repo_data.get("private", False)
 
-    if is_private and current_user.role.value == "recruiter":
+    if is_private and user_role == "recruiter":
         raise HTTPException(
             status_code=403,
             detail={"recruiter_private_repo": True}
@@ -216,6 +321,7 @@ async def run_analysis(
     contribution_context = None
     analysis_scope = "repository"
     touched_files: list[str] = []
+    manager_contributors: list[dict] = []
     cache_sha = head_sha
 
     if is_developer:
@@ -281,6 +387,65 @@ async def run_analysis(
         ) or python_contribution_fingerprint
         cache_sha = contribution_fingerprint
 
+    if is_manager:
+        try:
+            commit_records = await fetch_repository_commit_contributions(
+                token,
+                full_name,
+                data.branch,
+            )
+        except HTTPException as e:
+            if e.status_code in {404, 422, 502}:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "branch_not_found": True,
+                        "message": "Repository found, but this branch does not exist or is not accessible.",
+                    },
+                )
+            raise
+
+        registered_developers = (
+            db.query(User)
+            .filter(User.role == UserRole.developer)
+            .all()
+        )
+        manager_contributors = _build_manager_contributor_scopes(
+            registered_developers,
+            commit_records,
+        )
+
+        if not manager_contributors:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "no_registered_developer_contributions": True,
+                    "message": "No registered developers with Python contributions were found for this repository.",
+                },
+            )
+
+        analysis_scope = "team_contributions"
+        all_python_touched_files = sorted({
+            file_path
+            for contributor in manager_contributors
+            for file_path in contributor.get("python_touched_files", [])
+        })
+        team_fingerprint = await get_files_fingerprint(
+            token,
+            full_name,
+            data.branch,
+            all_python_touched_files,
+        )
+        if not team_fingerprint:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "no_python_contributions": True,
+                    "message": "Registered developers contributed Python files, but none are present on this branch anymore.",
+                },
+            )
+        cache_sha = team_fingerprint
+
     # Get or Create Repo
     repo = db.query(Repository).filter(Repository.github_repo_id == str(repo_data["id"])).first()
     if not repo:
@@ -295,9 +460,12 @@ async def run_analysis(
         db.commit()
         db.refresh(repo)
 
+    if is_manager:
+        _link_repository_contributors(db, repo.id, manager_contributors)
+
     # ── Incremental analysis: skip re-analysis if the relevant snapshot has not changed ──
     if cache_sha:
-        existing_run = (
+        existing_run_query = (
             db.query(AnalysisRun)
             .filter(
                 AnalysisRun.repository_id == repo.id,
@@ -306,10 +474,34 @@ async def run_analysis(
                 AnalysisRun.status == "completed",
                 AnalysisRun.analysis_scope == analysis_scope,
             )
-            .order_by(AnalysisRun.triggered_at.desc())
-            .first()
         )
+        if is_manager:
+            existing_run_query = existing_run_query.filter(AnalysisRun.user_id == current_user.id)
+
+        existing_run = existing_run_query.order_by(AnalysisRun.triggered_at.desc()).first()
         if existing_run:
+            if is_manager:
+                cached_team_scores = (
+                    db.query(SkillScore)
+                    .join(User, SkillScore.user_id == User.id)
+                    .filter(
+                        SkillScore.analysis_run_id == existing_run.id,
+                        User.role == UserRole.developer,
+                    )
+                    .count()
+                )
+                if cached_team_scores:
+                    return {
+                        "message": "Team contribution scope is up to date. Returning cached team results.",
+                        "analysis_run_id": existing_run.id,
+                        "status": "completed",
+                        "cached": True,
+                        "cached_scope": analysis_scope,
+                        "contributors_analyzed": cached_team_scores,
+                    }
+                existing_run = None
+
+        if existing_run and not is_manager:
             cached_for_current_user = score_belongs_to_user(db, existing_run.id, current_user.id)
             if link_existing_run_to_user(db, existing_run, current_user.id):
                 return {
@@ -333,7 +525,7 @@ async def run_analysis(
         user_id=current_user.id,
         commit_sha=cache_sha,
         analysis_scope=analysis_scope,
-        contributor_login=contributor_login,
+        contributor_login=None if is_manager else contributor_login,
         triggered_at=datetime.now(timezone.utc)
     )
     db.add(run)
@@ -341,28 +533,45 @@ async def run_analysis(
     db.refresh(run)
 
     # Trigger Background Task
-    background_tasks.add_task(
-        background_analysis_task,
-        run_id=run.id,
-        repo_id=repo.id,
-        repo_url=data.repo_url,
-        repo_name=repo_name,
-        branch=data.branch,
-        full_name=full_name,
-        token=token,
-        is_private=is_private,
-        current_user_id=current_user.id,
-        user_role=current_user.role.value,
-        analysis_scope=analysis_scope,
-        contributor_login=contributor_login,
-        touched_files=touched_files,
-    )
+    if is_manager:
+        background_tasks.add_task(
+            background_manager_team_analysis_task,
+            run_id=run.id,
+            repo_id=repo.id,
+            repo_url=data.repo_url,
+            repo_name=repo_name,
+            branch=data.branch,
+            full_name=full_name,
+            token=token,
+            is_private=is_private,
+            manager_user_id=current_user.id,
+            manager_contributors=manager_contributors,
+        )
+    else:
+        background_tasks.add_task(
+            background_analysis_task,
+            run_id=run.id,
+            repo_id=repo.id,
+            repo_url=data.repo_url,
+            repo_name=repo_name,
+            branch=data.branch,
+            full_name=full_name,
+            token=token,
+            is_private=is_private,
+            current_user_id=current_user.id,
+            user_role=user_role,
+            analysis_scope=analysis_scope,
+            contributor_login=contributor_login,
+            touched_files=touched_files,
+        )
 
     # Return Immediately
     return {
         "message": "Analysis started successfully. Running in the background.",
         "analysis_run_id": run.id,
-        "status": "running"
+        "status": "running",
+        "analysis_scope": analysis_scope,
+        "contributors_matched": len(manager_contributors) if is_manager else None,
     }
     
 @router.get("/history")
@@ -371,22 +580,35 @@ async def get_analysis_history(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    linked_completed_runs = (
+    # linked_completed_runs = (
+    #     db.query(AnalysisRun)
+    #     .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
+    #     .filter(SkillScore.user_id == current_user.id)
+    #     .all()
+    # )
+    # own_active_runs = (
+    #     db.query(AnalysisRun)
+    #     .filter(
+    #         AnalysisRun.user_id == current_user.id,
+    #         AnalysisRun.status != "completed",
+    #     )
+    #     .all()
+    # )
+
+    # unique_runs = {run.id: run for run in linked_completed_runs + own_active_runs}
+    linked_runs = (
         db.query(AnalysisRun)
         .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
         .filter(SkillScore.user_id == current_user.id)
         .all()
     )
-    own_active_runs = (
+    own_runs = (
         db.query(AnalysisRun)
-        .filter(
-            AnalysisRun.user_id == current_user.id,
-            AnalysisRun.status != "completed",
-        )
+        .filter(AnalysisRun.user_id == current_user.id)
         .all()
     )
 
-    unique_runs = {run.id: run for run in linked_completed_runs + own_active_runs}
+    unique_runs = {run.id: run for run in linked_runs + own_runs}
     past_runs = sorted(
         unique_runs.values(),
         key=lambda run: run.triggered_at or datetime.min.replace(tzinfo=timezone.utc),
@@ -1148,11 +1370,19 @@ async def get_analysis_result(
         .first()
     )
 
-    if not run or (run.status == "completed" and not score_belongs_to_user(db, run.id, current_user.id)) or (run.status != "completed" and run.user_id != current_user.id):
-        return {
-            "analysis_id": analysis_id,
-            "status": "pending",
-        }
+    # if not run or (run.status == "completed" and not score_belongs_to_user(db, run.id, current_user.id)) or (run.status != "completed" and run.user_id != current_user.id):
+    #     return {
+    #         "analysis_id": analysis_id,
+    #         "status": "pending",
+    #     }
+    if not run:
+        return {"analysis_id": analysis_id, "status": "pending"}
+
+    is_owner = run.user_id == current_user.id
+    has_score = score_belongs_to_user(db, run.id, current_user.id)
+
+    if not (is_owner or has_score):
+        return {"analysis_id": analysis_id, "status": "pending"}
 
     if run.status != "completed":
         return {

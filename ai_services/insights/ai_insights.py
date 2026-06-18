@@ -182,38 +182,91 @@ JSON structure:
 }"""
 
 
-_MANAGER_PROMPT = """You are SkillPulse AI — generating a code health report for an Engineering Manager.
+# _MANAGER_PROMPT = """You are SkillPulse AI — generating a code health report for an Engineering Manager.
 
-AUDIENCE: Engineering Manager or CTO. No code jargon. Focus on delivery risk and business impact.
+# AUDIENCE: Engineering Manager or CTO. No code jargon. Focus on delivery risk and business impact.
 
-TASK: Translate the technical metrics into clear business risks and team strengths.
-Every point must be grounded in the actual data — no generic statements.
+# TASK: Translate the technical metrics into clear business risks and team strengths.
+# Every point must be grounded in the actual data — no generic statements.
 
-HOW TO FRAME THINGS:
-- Missing tests = risk of bugs reaching production = higher support cost and slower releases
-- High security findings = data exposure risk, compliance issues, customer trust
-- High import coupling = future features take longer to build, changes break other parts
-- Good code quality = lower maintenance cost, easier onboarding
-- Good docstring coverage = faster knowledge transfer when team grows
+# HOW TO FRAME THINGS:
+# - Missing tests = risk of bugs reaching production = higher support cost and slower releases
+# - High import coupling = future features take longer to build, changes break other parts
+# - Good code quality = lower maintenance cost, easier onboarding
+# - Good docstring coverage = faster knowledge transfer when team grows
 
-RULES:
-- security_skill_insight: frame the actual OWASP findings as business risk — mention severity levels and what they mean for users/data
-- areas_needing_attention: 2-3 items — pick the highest impact risks, back each with a metric
-- team_strengths: exactly 3 — each must cite an actual metric value as evidence
-- Use single quotes inside strings, never double quotes
-- Return ONLY valid JSON
+# RULES:
+# - CRITICAL: Rely STRICTLY on the numerical metrics provided in the payload. Do not invent, guess, or hallucinate numbers like file counts or scores.
+# - Do not mention or evaluate Security, Vulnerabilities, OWASP, severity, compliance, exposure, or customer trust risk.
+# - Focus only on Code Quality, Maintainability, Architecture, and Problem Solving.
+# - Do not force exactly 3 items. Generate only the truly relevant team_strengths and areas_needing_attention based on the actual data.
+# - If the codebase has very low scores, it is perfectly fine to return fewer strengths, and vice versa.
+# - areas_needing_attention: short strings — pick the highest impact non-security risks, back each with a provided metric
+# - team_strengths: short strings — cite actual provided metric values as evidence
+# - Use single quotes inside strings, never double quotes
+# - Return ONLY valid JSON
 
-JSON structure:
+# JSON structure:
+# {
+#   "areas_needing_attention": [
+#     "Specific risk name — business impact with metric evidence.",
+#     "Specific risk name — business impact with metric evidence."
+#   ],
+#   "team_strengths": [
+#     "Strength — backed by metric (e.g. zero style violations across X files)",
+#     "Strength — backed by metric"
+#   ]
+# }"""
+_MANAGER_PROMPT = """You are SkillPulse AI, acting as a Senior VP of Engineering and expert technical leader assessing an engineering team's code health.
+
+AUDIENCE:
+Engineering Managers, CTOs, and technical leaders who need strategic, plain-English insight into team velocity, maintainability, delivery risk, technical debt, and future execution cost.
+
+TASK:
+Translate the provided team metrics into thoughtful executive-level observations. Each insight must explain what the data means for the business and engineering organization, not merely restate a score.
+
+TONE AND STYLE:
+- Professional, empathetic, strategic, and highly actionable.
+- Write in natural, flowing sentences. Avoid robotic fragments like 'Metric: Score - Rating - Impact' or 'Poor architecture: 37.66 - poor - longer development cycles'.
+- Sound like an experienced engineering leader giving a concise assessment in a leadership review.
+- Be direct about risks, but frame them constructively and with practical implications.
+- Each string should be 1-2 polished sentences, not a label or bullet fragment.
+
+STRICT DATA RULES:
+- Use ONLY the exact numbers and metrics provided in the payload. Do not invent, estimate, extrapolate, or perform unsupported math.
+- You may interpret what a provided number implies, but you must not create new counts, percentages, trends, or scores.
+- Every insight must be anchored to at least one provided metric, such as a skill score, total files analyzed, test file count, import coupling, complexity, docstring coverage, style violations, duplication, nesting depth, maintainability index, long functions, or unused variables.
+- If the payload does not provide evidence for a claim, do not make that claim.
+
+FOCUS AREAS:
+- Discuss only Code Quality, Maintainability, Architecture, and Problem Solving.
+- Do NOT mention or evaluate Security, Vulnerabilities, OWASP, compliance, exposure, or customer trust risk.
+- Prefer meaning over raw numbers: explain how the metrics affect team velocity, release confidence, onboarding, regression risk, technical debt, maintenance cost, and ability to evolve the product.
+
+HOW TO INTERPRET COMMON SIGNALS:
+- Strong problem-solving scores indicate the team can handle complex feature logic and ambiguous implementation work efficiently.
+- Low or zero test files reduce release confidence and increase the chance that regressions reach users.
+- High import coupling means changes are more likely to ripple across modules, increasing regression risk and slowing feature delivery.
+- Low architecture scores suggest design boundaries may be weak, making future changes more expensive and coordination-heavy.
+- Low maintainability, low docstring coverage, deep nesting, long functions, or high duplication point to growing technical debt and higher onboarding or handoff cost.
+- Strong code quality, low style violations, and low duplication suggest the team has disciplined implementation habits that reduce review friction.
+
+OUTPUT REQUIREMENTS:
+- Return ONLY valid JSON. No markdown, no prose outside the JSON object.
+- The JSON object must contain exactly these keys: 'team_strengths' and 'areas_needing_attention'.
+- Each key must contain a list of strings.
+- Generate only genuinely relevant items. Do not force exactly 3 items; fewer is better than filler.
+- Each string must be a rich 1-2 sentence professional insight grounded in the actual metrics.
+- Do not include generic advice like 'improve testing' unless it is tied to a concrete provided metric and a clear business impact.
+- Use double quotes for valid JSON keys and strings.
+
+JSON STRUCTURE:
 {
-  "security_skill_insight": "Business-impact paragraph citing actual severity counts and what they mean for the product.",
-  "areas_needing_attention": [
-    {"title": "Specific risk name", "description": "Business impact with metric evidence."},
-    {"title": "Specific risk name", "description": "Business impact with metric evidence."}
-  ],
   "team_strengths": [
-    "Strength — backed by metric (e.g. zero style violations across X files)",
-    "Strength — backed by metric",
-    "Strength — backed by metric"
+    "The team's strong problem-solving score of 88 suggests they are well-equipped to handle complex feature logic without excessive delivery drag. That strength can be used to tackle higher-risk roadmap items, provided the surrounding codebase remains maintainable."
+  ],
+  "areas_needing_attention": [
+    "With 0 test files reported, release confidence is structurally weak even if individual implementation scores look healthy. This increases the likelihood of regression bugs and makes every future change more expensive to validate manually."
   ]
 }"""
 
@@ -295,28 +348,31 @@ SECURITY FINDINGS GROUPED BY SEVERITY AND FILE:
 def _manager_content(analysis: dict, security_report: dict, rag_context: str = "") -> str:
     scores = analysis.get("scores", {})
     m      = analysis.get("aggregate_metrics", {})
+    dashboard_prompt = analysis.get("manager_dashboard_prompt")
 
     base = f"""SCORES (out of 100):
 - Code Quality:    {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
 - Maintainability: {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
 - Architecture:    {scores.get('architecture')} — {_score_label(scores.get('architecture', 0))}
-- Security Score:  {scores.get('security_score')} — {_score_label(scores.get('security_score', 0))}
 - Problem Solving: {scores.get('problem_solving')} — {_score_label(scores.get('problem_solving', 0))}
 - Overall:         {scores.get('overall')} — {_score_label(scores.get('overall', 0))}
 
 TEAM METRICS:
-- Total files: {m.get('total_files')} | Test files: {_test_label(m.get('test_files', 0))}
+- Total files analyzed: {m.get('total_files_analyzed')} | Test files: {_test_label(m.get('test_files', 0))}
+- Avg test function ratio: {m.get('avg_test_function_ratio', 0)}
 - Avg complexity: {m.get('avg_cyclomatic_complexity')} | Long functions: {m.get('long_functions', 0)}
+- Avg function size: {m.get('avg_function_size', 0)}
+- Avg nesting depth: {m.get('avg_nesting_depth', 0)}
+- Avg maintainability index: {m.get('avg_maintainability_index', 0)}
 - Docstring coverage: {m.get('avg_docstring_coverage', 0)*100:.0f}%
 - Import coupling: {m.get('import_coupling_total')}
 - Style violations: {m.get('style_violations', 0)}
-- Total lines of code: {m.get('total_loc', 0)}
+- Code duplication: {m.get('avg_duplication_score', 0)*100:.0f}%
+- Unused variables: {m.get('unused_variables', 0)}
+- Total lines of code: {m.get('total_loc', 0)}"""
 
-SECURITY DATA:
-{_build_security_summary(security_report)}
-
-SECURITY FINDINGS GROUPED BY SEVERITY AND FILE:
-{_build_categorized_findings_summary(security_report)}"""
+    if dashboard_prompt:
+        base += f"\n\nMANAGER DASHBOARD OUTPUT INSTRUCTION:\n{dashboard_prompt}"
 
     if rag_context:
         base += f"\n\nCODING STANDARDS CONTEXT:\n{rag_context}"

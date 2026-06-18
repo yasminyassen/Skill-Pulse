@@ -329,6 +329,88 @@ async def fetch_repo_python_files(
     return [f for f in files if f is not None]
 
 
+async def fetch_repository_commit_contributions(
+    github_token: str | None,
+    full_name: str,
+    branch: str,
+    max_pages: int = 2,
+) -> list[dict]:
+    """Fetch recent branch commits with contributor identities and touched files."""
+    headers = {**_GITHUB_HEADERS}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    commits: list[dict] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for page in range(1, max_pages + 1):
+            response = await client.get(
+                f"{GITHUB_API_BASE}/repos/{full_name}/commits",
+                headers=headers,
+                params={
+                    "sha": branch,
+                    "per_page": 100,
+                    "page": page,
+                },
+            )
+            _raise_for_github_error(response, resource="repository commits")
+            page_commits = response.json() if isinstance(response.json(), list) else []
+            if not page_commits:
+                break
+
+            commits.extend(page_commits)
+            if len(page_commits) < 100:
+                break
+
+        sem = asyncio.Semaphore(4)
+
+        async def _fetch_commit_detail(commit: dict) -> dict | None:
+            sha = commit.get("sha")
+            if not sha:
+                return None
+
+            async with sem:
+                detail_res = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{full_name}/commits/{sha}",
+                    headers=headers,
+                )
+            _raise_for_github_error(detail_res, resource="repository commit")
+            detail = detail_res.json()
+
+            author_user = detail.get("author") or commit.get("author") or {}
+            commit_body = detail.get("commit") or commit.get("commit") or {}
+            author_body = commit_body.get("author") or {}
+            committer_body = commit_body.get("committer") or {}
+
+            emails = {
+                email.strip().lower()
+                for email in (
+                    author_body.get("email"),
+                    committer_body.get("email"),
+                )
+                if isinstance(email, str) and email.strip()
+            }
+            files = [
+                str(file_info.get("filename")).replace("\\", "/")
+                for file_info in detail.get("files", []) or []
+                if file_info.get("filename")
+            ]
+
+            return {
+                "sha": sha,
+                "login": author_user.get("login"),
+                "github_id": str(author_user.get("id")) if author_user.get("id") is not None else None,
+                "emails": sorted(emails),
+                "date": author_body.get("date") or committer_body.get("date"),
+                "touched_files": sorted(set(files)),
+            }
+
+        details = await asyncio.gather(
+            *[_fetch_commit_detail(commit) for commit in commits]
+        )
+
+    return [detail for detail in details if detail is not None]
+
+
 def read_local_repo_files(repo_path):
     python_files = []
     for root, _, files in os.walk(repo_path):

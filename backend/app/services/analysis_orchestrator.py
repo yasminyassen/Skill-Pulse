@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ValidationError
-
+from sqlalchemy.orm.attributes import flag_modified
 from app.db.database import SessionLocal
-from app.db.models import AnalysisRun, RepositoryAnalysis, SecurityFinding, CodeMetrics, SkillScore, User
+from app.db.models import AnalysisRun, Repository, RepositoryAnalysis, SecurityFinding, CodeMetrics, SkillScore, User, UserRole
 from app.services.security.pipeline import run_security_analysis
 from app.services.github_client import (
     read_local_repo_files,
@@ -31,6 +31,13 @@ from app.services.architecture_scoring import (
 )
 from app.services.metrics import build_unified_schema
 from app.services.learning_recommendations import build_learning_recommendations
+from app.api.manager_dashboard import (
+    _analysis_run_ids,
+    _build_team_aggregate_metrics,
+    _build_team_score_payload,
+    _query_manager_score_rows,
+    _stringify_attention_items,
+)
 from ai_services.insights.ai_insights import generate_insights
 from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
 from app.core.auth_utils import decrypt_github_token
@@ -40,6 +47,79 @@ from app.services.code_analysis_service import apply_adjustment, compute_overall
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _build_manager_dashboard_payload(rows: list, db: Session) -> dict:
+    scores = _build_team_score_payload(rows)
+    aggregate_metrics = _build_team_aggregate_metrics(db, _analysis_run_ids(rows))
+    return {
+        "scores": scores,
+        "aggregate_metrics": {
+            **aggregate_metrics,
+            "team_size": len({user.id for _, _, _, user in rows}),
+            "repository_count": len({run.repository_id for _, run, _, _ in rows}),
+        },
+        "manager_dashboard_prompt": (
+            "CRITICAL: Rely STRICTLY on the numerical metrics provided in the payload. "
+            "DO NOT invent, guess, or hallucinate numbers like file counts or scores. "
+            "DO NOT mention or evaluate Security/Vulnerabilities at all. Focus only on "
+            "Code Quality, Maintainability, Architecture, and Problem Solving. "
+            "DO NOT force exactly 3 items. Generate only the truly relevant team_strengths "
+            "and areas_needing_attention based on the actual data. If the codebase has very "
+            "low scores, it is perfectly fine to return fewer strengths, and vice versa."
+        ),
+    }
+
+
+def _pure_manager_insights(raw_insights: object) -> dict | None:
+    if not isinstance(raw_insights, dict):
+        return None
+    if (
+        "team_strengths" not in raw_insights
+        and "areas_needing_attention" not in raw_insights
+    ):
+        return None
+
+    return {
+        "team_strengths": [
+            str(item).strip()
+            for item in (raw_insights.get("team_strengths") or [])
+            if str(item).strip()
+        ],
+        "areas_needing_attention": _stringify_attention_items(
+            raw_insights.get("areas_needing_attention") or []
+        ),
+    }
+
+
+async def _generate_manager_dashboard_insights_from_rows(
+    rows: list,
+    db: Session,
+    manager_user_id: int,
+    scope: str,
+) -> dict | None:
+    if not rows:
+        logger.info(
+            "Skipped manager dashboard insight generation manager_user_id=%s scope=%s reason=no_rows",
+            manager_user_id,
+            scope,
+        )
+        return None
+
+    raw_insights = await generate_insights(
+        role="manager",
+        analysis_result=_build_manager_dashboard_payload(rows, db),
+        security_report={},
+        doc_id=STANDARDS_DOC_ID,
+    )
+    pure_insights = _pure_manager_insights(raw_insights)
+    if pure_insights is None:
+        logger.warning(
+            "Manager dashboard LLM returned no cacheable team insights manager_user_id=%s scope=%s",
+            manager_user_id,
+            scope,
+        )
+    return pure_insights
 
 
 class FindingModel(BaseModel):
@@ -153,9 +233,26 @@ async def background_analysis_task(
     analysis_scope: str = "repository",
     contributor_login: str | None = None,
     touched_files: list[str] | None = None,
+    manager_contributors: list[dict] | None = None,
+    finalize_run: bool = True,
+    generate_ai_insights: bool | None = None,
 ):
     is_recruiter_scoring_mode = user_role == "recruiter"
-    skip_insights = is_recruiter_scoring_mode
+    if user_role == "manager":
+        return await background_manager_team_analysis_task(
+            run_id=run_id,
+            repo_id=repo_id,
+            repo_url=repo_url,
+            repo_name=repo_name,
+            branch=branch,
+            full_name=full_name,
+            token=token,
+            is_private=is_private,
+            manager_user_id=current_user_id,
+            manager_contributors=manager_contributors or [],
+        )
+
+    skip_insights = is_recruiter_scoring_mode or generate_ai_insights is False
     logger.info(
         "[run=%s] Background analysis started repo=%s full_name=%s role=%s scope=%s mode=%s",
         run_id,
@@ -699,28 +796,45 @@ async def background_analysis_task(
             ai_insights["skills_insights"] = skills_insights
             logger.info("[run=%s] Developer insight generation finished", run_id)
         else:
-            logger.info("[run=%s] Recruiter mode: skipped AI insights and learning recommendations", run_id)
+            logger.info(
+                "[run=%s] Insight generation skipped role=%s finalize_run=%s",
+                run_id,
+                user_role,
+                finalize_run,
+            )
 
-        run.ai_insights = ai_insights
-        run.status = "completed"
-        run.completed_at = datetime.now(timezone.utc)
-        repo_analysis = (
-            db.query(RepositoryAnalysis)
-            .filter(RepositoryAnalysis.last_run_id == run.id)
-            .first()
-        )
-        if repo_analysis:
-            repo_analysis.analysis_status = "completed"
-            repo_analysis.analyzed_at = run.completed_at
-        db.commit()
-        logger.info("[run=%s] Background analysis completed successfully", run_id)
+        if finalize_run:
+            run.ai_insights = ai_insights
+            run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
+            repo_analysis = (
+                db.query(RepositoryAnalysis)
+                .filter(RepositoryAnalysis.last_run_id == run.id)
+                .first()
+            )
+            if repo_analysis:
+                repo_analysis.analysis_status = "completed"
+                repo_analysis.analyzed_at = run.completed_at
+            db.commit()
+            logger.info("[run=%s] Background analysis completed successfully", run_id)
+        else:
+            logger.info(
+                "[run=%s] Contributor score completed user_id=%s without finalizing run",
+                run_id,
+                current_user_id,
+            )
+        return {
+            "status": "completed",
+            "run_id": run_id,
+            "score_user_id": current_user_id,
+        }
 
     except LLMError as exc:
         error_text = str(exc)
         logger.exception("[run=%s] LLM error in background task", run_id)
 
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
-        if run:
+        if run and finalize_run:
             run.status = "failed"
             run.completed_at = datetime.now(timezone.utc)
             run.ai_insights = {
@@ -737,17 +851,27 @@ async def background_analysis_task(
                 repo_analysis.analyzed_at = run.completed_at
             db.commit()
             logger.info("[run=%s] Failure status persisted after LLM error", run_id)
+        return {
+            "status": "failed",
+            "run_id": run_id,
+            "score_user_id": current_user_id,
+            "error_reason": "llm_failed",
+            "error_message": error_text,
+        }
     except Exception as exc:
         error_text = str(exc)
         logger.exception("[run=%s] Background task error", run_id)
 
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
-        if run:
+        error_reason = "unknown"
+        if run and finalize_run:
             run.status = "failed"
             run.completed_at = datetime.now(timezone.utc)
             if "rate" in error_text.lower():
+                error_reason = "rate_limit"
                 run.ai_insights = {"error_reason": "rate_limit", "error_message": error_text}
             elif "not found" in error_text.lower():
+                error_reason = "not_found"
                 run.ai_insights = {"error_reason": "not_found", "error_message": error_text}
             else:
                 run.ai_insights = {"error_reason": "unknown", "error_message": error_text}
@@ -761,5 +885,204 @@ async def background_analysis_task(
                 repo_analysis.analyzed_at = run.completed_at
             db.commit()
             logger.info("[run=%s] Failure status persisted after background task error", run_id)
+        elif "rate" in error_text.lower():
+            error_reason = "rate_limit"
+        elif "not found" in error_text.lower():
+            error_reason = "not_found"
+        return {
+            "status": "failed",
+            "run_id": run_id,
+            "score_user_id": current_user_id,
+            "error_reason": error_reason,
+            "error_message": error_text,
+        }
+    finally:
+        db.close()
+
+
+async def background_manager_team_analysis_task(
+    run_id: int,
+    repo_id: int,
+    repo_url: str,
+    repo_name: str,
+    branch: str,
+    full_name: str,
+    token: str,
+    is_private: bool,
+    manager_user_id: int,
+    manager_contributors: list[dict],
+):
+    logger.info(
+        "[run=%s] Manager team analysis started contributors=%d",
+        run_id,
+        len(manager_contributors),
+    )
+    completed: list[dict] = []
+    failed: list[dict] = []
+
+    for contributor in manager_contributors:
+        try:
+            developer_id = int(contributor.get("user_id"))
+        except (TypeError, ValueError):
+            failed.append({
+                "user_id": contributor.get("user_id"),
+                "error_reason": "invalid_contributor",
+                "error_message": "Contributor payload did not include a valid user_id.",
+            })
+            continue
+
+        contributor_files = contributor.get("touched_files") or []
+        if not contributor_files:
+            failed.append({
+                "user_id": developer_id,
+                "error_reason": "no_touched_files",
+                "error_message": "Contributor payload did not include touched files.",
+            })
+            continue
+
+        result = await background_analysis_task(
+            run_id=run_id,
+            repo_id=repo_id,
+            repo_url=repo_url,
+            repo_name=repo_name,
+            branch=branch,
+            full_name=full_name,
+            token=token,
+            is_private=is_private,
+            current_user_id=developer_id,
+            user_role="developer",
+            analysis_scope="contribution",
+            contributor_login=contributor.get("contributor_login"),
+            touched_files=contributor_files,
+            finalize_run=False,
+            generate_ai_insights=False,
+        )
+
+        result = result or {}
+        if result.get("status") == "completed":
+            completed.append({
+                "user_id": developer_id,
+                "contributor_login": contributor.get("contributor_login"),
+                "touched_file_count": len(contributor_files),
+            })
+        else:
+            failed.append({
+                "user_id": developer_id,
+                "contributor_login": contributor.get("contributor_login"),
+                "error_reason": result.get("error_reason") or "analysis_failed",
+                "error_message": result.get("error_message") or "Contributor analysis failed.",
+            })
+
+    db = SessionLocal()
+    try:
+        run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
+        if not run:
+            logger.warning("[run=%s] Manager team analysis could not finalize: run not found", run_id)
+            return {
+                "status": "failed",
+                "run_id": run_id,
+                "error_reason": "run_not_found",
+            }
+
+        score_count = (
+            db.query(SkillScore)
+            .filter(SkillScore.analysis_run_id == run_id)
+            .count()
+        )
+        run.completed_at = datetime.now(timezone.utc)
+        run.status = "completed" if score_count else "failed"
+        if run.status == "completed":
+            manager_user = db.query(User).filter(User.id == manager_user_id).first()
+            repo_score_rows = (
+                db.query(SkillScore, AnalysisRun, Repository, User)
+                .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
+                .join(Repository, AnalysisRun.repository_id == Repository.id)
+                .join(User, SkillScore.user_id == User.id)
+                .filter(
+                    SkillScore.analysis_run_id == run_id,
+                    User.role == UserRole.developer,
+                )
+                .all()
+            )
+
+            try:
+                repo_insights = await _generate_manager_dashboard_insights_from_rows(
+                    repo_score_rows,
+                    db,
+                    manager_user_id,
+                    f"run:{run_id}",
+                )
+                if repo_insights is not None:
+                    run.ai_insights = repo_insights
+                    logger.info(
+                        "[run=%s] Saved repo-specific manager team insights manager_user_id=%s",
+                        run_id,
+                        manager_user_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "[run=%s] Repo-specific manager team insight generation failed manager_user_id=%s",
+                    run_id,
+                    manager_user_id,
+                )
+
+            try:
+                if manager_user:
+                    global_rows = _query_manager_score_rows(db, manager_user_id)
+                    global_insights = await _generate_manager_dashboard_insights_from_rows(
+                        global_rows,
+                        db,
+                        manager_user_id,
+                        "global",
+                    )
+                    if global_insights is not None:
+                        manager_user.global_team_insights = global_insights
+                        flag_modified(manager_user, "global_team_insights")
+                        logger.info(
+                            "[run=%s] Saved global manager team insights manager_user_id=%s",
+                            run_id,
+                            manager_user_id,
+                        )
+            except Exception:
+                logger.exception(
+                    "[run=%s] Global manager team insight generation failed manager_user_id=%s",
+                    run_id,
+                    manager_user_id,
+                )
+        logger.info(
+            "[run=%s] Manager team execution summary manager_user_id=%s requested=%d analyzed=%d failed=%d completed=%s failed_details=%s",
+            run_id,
+            manager_user_id,
+            len(manager_contributors),
+            len(completed),
+            len(failed),
+            completed,
+            failed,
+        )
+
+        repo_analysis = (
+            db.query(RepositoryAnalysis)
+            .filter(RepositoryAnalysis.last_run_id == run.id)
+            .first()
+        )
+        if repo_analysis:
+            repo_analysis.analysis_status = run.status
+            repo_analysis.analyzed_at = run.completed_at
+
+        db.commit()
+        logger.info(
+            "[run=%s] Manager team analysis finalized status=%s scores=%d completed=%d failed=%d",
+            run_id,
+            run.status,
+            score_count,
+            len(completed),
+            len(failed),
+        )
+        return {
+            "status": run.status,
+            "run_id": run_id,
+            "contributors_analyzed": len(completed),
+            "contributors_failed": len(failed),
+        }
     finally:
         db.close()
