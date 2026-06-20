@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import tempfile
@@ -219,7 +220,11 @@ async def build_personal_repo_context(
     }
 
 
-async def background_analysis_task(
+def background_analysis_task(*args, **kwargs):
+    return asyncio.run(_background_analysis_task_async(*args, **kwargs))
+
+
+async def _background_analysis_task_async(
     run_id: int,
     repo_id: int,
     repo_url: str,
@@ -239,7 +244,7 @@ async def background_analysis_task(
 ):
     is_recruiter_scoring_mode = user_role == "recruiter"
     if user_role == "manager":
-        return await background_manager_team_analysis_task(
+        return await _background_manager_team_analysis_task_async(
             run_id=run_id,
             repo_id=repo_id,
             repo_url=repo_url,
@@ -900,7 +905,11 @@ async def background_analysis_task(
         db.close()
 
 
-async def background_manager_team_analysis_task(
+def background_manager_team_analysis_task(*args, **kwargs):
+    return asyncio.run(_background_manager_team_analysis_task_async(*args, **kwargs))
+
+
+async def _background_manager_team_analysis_task_async(
     run_id: int,
     repo_id: int,
     repo_url: str,
@@ -940,7 +949,7 @@ async def background_manager_team_analysis_task(
             })
             continue
 
-        result = await background_analysis_task(
+        result = await _background_analysis_task_async(
             run_id=run_id,
             repo_id=repo_id,
             repo_url=repo_url,
