@@ -276,35 +276,6 @@ class RepositoryContributor(Base):
     user = relationship("User")
 
 
-class ManagerTeamMember(Base):
-    __tablename__ = "manager_team_members"
-    __table_args__ = (
-        UniqueConstraint("manager_id", "user_id", name="uq_manager_team_members_manager_user"),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    manager_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    status = Column(String, nullable=False, default="active")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    manager = relationship("User", foreign_keys=[manager_id])
-    user = relationship("User", foreign_keys=[user_id])
-
-
-class ManagerTeamInvite(Base):
-    __tablename__ = "manager_team_invites"
-
-    id = Column(Integer, primary_key=True, index=True)
-    manager_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    email = Column(String, nullable=False, index=True)
-    specialization = Column(String, nullable=True)
-    status = Column(String, nullable=False, default="pending")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    manager = relationship("User")
-
-
 class ProfileActivityLog(Base):
     __tablename__ = "profile_activity_logs"
 

@@ -11,7 +11,6 @@ if ROOT_DIR not in sys.path:
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -20,8 +19,6 @@ from app.core.auth_utils import get_current_user, has_usable_password_hash, hash
 from app.db.models import (
     AnalysisRun,
     CodeMetrics,
-    ManagerTeamInvite,
-    ManagerTeamMember,
     ProfileActivityLog,
     RecruiterCandidate,
     RepositoryAnalysis,
@@ -324,10 +321,6 @@ def _delete_current_user(db: Session, current_user: User) -> MessageResponse:
     db.query(RepositoryContributor).filter(RepositoryContributor.user_id == user_id).delete(synchronize_session=False)
     db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete(synchronize_session=False)
     db.query(SkillScore).filter(SkillScore.user_id == user_id).delete(synchronize_session=False)
-    db.query(ManagerTeamMember).filter(
-        or_(ManagerTeamMember.manager_id == user_id, ManagerTeamMember.user_id == user_id)
-    ).delete(synchronize_session=False)
-    db.query(ManagerTeamInvite).filter(ManagerTeamInvite.manager_id == user_id).delete(synchronize_session=False)
     db.query(ProfileActivityLog).filter(ProfileActivityLog.manager_id == user_id).delete(synchronize_session=False)
     db.query(ProfileActivityLog).filter(ProfileActivityLog.actor_id == user_id).update(
         {ProfileActivityLog.actor_id: None},

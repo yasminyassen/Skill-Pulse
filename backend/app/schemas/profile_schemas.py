@@ -11,9 +11,7 @@ class ProfileResponse(BaseModel):
     email: str
     role: str | None = None
     avatar_url: str | None = None
-    github_login: str | None = None
     github_connected: bool = False
-    has_password: bool = False
     organization: str | None = None
     department: str | None = None
     job_title: str | None = None
@@ -62,31 +60,7 @@ class ProfileActivity(BaseModel):
     icon: str
     title: str
     description: str
-    created_at: datetime
     time_ago: str
-
-
-class InviteTeamMemberRequest(BaseModel):
-    email: EmailStr
-    specialization: str | None = Field(default=None, pattern="^(backend|frontend|qa)$")
-
-
-class UpdateMemberSpecializationRequest(BaseModel):
-    specialization: str = Field(..., pattern="^(backend|frontend|qa)$")
-
-
-class ProfileTeamMember(BaseModel):
-    id: int | None = None
-    invite_id: int | None = None
-    full_name: str
-    username: str | None = None
-    email: str
-    avatar_url: str | None = None
-    specialization: str | None = None
-    status: str
-    repository_count: int = 0
-    analysis_count: int = 0
-    average_overall_score: float = 0
 
 
 class MessageResponse(BaseModel):

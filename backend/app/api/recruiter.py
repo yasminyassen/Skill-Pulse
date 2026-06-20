@@ -10,15 +10,13 @@ if ROOT_DIR not in sys.path:
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from typing import Optional
 
 from app.db.database import get_db
 from app.db.models import (
     AnalysisRun,
     CodeMetrics,
-    ManagerTeamInvite,
-    ManagerTeamMember,
     ProfileActivityLog,
     RecruiterCandidate,
     RefreshToken,
@@ -299,10 +297,6 @@ def _delete_recruiter_account(db: Session, current_user: User) -> MessageRespons
     db.query(RepositoryContributor).filter(RepositoryContributor.user_id == user_id).delete(synchronize_session=False)
     db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete(synchronize_session=False)
     db.query(SkillScore).filter(SkillScore.user_id == user_id).delete(synchronize_session=False)
-    db.query(ManagerTeamMember).filter(
-        or_(ManagerTeamMember.manager_id == user_id, ManagerTeamMember.user_id == user_id)
-    ).delete(synchronize_session=False)
-    db.query(ManagerTeamInvite).filter(ManagerTeamInvite.manager_id == user_id).delete(synchronize_session=False)
     db.query(ProfileActivityLog).filter(ProfileActivityLog.manager_id == user_id).delete(synchronize_session=False)
     db.query(ProfileActivityLog).filter(ProfileActivityLog.actor_id == user_id).update(
         {ProfileActivityLog.actor_id: None},
