@@ -5,18 +5,16 @@ import { ArrowLeft, Check, KeyRound, LockKeyhole, Save, Trash2, X } from "lucide
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
 
-const accent = "#6366f1";
+const accent = "#8b5cf6";
 
-interface ProfileData {
+interface Profile {
   id: number;
   full_name: string;
   username: string;
   email: string;
   role: string | null;
   avatar_url: string | null;
-  github_login: string | null;
   github_connected: boolean;
-  has_password: boolean;
   organization: string | null;
   department: string | null;
   job_title: string | null;
@@ -40,9 +38,11 @@ const initials = (name: string) =>
     .join("")
     .toUpperCase() || "SP";
 
-export default function AccountSettings() {
+export default function ManagerAccountSettings() {
   const navigate = useNavigate();
-  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  // true = عنده password, false = GitHub only, null = لسه بيتحمل
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
   const [form, setForm] = useState({
     full_name: "",
     email: "",
@@ -62,8 +62,6 @@ export default function AccountSettings() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
-  const hasPassword = Boolean(profile?.has_password);
-
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
     window.setTimeout(() => setToast(null), 2800);
@@ -72,9 +70,11 @@ export default function AccountSettings() {
   const loadProfile = async () => {
     setLoading(true);
     try {
-      const response = await api.get<ProfileData>("/profile");
+      const response = await api.get<Profile>("/manager/profile");
       const data = response.data;
       setProfile(data);
+      // لو github_connected بس ومفيش password
+      setHasPassword(!data.github_connected);
       setForm({
         full_name: data.full_name || "",
         email: data.email || "",
@@ -98,7 +98,7 @@ export default function AccountSettings() {
     event.preventDefault();
     setSaving(true);
     try {
-      const response = await api.patch<ProfileData>("/profile", {
+      const response = await api.patch<Profile>("/manager/profile", {
         full_name: form.full_name,
         email: form.email,
         avatar_url: form.avatar_url || null,
@@ -106,7 +106,7 @@ export default function AccountSettings() {
         department: form.department || null,
         job_title: form.job_title || null,
       });
-      setProfile(prev => prev ? { ...prev, ...response.data, has_password: prev.has_password } : response.data);
+      setProfile(response.data);
       localStorage.setItem("full_name", response.data.full_name);
       showToast("Account settings saved");
     } catch {
@@ -116,10 +116,11 @@ export default function AccountSettings() {
     }
   };
 
+  // ── للـ GitHub users: طلب كود عشان يحددوا password لأول مرة ──
   const requestSetPasswordCode = async () => {
     setSaving(true);
     try {
-      const response = await api.post<MessageResponse>("/profile/set-password/request-code");
+      const response = await api.post<MessageResponse>("/manager/profile/set-password/request-code");
       const returnedCode = response.data.data?.verification_code;
       if (returnedCode) {
         setPasswordForm(prev => ({ ...prev, verification_code: returnedCode }));
@@ -133,18 +134,19 @@ export default function AccountSettings() {
     }
   };
 
+  // ── للـ GitHub users: تحديد password لأول مرة ──
   const setPassword = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.post("/profile/set-password", {
+      await api.post("/manager/profile/set-password", {
         new_password: passwordForm.new_password,
         verification_code: passwordForm.verification_code,
       });
       setPasswordForm({ current_password: "", new_password: "", verification_code: "" });
       setCodeSent(false);
-      setProfile(prev => prev ? { ...prev, has_password: true } : prev);
-      showToast("Password set successfully");
+      setHasPassword(true); // دلوقتي عنده password ويقدر يمسح الأكونت
+      showToast("Password set successfully — you can now delete your account");
     } catch {
       showToast("Could not set password", false);
     } finally {
@@ -152,6 +154,7 @@ export default function AccountSettings() {
     }
   };
 
+  // ── للـ password users: طلب كود عشان يغيروا password ──
   const requestPasswordCode = async () => {
     if (!passwordForm.current_password) {
       showToast("Enter your current password first", false);
@@ -159,7 +162,7 @@ export default function AccountSettings() {
     }
     setSaving(true);
     try {
-      const response = await api.post<MessageResponse>("/profile/change-password/request-code", {
+      const response = await api.post<MessageResponse>("/manager/profile/change-password/request-code", {
         current_password: passwordForm.current_password,
       });
       const returnedCode = response.data.data?.verification_code;
@@ -175,11 +178,12 @@ export default function AccountSettings() {
     }
   };
 
+  // ── للـ password users: تغيير password ──
   const changePassword = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.post("/profile/change-password", passwordForm);
+      await api.post("/manager/profile/change-password", passwordForm);
       setPasswordForm({ current_password: "", new_password: "", verification_code: "" });
       setCodeSent(false);
       showToast("Password changed");
@@ -192,10 +196,10 @@ export default function AccountSettings() {
 
   const deleteAccount = async (event: FormEvent) => {
     event.preventDefault();
-    if (!window.confirm("Delete this developer account permanently?")) return;
+    if (!window.confirm("Delete this manager account permanently?")) return;
     setSaving(true);
     try {
-      await api.post("/profile/delete-account", deleteForm);
+      await api.post("/manager/profile/delete-account", deleteForm);
       localStorage.clear();
       window.location.href = "/login?account=deleted";
     } catch {
@@ -210,39 +214,39 @@ export default function AccountSettings() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
 
-        .das-page {
+        .mas-page {
           min-height: 100vh;
           background: var(--bg-gradient);
           color: var(--text-primary);
           font-family: 'DM Sans', system-ui, sans-serif;
           padding: 36px 40px 80px;
         }
-        .das-shell {
+        .mas-shell {
           max-width: 860px;
           margin: 0 auto;
           display: flex;
           flex-direction: column;
           gap: 16px;
         }
-        .das-header {
+        .mas-header {
           display: flex;
           align-items: center;
           gap: 14px;
           margin-bottom: 8px;
         }
-        .das-header h1 {
+        .mas-header h1 {
           margin: 0;
           font-family: 'Syne', sans-serif;
           font-size: 26px;
           letter-spacing: 0;
         }
-        .das-header p {
+        .mas-header p {
           margin: 3px 0 0;
           color: var(--text-muted);
           font-size: 13px;
         }
-        .das-back,
-        .das-btn {
+        .mas-back,
+        .mas-btn {
           min-height: 40px;
           display: inline-flex;
           align-items: center;
@@ -258,38 +262,38 @@ export default function AccountSettings() {
           font-weight: 800;
           cursor: pointer;
         }
-        .das-back {
+        .mas-back {
           width: 40px;
           padding: 0;
           flex: 0 0 auto;
         }
-        .das-btn.primary {
+        .mas-btn.primary {
           color: white;
           border-color: transparent;
           background: ${accent};
         }
-        .das-btn.danger {
+        .mas-btn.danger {
           color: #fecaca;
           border-color: rgba(248,113,113,0.36);
           background: rgba(220,38,38,0.24);
         }
-        .das-btn:disabled {
+        .mas-btn:disabled {
           opacity: 0.55;
           cursor: not-allowed;
         }
-        .das-panel {
+        .mas-panel {
           border: 1px solid var(--border);
           border-radius: 8px;
           background: var(--bg-card);
           box-shadow: var(--shadow-card);
           padding: 20px;
         }
-        .das-person {
+        .mas-person {
           display: flex;
           align-items: center;
           gap: 14px;
         }
-        .das-avatar {
+        .mas-avatar {
           width: 62px;
           height: 62px;
           border-radius: 50%;
@@ -303,33 +307,33 @@ export default function AccountSettings() {
           font-size: 20px;
           flex: 0 0 auto;
         }
-        .das-avatar img {
+        .mas-avatar img {
           width: 100%;
           height: 100%;
           object-fit: cover;
         }
-        .das-person strong {
+        .mas-person strong {
           display: block;
           color: var(--text-primary);
           font-size: 17px;
         }
-        .das-person span {
+        .mas-person span {
           color: var(--text-muted);
           font-size: 12px;
         }
-        .das-panel h2 {
+        .mas-panel h2 {
           margin: 0 0 16px;
           padding-bottom: 12px;
           border-bottom: 1px solid var(--border);
           font-size: 16px;
           letter-spacing: 0;
         }
-        .das-grid {
+        .mas-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 12px;
         }
-        .das-field {
+        .mas-field {
           display: flex;
           flex-direction: column;
           gap: 7px;
@@ -337,7 +341,7 @@ export default function AccountSettings() {
           font-size: 12px;
           font-weight: 800;
         }
-        .das-field input {
+        .mas-field input {
           width: 100%;
           min-height: 42px;
           border: 1px solid var(--border);
@@ -350,10 +354,10 @@ export default function AccountSettings() {
           font-size: 13px;
           box-sizing: border-box;
         }
-        .das-field input:focus {
-          border-color: rgba(99,102,241,0.62);
+        .mas-field input:focus {
+          border-color: rgba(139,92,246,0.62);
         }
-        .das-actions {
+        .mas-actions {
           display: flex;
           justify-content: flex-end;
           gap: 10px;
@@ -361,48 +365,50 @@ export default function AccountSettings() {
           padding-top: 16px;
           border-top: 1px solid var(--border);
         }
-        .das-password {
+        .mas-password {
           display: grid;
           gap: 12px;
           align-items: end;
         }
-        .das-password.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        .das-password.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .das-password-note,
-        .das-danger p,
-        .das-github-notice,
-        .das-danger-notice {
+        .mas-password.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .mas-password.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .mas-password-note {
+          margin: 10px 0 0;
+          color: var(--text-muted);
+          font-size: 12px;
+          line-height: 1.45;
+        }
+        .mas-github-notice {
+          margin: 0 0 14px;
+          padding: 10px 14px;
+          border-radius: 8px;
+          border: 1px solid rgba(139,92,246,0.3);
+          background: rgba(139,92,246,0.08);
+          color: #c4b5fd;
+          font-size: 12px;
+          line-height: 1.6;
+        }
+        .mas-danger {
+          border-color: rgba(248,113,113,0.26);
+          background: rgba(248,113,113,0.07);
+        }
+        .mas-danger p {
+          margin: 0 0 14px;
           color: var(--text-muted);
           font-size: 12px;
           line-height: 1.5;
         }
-        .das-password-note {
-          margin: 10px 0 0;
-        }
-        .das-github-notice {
-          margin: 0 0 14px;
-          padding: 10px 14px;
-          border-radius: 8px;
-          border: 1px solid rgba(99,102,241,0.3);
-          background: rgba(99,102,241,0.08);
-          color: #c7d2fe;
-        }
-        .das-danger {
-          border-color: rgba(248,113,113,0.26);
-          background: rgba(248,113,113,0.07);
-        }
-        .das-danger p {
-          margin: 0 0 14px;
-        }
-        .das-danger-notice {
+        .mas-danger-notice {
           margin: 0 0 14px;
           padding: 10px 14px;
           border-radius: 8px;
           border: 1px solid rgba(248,113,113,0.3);
           background: rgba(248,113,113,0.08);
           color: #fca5a5;
+          font-size: 12px;
+          line-height: 1.6;
         }
-        .das-toast {
+        .mas-toast {
           position: fixed;
           right: 28px;
           bottom: 28px;
@@ -419,58 +425,59 @@ export default function AccountSettings() {
           font-size: 13px;
           font-weight: 800;
         }
-        .das-toast.bad {
+        .mas-toast.bad {
           border-color: rgba(248,113,113,0.32);
           color: #f87171;
         }
-        .das-skeleton {
+        .mas-skeleton {
           height: 220px;
           border-radius: 8px;
           background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
           background-size: 400% 100%;
-          animation: das-shimmer 1.4s ease-in-out infinite;
+          animation: mas-shimmer 1.4s ease-in-out infinite;
         }
-        @keyframes das-shimmer {
+        @keyframes mas-shimmer {
           0% { background-position: 100% 50%; }
           100% { background-position: 0 50%; }
         }
         @media (max-width: 760px) {
-          .das-page { padding: 24px 16px 56px; }
-          .das-grid,
-          .das-password.cols-3,
-          .das-password.cols-2 { grid-template-columns: 1fr; }
-          .das-actions,
-          .das-btn { width: 100%; }
-          .das-actions { flex-direction: column; }
+          .mas-page { padding: 24px 16px 56px; }
+          .mas-grid,
+          .mas-password.cols-3,
+          .mas-password.cols-2 { grid-template-columns: 1fr; }
+          .mas-actions,
+          .mas-btn { width: 100%; }
+          .mas-actions { flex-direction: column; }
         }
       `}</style>
 
       {toast && (
-        <div className={`das-toast ${toast.ok ? "" : "bad"}`}>
+        <div className={`mas-toast ${toast.ok ? "" : "bad"}`}>
           {toast.ok ? <Check size={15} /> : <X size={15} />}
           {toast.msg}
         </div>
       )}
 
-      <main className="das-page">
-        <div className="das-shell">
-          <header className="das-header">
-            <button className="das-back" type="button" onClick={() => navigate("/dashboard/developer/profile")} title="Back to profile">
+      <main className="mas-page">
+        <div className="mas-shell">
+          <header className="mas-header">
+            <button className="mas-back" type="button" onClick={() => navigate("/dashboard/manager/profile")} title="Back to profile">
               <ArrowLeft size={17} />
             </button>
             <div>
               <h1>Account Settings</h1>
-              <p>Manage developer account details, password, and account deletion.</p>
+              <p>Manage manager account details, password, and account deletion.</p>
             </div>
           </header>
 
           {loading ? (
-            <div className="das-panel das-skeleton" />
+            <div className="mas-panel mas-skeleton" />
           ) : profile ? (
             <>
-              <section className="das-panel">
-                <div className="das-person">
-                  <div className="das-avatar">
+              {/* ── Profile card ── */}
+              <section className="mas-panel">
+                <div className="mas-person">
+                  <div className="mas-avatar">
                     {profile.avatar_url ? <img src={profile.avatar_url} alt="" /> : initials(profile.full_name)}
                   </div>
                   <div>
@@ -480,121 +487,145 @@ export default function AccountSettings() {
                 </div>
               </section>
 
-              <section className="das-panel">
+              {/* ── Profile Details ── */}
+              <section className="mas-panel">
                 <h2>Profile Details</h2>
                 <form onSubmit={saveProfile}>
-                  <div className="das-grid">
-                    <label className="das-field">
+                  <div className="mas-grid">
+                    <label className="mas-field">
                       Full name
-                      <input value={form.full_name} onChange={event => setForm({ ...form, full_name: event.target.value })} />
+                      <input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} />
                     </label>
-                    <label className="das-field">
+                    <label className="mas-field">
                       Email
-                      <input type="email" value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} />
+                      <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
                     </label>
-                    <label className="das-field">
+                    <label className="mas-field">
                       Avatar URL
-                      <input value={form.avatar_url} onChange={event => setForm({ ...form, avatar_url: event.target.value })} />
+                      <input value={form.avatar_url} onChange={e => setForm({ ...form, avatar_url: e.target.value })} />
                     </label>
-                    <label className="das-field">
+                    <label className="mas-field">
                       Job title
-                      <input value={form.job_title} onChange={event => setForm({ ...form, job_title: event.target.value })} />
+                      <input value={form.job_title ?? ""} onChange={e => setForm({ ...form, job_title: e.target.value })} />
                     </label>
-                    <label className="das-field">
+                    <label className="mas-field">
                       Organization
-                      <input value={form.organization} onChange={event => setForm({ ...form, organization: event.target.value })} />
+                      <input value={form.organization ?? ""} onChange={e => setForm({ ...form, organization: e.target.value })} />
                     </label>
-                    <label className="das-field">
+                    <label className="mas-field">
                       Department
-                      <input value={form.department} onChange={event => setForm({ ...form, department: event.target.value })} />
+                      <input value={form.department ?? ""} onChange={e => setForm({ ...form, department: e.target.value })} />
                     </label>
                   </div>
-                  <div className="das-actions">
-                    <button className="das-btn primary" disabled={saving} type="submit">
+                  <div className="mas-actions">
+                    <button className="mas-btn primary" disabled={saving} type="submit">
                       <Save size={15} />Save changes
                     </button>
                   </div>
                 </form>
               </section>
 
-              <section className="das-panel">
+              {/* ── Password section — يتغير حسب GitHub أو email ── */}
+              <section className="mas-panel">
                 <h2>{hasPassword ? "Change Password" : "Set Password"}</h2>
+
                 {!hasPassword && (
-                  <p className="das-github-notice">
-                    Your account does not have a password yet. Set one here before using password-protected actions.
+                  <p className="mas-github-notice">
+                    Your account is connected via GitHub and doesn't have a password yet.
+                    Set one here — you'll need it to delete your account.
                   </p>
                 )}
 
+                {/* GitHub user: Set password for the first time */}
                 {!hasPassword ? (
                   <form onSubmit={setPassword}>
-                    <div className="das-password cols-2">
-                      <label className="das-field">
+                    <div className={`mas-password cols-2`}>
+                      <label className="mas-field">
                         New password
                         <input
                           type="password"
                           value={passwordForm.new_password}
-                          onChange={event => setPasswordForm({ ...passwordForm, new_password: event.target.value })}
+                          onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
                         />
                       </label>
-                      <label className="das-field">
+                      <label className="mas-field">
                         Email code
                         <input
                           inputMode="numeric"
                           maxLength={6}
                           value={passwordForm.verification_code}
-                          onChange={event => setPasswordForm({ ...passwordForm, verification_code: event.target.value })}
+                          onChange={e => setPasswordForm({ ...passwordForm, verification_code: e.target.value })}
                         />
                       </label>
                     </div>
-                    <p className="das-password-note">
-                      Click Send code to receive a 6-digit code on your email, then enter it here.
+                    <p className="mas-password-note">
+                      Click "Send code" to receive a 6-digit code on your email, then enter it here.
                     </p>
-                    <div className="das-actions">
-                      <button className="das-btn" disabled={saving} type="button" onClick={requestSetPasswordCode}>
+                    <div className="mas-actions">
+                      <button
+                        className="mas-btn"
+                        disabled={saving}
+                        type="button"
+                        onClick={requestSetPasswordCode}
+                      >
                         <KeyRound size={15} />{codeSent ? "Send code again" : "Send code"}
                       </button>
-                      <button className="das-btn primary" disabled={saving || !codeSent || passwordForm.verification_code.length !== 6 || passwordForm.new_password.length < 8} type="submit">
+                      <button
+                        className="mas-btn primary"
+                        disabled={saving || !codeSent || passwordForm.verification_code.length !== 6 || passwordForm.new_password.length < 8}
+                        type="submit"
+                      >
                         <LockKeyhole size={15} />Set password
                       </button>
                     </div>
                   </form>
                 ) : (
+                  /* Email/password user: Change existing password */
                   <form onSubmit={changePassword}>
-                    <div className="das-password cols-3">
-                      <label className="das-field">
+                    <div className="mas-password cols-3">
+                      <label className="mas-field">
                         Current password
                         <input
                           type="password"
                           value={passwordForm.current_password}
-                          onChange={event => setPasswordForm({ ...passwordForm, current_password: event.target.value })}
+                          onChange={e => setPasswordForm({ ...passwordForm, current_password: e.target.value })}
                         />
                       </label>
-                      <label className="das-field">
+                      <label className="mas-field">
                         New password
                         <input
                           type="password"
                           value={passwordForm.new_password}
-                          onChange={event => setPasswordForm({ ...passwordForm, new_password: event.target.value })}
+                          onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
                         />
                       </label>
-                      <label className="das-field">
+                      <label className="mas-field">
                         Email code
                         <input
                           inputMode="numeric"
                           maxLength={6}
                           value={passwordForm.verification_code}
-                          onChange={event => setPasswordForm({ ...passwordForm, verification_code: event.target.value })}
+                          onChange={e => setPasswordForm({ ...passwordForm, verification_code: e.target.value })}
                         />
                       </label>
                     </div>
-                    <p className="das-password-note">
+                    <p className="mas-password-note">
                       First send a code to your email, then enter the 6-digit code here to finish changing your password.
                     </p>
-                    <div className="das-actions">
-                      <button className="das-btn" disabled={saving || !passwordForm.current_password} type="button" onClick={requestPasswordCode}>
+                    <div className="mas-actions">
+                      <button
+                        className="mas-btn"
+                        disabled={saving || !passwordForm.current_password}
+                        type="button"
+                        onClick={requestPasswordCode}
+                      >
                         <KeyRound size={15} />{codeSent ? "Send code again" : "Send code"}
                       </button>
-                      <button className="das-btn primary" disabled={saving || !codeSent || passwordForm.verification_code.length !== 6 || !passwordForm.new_password} type="submit">
+                      <button
+                        className="mas-btn primary"
+                        disabled={saving || !codeSent || passwordForm.verification_code.length !== 6 || !passwordForm.new_password}
+                        type="submit"
+                      >
                         <LockKeyhole size={15} />Change password
                       </button>
                     </div>
@@ -602,41 +633,48 @@ export default function AccountSettings() {
                 )}
               </section>
 
-              <section className="das-panel das-danger">
+              {/* ── Delete Account ── */}
+              <section className="mas-panel mas-danger">
                 <h2>Delete Account</h2>
                 <p>
-                  This permanently removes your developer account, sessions, connected repository links, analyses,
-                  uploaded requirements, scores, and profile data.
+                  This permanently removes your manager account, sessions, profile settings, team links,
+                  activity logs, uploaded requirements, and manager-owned analysis data.
                 </p>
+
                 {!hasPassword && (
-                  <p className="das-danger-notice">
-                    You need to set a password first before you can delete your account.
+                  <p className="mas-danger-notice">
+                    You need to set a password first (section above) before you can delete your account.
                   </p>
                 )}
+
                 <form onSubmit={deleteAccount}>
-                  <div className="das-grid">
-                    <label className="das-field">
+                  <div className="mas-grid">
+                    <label className="mas-field">
                       Confirm email
                       <input
                         type="email"
                         placeholder={profile.email}
                         value={deleteForm.confirm_email}
-                        onChange={event => setDeleteForm({ ...deleteForm, confirm_email: event.target.value })}
+                        onChange={e => setDeleteForm({ ...deleteForm, confirm_email: e.target.value })}
                         disabled={!hasPassword}
                       />
                     </label>
-                    <label className="das-field">
+                    <label className="mas-field">
                       Password
                       <input
                         type="password"
                         value={deleteForm.password}
-                        onChange={event => setDeleteForm({ ...deleteForm, password: event.target.value })}
+                        onChange={e => setDeleteForm({ ...deleteForm, password: e.target.value })}
                         disabled={!hasPassword}
                       />
                     </label>
                   </div>
-                  <div className="das-actions">
-                    <button className="das-btn danger" disabled={saving || !hasPassword || deleteForm.confirm_email !== profile.email || !deleteForm.password} type="submit">
+                  <div className="mas-actions">
+                    <button
+                      className="mas-btn danger"
+                      disabled={saving || !hasPassword || deleteForm.confirm_email !== profile.email || !deleteForm.password}
+                      type="submit"
+                    >
                       <Trash2 size={15} />Delete account
                     </button>
                   </div>

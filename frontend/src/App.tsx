@@ -16,7 +16,10 @@ import DeveloperLearning from './pages/Dashboard/DeveloperLearning';
 import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
 import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
+import ManagerAccountSettings from './pages/Dashboard/ManagerAccountSettings';
+import ManagerProfile from './pages/Dashboard/ManagerProfile';
 import RecruiterDashboard from './pages/Dashboard/RecruiterDashboard';
+import RecruiterAccountSettings from './pages/Dashboard/RecruiterAccountSettings';
 import RecruiterProfile from './pages/Dashboard/RecruiterProfile';
 
 import AccountSettings from './pages/Dashboard/AccountSettings';
@@ -65,13 +68,15 @@ function App() {
         <Route path="/dashboard/manager/analysis" element={<RepositoryAnalysis />} />
         {/* <Route path="/dashboard/manager/security" element={<ManagerDashboard />} /> */}
         <Route path="/dashboard/manager/requirements" element={<ManagerRequirements/>} />
-        {/* <Route path="/dashboard/manager/profile" element={<ManagerDashboard />} /> */}
+        <Route path="/dashboard/manager/profile" element={<ManagerProfile />} />
+        <Route path="/dashboard/manager/account-settings" element={<ManagerAccountSettings />} />
         <Route path="/dashboard/manager/team" element={<ManagerDashboard />} />
 
         {/* ── Recruiter routes ── */}
         <Route path="/dashboard/recruiter" element={<RecruiterDashboard />} />
         <Route path="/dashboard/recruiter/analysis" element={<RecruiterDashboard />} />
         <Route path="/dashboard/recruiter/profile" element={<RecruiterProfile />} />
+        <Route path="/dashboard/recruiter/account-settings" element={<RecruiterAccountSettings />} />
         <Route path="/dashboard/recruiter/candidates" element={<CandidateEvaluation />} />
 
         {/* ── Fallback ── */}

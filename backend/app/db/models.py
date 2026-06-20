@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, JSON, Enum, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, JSON, Enum, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.database import Base
@@ -274,3 +274,50 @@ class RepositoryContributor(Base):
 
     repository = relationship("Repository")
     user = relationship("User")
+
+
+class ManagerTeamMember(Base):
+    __tablename__ = "manager_team_members"
+    __table_args__ = (
+        UniqueConstraint("manager_id", "user_id", name="uq_manager_team_members_manager_user"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    manager_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String, nullable=False, default="active")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    manager = relationship("User", foreign_keys=[manager_id])
+    user = relationship("User", foreign_keys=[user_id])
+
+
+class ManagerTeamInvite(Base):
+    __tablename__ = "manager_team_invites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    manager_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    email = Column(String, nullable=False, index=True)
+    specialization = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    manager = relationship("User")
+
+
+class ProfileActivityLog(Base):
+    __tablename__ = "profile_activity_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    manager_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    actor_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    member_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    activity_type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    manager = relationship("User", foreign_keys=[manager_id])
+    actor = relationship("User", foreign_keys=[actor_id])
+    member = relationship("User", foreign_keys=[member_id])

@@ -1,19 +1,43 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  AlertTriangle,
+  BriefcaseBusiness,
+  Check,
+  ChevronRight,
+  EyeOff,
+  FileCheck2,
+  Gauge,
+  Mail,
+  Pencil,
+  RefreshCcw,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Target,
+  UserCog,
+  Users,
+  X,
+} from "lucide-react";
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
 
-interface RecruiterProfile {
+const accent = "#a855f7";
+
+interface RecruiterProfileData {
   user: {
+    id?: number;
     full_name: string;
     username: string;
     email: string;
+    role?: string | null;
     avatar_url: string | null;
     organization: string | null;
     job_title: string | null;
     department: string | null;
     hiring_focus: string | null;
     member_since: string | null;
+    has_password?: boolean;
     security_score_visible: boolean | null;
     high_priority_threshold: number | null;
     weight_code_quality: number | null;
@@ -33,527 +57,1075 @@ interface RecruiterProfile {
   }>;
 }
 
-const _initials = (name: string) =>
-  name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+type SettingsView = "account" | "preferences" | "threshold" | "security";
 
-const _fmtMonthYear = (iso: string | null) => {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+const emptyProfile: RecruiterProfileData = {
+  user: {
+    full_name: "",
+    username: "",
+    email: "",
+    role: "recruiter",
+    avatar_url: null,
+    organization: null,
+    job_title: null,
+    department: null,
+    hiring_focus: null,
+    member_since: null,
+    has_password: false,
+    security_score_visible: true,
+    high_priority_threshold: 75,
+    weight_code_quality: 40,
+    weight_security: 30,
+    weight_git_activity: 30,
+  },
+  talent_overview: {
+    candidates_evaluated: 0,
+    high_priority: 0,
+    profiles_shortlisted: 0,
+  },
+  recent_activity: [],
 };
 
-const _fmtAgo = (iso: string | null) => {
-  if (!iso) return "—";
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+const settingRows: Array<{ key: SettingsView; label: string; description: string; icon: typeof UserCog }> = [
+  {
+    key: "account",
+    label: "Account Settings",
+    description: "Manage your account details, password, and deletion",
+    icon: UserCog,
+  },
+  {
+    key: "preferences",
+    label: "Evaluation Preferences",
+    description: "Adjust scoring weights for candidate analysis",
+    icon: SlidersHorizontal,
+  },
+  {
+    key: "threshold",
+    label: "Priority Thresholds",
+    description: "Choose the score that marks candidates as high priority",
+    icon: Gauge,
+  },
+  {
+    key: "security",
+    label: "Security Visibility",
+    description: "Show or hide security scores in recruiter reports",
+    icon: ShieldCheck,
+  },
+];
+
+const initials = (name: string) =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0])
+    .join("")
+    .toUpperCase() || "SP";
+
+const fmtDate = (value: string | null) => {
+  if (!value) return "Not set";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not set";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 };
 
-const _scoreColor = (s: number) =>
-  s >= 80 ? "#34d399" : s >= 60 ? "#fbbf24" : "#f87171";
-
-const I = {
-  Building:  () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9v.01"/><path d="M9 12v.01"/><path d="M9 15v.01"/><path d="M9 18v.01"/></svg>,
-  Briefcase: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>,
-  Target:    () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>,
-  Calendar:  () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
-  Users:     () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
-  Alert:     () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
-  Star:      () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
-  File:      () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/></svg>,
-  Chart:     () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>,
-  ArrowRight:() => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>,
-  Shield:    () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
-  Edit:      () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
-  Loader:    () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>,
-  Close:     () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
-  Sliders:   () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>,
-  EyeOff:    () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>,
+const fmtAgo = (value: string | null) => {
+  if (!value) return "just now";
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} mo ago`;
+  return `${Math.floor(months / 12)} yr ago`;
 };
 
-function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+const fmtNumber = (value: number) => Number(value || 0).toLocaleString();
+
+function Toggle({
+  checked,
+  onChange,
+  title,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  title: string;
+}) {
   return (
-    <button onClick={onToggle} aria-pressed={on} style={{ width: 44, height: 24, borderRadius: 12, background: on ? "#6366f1" : "var(--border-hover)", border: "none", position: "relative", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}>
-      <div style={{ position: "absolute", top: 3, left: on ? 23 : 3, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
+    <button
+      type="button"
+      className={`rp-toggle ${checked ? "is-on" : ""}`}
+      onClick={() => onChange(!checked)}
+      title={title}
+      aria-pressed={checked}
+    >
+      <span />
     </button>
   );
 }
 
-function WeightSlider({ label, color, value, onChange }: { label: string; color: string; value: number; onChange: (v: number) => void }) {
+function Skeleton() {
   return (
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text-secondary)", fontFamily: "'DM Sans',sans-serif" }}>{label}</span>
-        <span style={{ fontSize: 13, fontWeight: 800, color, fontFamily: "'DM Sans',sans-serif", minWidth: 38, textAlign: "right" }}>{value}%</span>
+    <div className="rp-stack">
+      <div className="rp-panel rp-skeleton" style={{ height: 260 }} />
+      <div className="rp-kpi-grid">
+        {[1, 2, 3].map(item => <div key={item} className="rp-card rp-skeleton" style={{ height: 118 }} />)}
       </div>
-      <div style={{ position: "relative", height: 6, borderRadius: 6, background: "var(--border)" }}>
-        <div style={{ position: "absolute", left: 0, top: 0, height: "100%", borderRadius: 6, background: color, width: `${value}%`, transition: "width 0.15s" }} />
-        <input
-          type="range" min={0} max={100} value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          style={{ position: "absolute", top: -7, left: 0, width: "100%", height: 20, opacity: 0, cursor: "pointer", margin: 0 }}
-        />
-      </div>
+      <div className="rp-panel rp-skeleton" style={{ height: 240 }} />
     </div>
   );
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div
-      style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(6px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div style={{ width: "100%", maxWidth: 500, margin: "0 16px", background: "var(--bg-sidebar)", border: "1px solid var(--border-hover)", borderRadius: 20, padding: "28px 32px", boxShadow: "var(--shadow-card)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-          <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 17, fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>{title}</h3>
-          <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-card-hover)", color: "var(--text-muted)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <I.Close />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h2 className="rp-section-title">{children}</h2>;
 }
 
 export default function RecruiterProfilePage() {
   const navigate = useNavigate();
-
-  const [profile, setProfile] = useState<RecruiterProfile | null>(null);
+  const [profile, setProfile] = useState<RecruiterProfileData>(emptyProfile);
   const [loading, setLoading] = useState(true);
-  const [editOpen, setEditOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [editOrg, setEditOrg] = useState("");
-  const [editTitle, setEditTitle] = useState("");
-  const [editDept, setEditDept] = useState("");
-  const [editFocus, setEditFocus] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
-
-  const [securityOn, setSecurityOn] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({ organization: "", job_title: "", department: "", hiring_focus: "" });
+  const [editSaving, setEditSaving] = useState(false);
+  const [activeView, setActiveView] = useState<SettingsView>("preferences");
+  const [showAllActivities, setShowAllActivities] = useState(false);
   const [savingEval, setSavingEval] = useState(false);
-
-  const [prefOpen, setPrefOpen] = useState(false);
-  const [wCodeQuality, setWCodeQuality] = useState(40);
-  const [wSecurity, setWSecurity] = useState(30);
-  const [wProblemSolving, setWProblemSolving] = useState(30);
-
-  const [prioOpen, setPrioOpen] = useState(false);
+  const [securityOn, setSecurityOn] = useState(true);
   const [threshold, setThreshold] = useState(75);
+  const [weights, setWeights] = useState({ code: 40, security: 30, activity: 30 });
 
-  const showToast = (msg: string, ok: boolean) => {
+  const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3000);
+    window.setTimeout(() => setToast(null), 2600);
+  };
+
+  const applyProfileState = (data: RecruiterProfileData) => {
+    setProfile(data);
+    setEditForm({
+      organization: data.user.organization || "",
+      job_title: data.user.job_title || "",
+      department: data.user.department || "",
+      hiring_focus: data.user.hiring_focus || "",
+    });
+    setSecurityOn(data.user.security_score_visible ?? true);
+    setThreshold(data.user.high_priority_threshold ?? 75);
+    setWeights({
+      code: data.user.weight_code_quality ?? 40,
+      security: data.user.weight_security ?? 30,
+      activity: data.user.weight_git_activity ?? 30,
+    });
+  };
+
+  const loadProfile = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const response = await api.get<RecruiterProfileData>("/recruiter/profile-dashboard");
+      applyProfileState(response.data);
+    } catch {
+      setError("Unable to load recruiter profile.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await api.get("/recruiter/profile-dashboard");
-        setProfile(res.data);
-        setEditOrg(res.data.user.organization ?? "");
-        setEditTitle(res.data.user.job_title ?? "");
-        setEditDept(res.data.user.department ?? "");
-        setEditFocus(res.data.user.hiring_focus ?? "");
-        setSecurityOn(res.data.user.security_score_visible ?? true);
-        setThreshold(res.data.user.high_priority_threshold ?? 75);
-        setWCodeQuality(res.data.user.weight_code_quality ?? 40);
-        setWSecurity(res.data.user.weight_security ?? 30);
-        setWProblemSolving(res.data.user.weight_git_activity ?? 30);
-      } catch (err: any) {
-        if (err?.response?.status === 401) { localStorage.clear(); navigate("/login"); }
-      } finally { setLoading(false); }
-    })();
+    loadProfile();
   }, []);
 
-  const handleSave = useCallback(async () => {
-    setSaving(true);
+  const handleEditClick = () => {
+    setEditForm({
+      organization: profile.user.organization || "",
+      job_title: profile.user.job_title || "",
+      department: profile.user.department || "",
+      hiring_focus: profile.user.hiring_focus || "",
+    });
+    setEditing(true);
+  };
+
+  const handleEditSave = async () => {
+    setEditSaving(true);
     try {
-      const res = await api.patch("/recruiter/profile", {
-        organization: editOrg.trim() || null,
-        job_title: editTitle.trim() || null,
-        department: editDept.trim() || null,
-        hiring_focus: editFocus.trim() || null,
+      const response = await api.patch("/recruiter/profile", {
+        organization: editForm.organization || null,
+        job_title: editForm.job_title || null,
+        department: editForm.department || null,
+        hiring_focus: editForm.hiring_focus || null,
       });
-      setProfile((prev) => prev ? { ...prev, user: { ...prev.user, ...res.data } } : prev);
-      setEditOpen(false);
-      showToast("Profile updated successfully", true);
-    } catch { showToast("Failed to save. Try again.", false); }
-    finally { setSaving(false); }
-  }, [editOrg, editTitle, editDept, editFocus]);
+      setProfile(prev => ({ ...prev, user: { ...prev.user, ...response.data } }));
+      setEditing(false);
+      showToast("Profile updated");
+    } catch {
+      showToast("Could not save profile", false);
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const saveEvalSettings = useCallback(async (patch: Record<string, unknown>) => {
     setSavingEval(true);
     try {
-      await api.patch("/recruiter/eval-settings", patch);
-      showToast("Settings saved", true);
-    } catch { showToast("Failed to save settings.", false); }
-    finally { setSavingEval(false); }
+      const response = await api.patch("/recruiter/eval-settings", patch);
+      setProfile(prev => ({ ...prev, user: { ...prev.user, ...response.data } }));
+      showToast("Settings saved");
+    } catch {
+      showToast("Failed to save settings", false);
+    } finally {
+      setSavingEval(false);
+    }
   }, []);
 
-  const handleSecurityToggle = () => {
-    const next = !securityOn;
-    setSecurityOn(next);
-    saveEvalSettings({ security_score_visible: next });
+  const saveWeights = async () => {
+    await saveEvalSettings({
+      weight_code_quality: weights.code,
+      weight_security: weights.security,
+      weight_git_activity: weights.activity,
+    });
   };
 
-  const handleSavePreferences = async () => {
-    await saveEvalSettings({ weight_code_quality: wCodeQuality, weight_security: wSecurity, weight_git_activity: wProblemSolving });
-    setPrefOpen(false);
-  };
-
-  const handleSaveThreshold = async () => {
+  const saveThreshold = async () => {
     await saveEvalSettings({ high_priority_threshold: threshold });
-    setPrioOpen(false);
   };
 
-  const totalWeight = wCodeQuality + wSecurity + wProblemSolving;
-  const weightOk = totalWeight === 100;
+  const toggleSecurity = async (next: boolean) => {
+    setSecurityOn(next);
+    await saveEvalSettings({ security_score_visible: next });
+  };
 
-  const card = (content: React.ReactNode, extra?: React.CSSProperties) => (
-    <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 16, padding: "24px 28px", transition: "background 0.3s ease, border-color 0.3s ease", ...extra }}>{content}</div>
+  const infoGrid = useMemo(
+    () => [
+      { label: "Organization", value: profile.user.organization || "Not set", icon: BriefcaseBusiness },
+      { label: "Department", value: profile.user.department || "Not set", icon: Users },
+      { label: "Hiring Focus", value: profile.user.hiring_focus || "Not set", icon: Target },
+      { label: "Member Since", value: fmtDate(profile.user.member_since), icon: Sparkles },
+    ],
+    [profile],
   );
 
-  const sectionTitle = (text: string) => (
-    <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: 18, fontWeight: 800, color: "var(--text-primary)", margin: "0 0 16px" }}>{text}</h2>
-  );
+  const totalWeight = weights.code + weights.security + weights.activity;
+  const visibleActivities = showAllActivities ? profile.recent_activity : profile.recent_activity.slice(0, 5);
+
+  const renderSettings = () => {
+    if (activeView === "account") {
+      return (
+        <section className="rp-panel">
+          <div className="rp-panel-head">
+            <div>
+              <h2>Account Settings</h2>
+              <span>Edit account details, change password, or delete the account.</span>
+            </div>
+          </div>
+          <button className="rp-btn primary" type="button" onClick={() => navigate("/dashboard/recruiter/account-settings")}>
+            Open Account Settings <ChevronRight size={16} />
+          </button>
+        </section>
+      );
+    }
+
+    if (activeView === "threshold") {
+      return (
+        <section className="rp-panel">
+          <div className="rp-panel-head">
+            <div>
+              <h2>Priority Thresholds</h2>
+              <span>Candidates at or above this score are marked high priority.</span>
+            </div>
+          </div>
+          <div className="rp-slider-block">
+            <div className="rp-slider-label"><strong>High priority score</strong><span>{threshold}%</span></div>
+            <input type="range" min={0} max={100} value={threshold} onChange={event => setThreshold(Number(event.target.value))} />
+          </div>
+          <div className="rp-actions">
+            <button className="rp-btn primary" type="button" disabled={savingEval} onClick={saveThreshold}>
+              Save Threshold
+            </button>
+          </div>
+        </section>
+      );
+    }
+
+    if (activeView === "security") {
+      return (
+        <section className="rp-panel">
+          <div className="rp-panel-head">
+            <div>
+              <h2>Security Visibility</h2>
+              <span>Control whether security scores appear in candidate reports.</span>
+            </div>
+            <Toggle checked={securityOn} onChange={toggleSecurity} title="Security score visibility" />
+          </div>
+          <div className={`rp-notice ${securityOn ? "" : "danger"}`}>
+            {securityOn ? <ShieldCheck size={16} /> : <EyeOff size={16} />}
+            <span>{securityOn ? "Security scores are visible in recruiter reports." : "Security scores are currently hidden in recruiter reports."}</span>
+          </div>
+        </section>
+      );
+    }
+
+    return (
+      <section className="rp-panel">
+        <div className="rp-panel-head">
+          <div>
+            <h2>Evaluation Preferences</h2>
+            <span>Weights must total 100% before saving.</span>
+          </div>
+        </div>
+        <div className="rp-weight-grid">
+          <label className="rp-slider-block">
+            <div className="rp-slider-label"><strong>Code Quality</strong><span>{weights.code}%</span></div>
+            <input type="range" min={0} max={100} value={weights.code} onChange={event => setWeights(prev => ({ ...prev, code: Number(event.target.value) }))} />
+          </label>
+          <label className="rp-slider-block">
+            <div className="rp-slider-label"><strong>Security</strong><span>{weights.security}%</span></div>
+            <input type="range" min={0} max={100} value={weights.security} onChange={event => setWeights(prev => ({ ...prev, security: Number(event.target.value) }))} />
+          </label>
+          <label className="rp-slider-block">
+            <div className="rp-slider-label"><strong>Git Activity</strong><span>{weights.activity}%</span></div>
+            <input type="range" min={0} max={100} value={weights.activity} onChange={event => setWeights(prev => ({ ...prev, activity: Number(event.target.value) }))} />
+          </label>
+        </div>
+        <div className={`rp-notice ${totalWeight === 100 ? "" : "danger"}`}>
+          <AlertTriangle size={16} />
+          <span>Current total: {totalWeight}%</span>
+        </div>
+        <div className="rp-actions">
+          <button className="rp-btn primary" type="button" disabled={savingEval || totalWeight !== 100} onClick={saveWeights}>
+            Save Preferences
+          </button>
+        </div>
+      </section>
+    );
+  };
 
   return (
     <DashboardLayout>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
-        @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-        @keyframes shimmer { 0%{background-position:100% 50%} 100%{background-position:0% 50%} }
-        .rsk {
-          background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
-          background-size: 400% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: 8px;
+
+        .rp-page {
+          min-height: 100vh;
+          background: var(--bg-gradient);
+          color: var(--text-primary);
+          font-family: 'DM Sans', system-ui, sans-serif;
+          padding: 36px 40px 80px;
         }
-        .rp-action-btn {
-          padding: 6px 14px; border-radius: 8px; border: none; font-size: 13px; font-weight: 700;
-          cursor: pointer; font-family: 'DM Sans',sans-serif;
-          color: #a78bfa; background: rgba(167,139,250,0.1); transition: background 0.15s;
+        .rp-shell {
+          max-width: 960px;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
         }
-        .rp-action-btn:hover { background: rgba(167,139,250,0.18); }
-        .rp-view-btn {
-          width: 100%; padding: 10px 0; border-radius: 10px;
-          border: 1px solid var(--border); background: transparent;
-          color: var(--text-muted); font-size: 13px; font-weight: 600;
-          cursor: pointer; font-family: 'DM Sans',sans-serif;
-          display: flex; align-items: center; justify-content: center; gap: 6px;
-          margin-top: 16px; transition: all 0.15s;
+        .rp-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          flex-wrap: wrap;
         }
-        .rp-view-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
-        .rp-edit-input {
-          width: 100%; padding: 8px 12px; border-radius: 8px;
-          background: var(--bg-input); border: 1px solid var(--border-input);
-          color: var(--text-primary); font-size: 13px; outline: none;
-          font-family: 'DM Sans',sans-serif; box-sizing: border-box;
-          transition: border-color 0.2s;
+        .rp-title h1 {
+          margin: 0 0 4px;
+          font-family: 'Syne', sans-serif;
+          font-size: 26px;
+          font-weight: 800;
+          line-height: 1.15;
+          letter-spacing: 0;
         }
-        .rp-edit-input:focus { border-color: rgba(99,102,241,0.5); }
-        .rp-edit-input::placeholder { color: var(--text-faint); }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #6366f1; cursor: pointer; }
+        .rp-title p {
+          margin: 0;
+          color: var(--text-muted);
+          font-size: 13.5px;
+          line-height: 1.6;
+        }
+        .rp-badge {
+          display: inline-flex;
+          align-items: center;
+          width: fit-content;
+          margin-bottom: 10px;
+          padding: 5px 14px;
+          border-radius: 999px;
+          border: 1px solid ${accent}40;
+          background: ${accent}12;
+          color: ${accent};
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.8px;
+          text-transform: uppercase;
+        }
+        .rp-panel,
+        .rp-card,
+        .rp-activity-row {
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          background: var(--bg-card);
+        }
+        .rp-panel { padding: 24px 28px; }
+        .rp-identity {
+          display: flex;
+          gap: 18px;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 24px;
+        }
+        .rp-identity-left {
+          display: flex;
+          gap: 18px;
+          align-items: center;
+          min-width: 0;
+        }
+        .rp-avatar {
+          width: 76px;
+          height: 76px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          flex-shrink: 0;
+          background: linear-gradient(135deg, ${accent}, #ec4899);
+          color: white;
+          font-size: 26px;
+          font-weight: 800;
+          border: 2px solid ${accent}40;
+        }
+        .rp-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .rp-name h2 {
+          margin: 0 0 3px;
+          font-size: 22px;
+          font-weight: 800;
+          color: var(--text-primary);
+        }
+        .rp-name p {
+          margin: 0 0 10px;
+          color: var(--text-muted);
+          font-size: 13px;
+        }
+        .rp-chip-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .rp-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 12px;
+          border-radius: 20px;
+          color: var(--text-secondary);
+          background: var(--bg-card-hover);
+          border: 1px solid var(--border);
+          font-size: 12px;
+          max-width: 100%;
+        }
+        .rp-chip span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .rp-edit-form {
+          margin-bottom: 20px;
+          padding: 20px;
+          border-radius: 12px;
+          background: var(--bg-card-hover);
+          border: 1px solid var(--border);
+        }
+        .rp-edit-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 14px;
+          margin-bottom: 16px;
+        }
+        .rp-field {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          color: ${accent};
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.6px;
+        }
+        .rp-field input {
+          width: 100%;
+          min-height: 40px;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--bg-input, var(--bg-card));
+          color: var(--text-primary);
+          outline: 0;
+          padding: 0 12px;
+          font-family: 'DM Sans', system-ui, sans-serif;
+          font-size: 13px;
+          box-sizing: border-box;
+          text-transform: none;
+          letter-spacing: 0;
+        }
+        .rp-field input:focus { border-color: rgba(168,85,247,0.62); }
+        .rp-info-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+          padding-top: 20px;
+          border-top: 1px solid var(--border);
+        }
+        .rp-info-item {
+          display: grid;
+          grid-template-columns: 36px minmax(0, 1fr);
+          gap: 12px;
+          align-items: flex-start;
+          min-width: 0;
+        }
+        .rp-info-item span {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          color: var(--text-muted);
+          background: var(--bg-card-hover);
+          border: 1px solid var(--border);
+        }
+        .rp-info-item small {
+          display: block;
+          color: var(--text-faint);
+          font-size: 11px;
+          font-weight: 600;
+          margin-bottom: 3px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .rp-info-item strong {
+          display: block;
+          color: var(--text-primary);
+          font-size: 14px;
+          font-weight: 700;
+          overflow-wrap: anywhere;
+        }
+        .rp-section-title,
+        .rp-panel-head h2 {
+          font-family: 'Syne', sans-serif;
+          font-size: 18px;
+          font-weight: 800;
+          color: var(--text-primary);
+          letter-spacing: 0;
+          margin: 0 0 16px;
+        }
+        .rp-kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+          gap: 12px;
+        }
+        .rp-card {
+          min-height: 130px;
+          padding: 20px 22px;
+        }
+        .rp-card-top {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          color: var(--text-secondary);
+          font-size: 12px;
+          font-weight: 600;
+          margin-bottom: 14px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .rp-card-top svg { color: ${accent}; }
+        .rp-card strong {
+          display: block;
+          font-size: 32px;
+          font-weight: 900;
+          line-height: 1;
+          color: var(--text-primary);
+          overflow-wrap: anywhere;
+          margin-bottom: 6px;
+        }
+        .rp-card small {
+          display: block;
+          color: var(--text-muted);
+          font-size: 12px;
+        }
+        .rp-panel-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          margin-bottom: 16px;
+        }
+        .rp-panel-head h2 { margin: 0; }
+        .rp-panel-head span {
+          color: var(--text-muted);
+          font-size: 12px;
+        }
+        .rp-activity-list,
+        .rp-settings-grid,
+        .rp-stack,
+        .rp-two-col {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .rp-activity-row {
+          display: grid;
+          grid-template-columns: 38px minmax(0, 1fr) auto;
+          gap: 14px;
+          align-items: center;
+          padding: 14px 16px;
+          border-radius: 12px;
+          background: var(--bg-card-hover);
+        }
+        .rp-activity-icon {
+          width: 38px;
+          height: 38px;
+          border-radius: 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: ${accent};
+          background: rgba(168,85,247,0.14);
+        }
+        .rp-activity-row strong {
+          display: block;
+          font-size: 13px;
+          color: var(--text-primary);
+        }
+        .rp-activity-row p {
+          margin: 3px 0 0;
+          color: var(--text-muted);
+          font-size: 12px;
+          overflow-wrap: anywhere;
+        }
+        .rp-activity-time {
+          color: var(--text-muted);
+          font-size: 12px;
+          white-space: nowrap;
+          text-align: right;
+        }
+        .rp-activity-score {
+          display: block;
+          color: ${accent};
+          font-weight: 800;
+          margin-top: 2px;
+        }
+        .rp-link-button {
+          border: 0;
+          background: transparent;
+          color: ${accent};
+          padding: 0;
+          font: inherit;
+          font-size: 13px;
+          font-weight: 800;
+          cursor: pointer;
+        }
         .rp-setting-row {
-          padding: 14px 16px; border-radius: 12px;
-          background: var(--bg-card-hover); border: 1px solid var(--border);
-          display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
-          transition: background 0.2s, border-color 0.2s;
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          padding: 15px 18px;
+          border-radius: 12px;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          color: var(--text-secondary);
+          cursor: pointer;
+          transition: all 0.15s;
+          text-align: left;
+          text-decoration: none;
+          font-size: 14px;
+          font-weight: 500;
         }
-        .rp-icon-box {
-          width: 34px; height: 34px; border-radius: 8px;
-          display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+        .rp-setting-row:hover,
+        .rp-setting-row.is-active {
+          background: var(--bg-card-hover);
+          border-color: var(--border-hover);
+          color: var(--text-primary);
         }
-        .rp-meta-row {
-          display: flex; align-items: flex-start; gap: 10px; padding-right: 12px;
+        .rp-setting-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--bg-card-hover);
+          color: var(--text-secondary);
         }
-        .rp-meta-icon {
-          width: 34px; height: 34px; border-radius: 10px;
-          background: var(--bg-card-hover); border: 1px solid var(--border);
-          display: flex; align-items: center; justify-content: center;
-          color: var(--text-muted); flex-shrink: 0;
+        .rp-setting-copy {
+          flex: 1;
+          min-width: 0;
         }
-        .activity-row { padding: 12px 8px; transition: background 0.15s; border-radius: 8px; }
-        .activity-row:hover { background: var(--bg-card-hover); }
+        .rp-setting-copy strong {
+          display: block;
+          font-weight: 600;
+          margin-bottom: 1px;
+          color: inherit;
+        }
+        .rp-setting-copy small {
+          display: block;
+          color: var(--text-muted);
+          font-size: 12px;
+          font-weight: 400;
+          line-height: 1.4;
+        }
+        .rp-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          min-height: 38px;
+          border: 1px solid var(--border);
+          border-radius: 9px;
+          background: var(--bg-card);
+          color: var(--text-secondary);
+          padding: 0 16px;
+          font-family: 'DM Sans', system-ui, sans-serif;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+        .rp-btn:hover {
+          background: var(--bg-card-hover);
+          color: var(--text-primary);
+          border-color: var(--border-hover);
+        }
+        .rp-btn.primary {
+          border-color: transparent;
+          color: white;
+          background: ${accent};
+        }
+        .rp-btn:disabled {
+          opacity: 0.58;
+          cursor: not-allowed;
+        }
+        .rp-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          margin-top: 16px;
+          padding-top: 16px;
+          border-top: 1px solid var(--border);
+        }
+        .rp-weight-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 14px;
+        }
+        .rp-slider-block {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .rp-slider-label {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          color: var(--text-secondary);
+          font-size: 12px;
+        }
+        .rp-slider-label span {
+          color: ${accent};
+          font-weight: 800;
+        }
+        .rp-slider-block input[type="range"] {
+          accent-color: ${accent};
+          width: 100%;
+        }
+        .rp-notice {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 14px;
+          padding: 10px 12px;
+          border: 1px solid rgba(168,85,247,0.28);
+          border-radius: 10px;
+          background: rgba(168,85,247,0.08);
+          color: #d8b4fe;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+        .rp-notice.danger {
+          border-color: rgba(248,113,113,0.3);
+          background: rgba(248,113,113,0.08);
+          color: #fca5a5;
+        }
+        .rp-toggle {
+          width: 46px;
+          height: 26px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: var(--bg-card-hover);
+          padding: 2px;
+          cursor: pointer;
+          transition: background 0.18s, border-color 0.18s;
+        }
+        .rp-toggle span {
+          display: block;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: var(--text-muted);
+          transition: transform 0.18s, background 0.18s;
+        }
+        .rp-toggle.is-on {
+          border-color: rgba(168,85,247,0.52);
+          background: rgba(168,85,247,0.28);
+        }
+        .rp-toggle.is-on span {
+          transform: translateX(20px);
+          background: ${accent};
+        }
+        .rp-empty,
+        .rp-error {
+          border: 1px dashed var(--border-hover);
+          border-radius: 8px;
+          padding: 24px 16px;
+          text-align: center;
+          color: var(--text-muted);
+          background: var(--bg-card);
+          font-size: 13px;
+        }
+        .rp-error {
+          border-style: solid;
+          color: #f87171;
+          background: rgba(248,113,113,0.09);
+        }
+        .rp-toast {
+          position: fixed;
+          right: 28px;
+          bottom: 28px;
+          z-index: 500;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 12px 16px;
+          border-radius: 8px;
+          border: 1px solid rgba(74,222,128,0.32);
+          background: var(--bg-card);
+          color: #4ade80;
+          box-shadow: var(--shadow-card);
+          font-size: 13px;
+          font-weight: 800;
+        }
+        .rp-toast.bad {
+          border-color: rgba(248,113,113,0.32);
+          color: #f87171;
+        }
+        .rp-skeleton {
+          background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
+          background-size: 400% 100%;
+          animation: rp-shimmer 1.4s ease-in-out infinite;
+        }
+        @keyframes rp-shimmer {
+          0% { background-position: 100% 50%; }
+          100% { background-position: 0 50%; }
+        }
+        @media (max-width: 1060px) {
+          .rp-weight-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 760px) {
+          .rp-page { padding: 24px 16px 56px; }
+          .rp-edit-grid,
+          .rp-info-grid { grid-template-columns: 1fr; }
+          .rp-identity { flex-wrap: wrap; }
+          .rp-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .rp-activity-row { grid-template-columns: 38px minmax(0, 1fr); }
+          .rp-activity-time { grid-column: 2; text-align: left; }
+          .rp-actions,
+          .rp-btn { width: 100%; }
+          .rp-actions { flex-direction: column; }
+        }
       `}</style>
 
-      {/* Toast */}
       {toast && (
-        <div style={{ position: "fixed", bottom: 28, right: 28, zIndex: 9999, padding: "12px 20px", borderRadius: 12, background: toast.ok ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)", border: `1px solid ${toast.ok ? "rgba(52,211,153,0.3)" : "rgba(248,113,113,0.3)"}`, color: toast.ok ? "#34d399" : "#f87171", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, fontFamily: "'DM Sans',sans-serif", boxShadow: "var(--shadow-card)" }}>
-          {toast.ok ? "✓" : "✕"} {toast.msg}
+        <div className={`rp-toast ${toast.ok ? "" : "bad"}`}>
+          {toast.ok ? <Check size={15} /> : <X size={15} />}
+          {toast.msg}
         </div>
       )}
 
-      {/* Evaluation Preferences Modal */}
-      {prefOpen && (
-        <Modal title="Evaluation Preferences" onClose={() => setPrefOpen(false)}>
-          <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 0, marginBottom: 20, lineHeight: 1.6 }}>
-            Set how SkillPulse weighs each skill category. Weights must add up to <strong style={{ color: weightOk ? "#34d399" : "#f87171" }}>100%</strong> (currently <strong style={{ color: weightOk ? "#34d399" : "#f87171" }}>{totalWeight}%</strong>).
-          </p>
-          <WeightSlider label="Code Quality"   color="#6366f1" value={wCodeQuality}   onChange={setWCodeQuality} />
-          <WeightSlider label="Security"        color="#f87171" value={wSecurity}       onChange={setWSecurity} />
-          <WeightSlider label="Problem Solving" color="#34d399" value={wProblemSolving} onChange={setWProblemSolving} />
-          <div style={{ marginTop: 24, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <button onClick={() => setPrefOpen(false)} style={{ padding: "8px 18px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>Cancel</button>
-            <button onClick={handleSavePreferences} disabled={!weightOk || savingEval} style={{ padding: "8px 20px", borderRadius: 9, border: "none", background: weightOk ? "#6366f1" : "rgba(99,102,241,0.3)", color: "white", fontSize: 13, fontWeight: 700, cursor: weightOk && !savingEval ? "pointer" : "not-allowed", fontFamily: "'DM Sans',sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
-              {savingEval && <I.Loader />} Save Preferences
-            </button>
-          </div>
-        </Modal>
-      )}
+      <main className="rp-page">
+        <div className="rp-shell">
+          <header className="rp-header">
+            <div className="rp-title">
+              <div className="rp-badge">Recruiter Profile</div>
+              <h1>Your profile & overview</h1>
+              <p>Track candidate decisions, evaluation preferences, and recruiter account access.</p>
+            </div>
+            <button className="rp-btn" type="button" onClick={loadProfile}><RefreshCcw size={15} />Refresh</button>
+          </header>
 
-      {/* Priority Threshold Modal */}
-      {prioOpen && (
-        <Modal title="Priority Thresholds" onClose={() => setPrioOpen(false)}>
-          <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 0, marginBottom: 24, lineHeight: 1.6 }}>
-            Candidates scoring above this threshold will be automatically flagged as <strong style={{ color: "#f87171" }}>High Priority</strong>.
-          </p>
-          <div style={{ textAlign: "center", marginBottom: 28 }}>
-            <div style={{ fontSize: 56, fontWeight: 900, color: threshold >= 80 ? "#34d399" : threshold >= 60 ? "#fbbf24" : "#f87171", fontFamily: "'Syne',sans-serif", lineHeight: 1 }}>{threshold}</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>minimum score / 100</div>
-          </div>
-          <div style={{ position: "relative", height: 6, borderRadius: 6, background: "var(--border)", marginBottom: 10 }}>
-            <div style={{ position: "absolute", left: 0, top: 0, height: "100%", borderRadius: 6, background: threshold >= 80 ? "#34d399" : threshold >= 60 ? "#fbbf24" : "#f87171", width: `${threshold}%`, transition: "width 0.1s, background 0.2s" }} />
-            <input type="range" min={0} max={100} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} style={{ position: "absolute", top: -10, left: 0, width: "100%", height: 26, opacity: 0, cursor: "pointer", margin: 0 }} />
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-faint)" }}>
-            <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
-          </div>
-          <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 10, background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.15)", fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-            {threshold >= 80 ? "🟢 Strict — only top performers flagged" : threshold >= 60 ? "🟡 Balanced — moderate filter" : "🔴 Lenient — many candidates may be flagged"}
-          </div>
-          <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <button onClick={() => setPrioOpen(false)} style={{ padding: "8px 18px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>Cancel</button>
-            <button onClick={handleSaveThreshold} disabled={savingEval} style={{ padding: "8px 20px", borderRadius: 9, border: "none", background: "#6366f1", color: "white", fontSize: 13, fontWeight: 700, cursor: savingEval ? "not-allowed" : "pointer", fontFamily: "'DM Sans',sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
-              {savingEval && <I.Loader />} Save Threshold
-            </button>
-          </div>
-        </Modal>
-      )}
+          {error && <div className="rp-error">{error}</div>}
 
-      <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'DM Sans',sans-serif", background: "var(--bg-gradient)", transition: "background 0.3s ease" }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
-
-          {/* Page header */}
-          <div>
-            <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 26, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: "0 0 4px" }}>Recruiter Profile</h1>
-            <p style={{ fontSize: 13.5, color: "var(--text-muted)", margin: 0 }}>Manage your evaluation preferences and decision-support settings</p>
-          </div>
-
-          {/* Profile card */}
-          {card(
-            loading ? (
-              <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
-                <div className="rsk" style={{ width: 72, height: 72, borderRadius: "50%" }} />
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div className="rsk" style={{ height: 20, width: "38%" }} />
-                  <div className="rsk" style={{ height: 13, width: "24%" }} />
-                </div>
-              </div>
-            ) : profile?.user ? (
-              <>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-                    {profile.user.avatar_url
-                      ? <img src={profile.user.avatar_url} alt={profile.user.full_name} style={{ width: 72, height: 72, borderRadius: "50%", objectFit: "cover", border: "2px solid rgba(99,102,241,0.35)" }} />
-                      : <div style={{ width: 72, height: 72, borderRadius: "50%", background: "linear-gradient(135deg,#6366f1,#ec4899)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 800, color: "#fff", flexShrink: 0 }}>{_initials(profile.user.full_name)}</div>
-                    }
-                    <div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text-primary)", marginBottom: 3 }}>{profile.user.full_name}</div>
-                      <div style={{ fontSize: 13, color: "rgba(167,139,250,0.9)", fontWeight: 600, marginBottom: 10 }}>{profile.user.job_title || "Technical Recruiter"}</div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {[profile.user.username, profile.user.email, "Recruiter"].map((lbl) => (
-                          <span key={lbl} style={{ padding: "4px 11px", borderRadius: 20, background: "var(--bg-card-hover)", border: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)" }}>{lbl}</span>
-                        ))}
+          {loading ? (
+            <Skeleton />
+          ) : (
+            <>
+              <section className="rp-panel">
+                <div className="rp-identity">
+                  <div className="rp-identity-left">
+                    <div className="rp-avatar">
+                      {profile.user.avatar_url ? <img src={profile.user.avatar_url} alt="" /> : initials(profile.user.full_name)}
+                    </div>
+                    <div className="rp-name">
+                      <h2>{profile.user.full_name}</h2>
+                      <p>{profile.user.job_title || "Technical Recruiter"}</p>
+                      <div className="rp-chip-row">
+                        <span className="rp-chip"><UserCog size={13} /><span>@{profile.user.username}</span></span>
+                        <span className="rp-chip"><Mail size={13} /><span>{profile.user.email}</span></span>
                       </div>
                     </div>
                   </div>
-                  <button onClick={() => setEditOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg-card-hover)", color: "var(--text-secondary)", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", transition: "all 0.15s" }}>
-                    <I.Edit /> Edit Profile
-                  </button>
+                  {!editing && (
+                    <button className="rp-btn" type="button" onClick={handleEditClick}>
+                      <Pencil size={15} />Edit Profile
+                    </button>
+                  )}
                 </div>
 
-                {editOpen && (
-                  <div style={{ padding: "16px 20px", borderRadius: 12, background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)", marginBottom: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                    {[
-                      { label: "Organization", val: editOrg,   set: setEditOrg },
-                      { label: "Job Title",    val: editTitle, set: setEditTitle },
-                      { label: "Department",   val: editDept,  set: setEditDept },
-                      { label: "Hiring Focus", val: editFocus, set: setEditFocus },
-                    ].map(({ label, val, set }) => (
-                      <div key={label}>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</div>
-                        <input value={val} onChange={(e) => set(e.target.value)} placeholder={`Enter ${label.toLowerCase()}…`} className="rp-edit-input" />
-                      </div>
-                    ))}
-                    <div style={{ gridColumn: "1/-1", display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                      <button onClick={() => setEditOpen(false)} style={{ padding: "7px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>Cancel</button>
-                      <button onClick={handleSave} disabled={saving} style={{ padding: "7px 18px", borderRadius: 8, border: "none", background: saving ? "rgba(99,102,241,0.5)" : "#6366f1", color: "white", fontSize: 13, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: "'DM Sans',sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
-                        {saving && <I.Loader />}{saving ? "Saving…" : "Save Changes"}
+                {editing && (
+                  <div className="rp-edit-form">
+                    <div className="rp-edit-grid">
+                      <label className="rp-field">
+                        Organization
+                        <input value={editForm.organization} onChange={event => setEditForm(prev => ({ ...prev, organization: event.target.value }))} />
+                      </label>
+                      <label className="rp-field">
+                        Job Title
+                        <input value={editForm.job_title} onChange={event => setEditForm(prev => ({ ...prev, job_title: event.target.value }))} />
+                      </label>
+                      <label className="rp-field">
+                        Department
+                        <input value={editForm.department} onChange={event => setEditForm(prev => ({ ...prev, department: event.target.value }))} />
+                      </label>
+                      <label className="rp-field">
+                        Hiring Focus
+                        <input value={editForm.hiring_focus} onChange={event => setEditForm(prev => ({ ...prev, hiring_focus: event.target.value }))} />
+                      </label>
+                    </div>
+                    <div className="rp-actions">
+                      <button className="rp-btn" type="button" onClick={() => setEditing(false)} disabled={editSaving}>Cancel</button>
+                      <button className="rp-btn primary" type="button" onClick={handleEditSave} disabled={editSaving}>
+                        {editSaving ? "Saving..." : "Save Changes"}
                       </button>
                     </div>
                   </div>
                 )}
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", paddingTop: 20, borderTop: "1px solid var(--border)" }}>
-                  {[
-                    { Icon: I.Building,  label: "Organization", value: profile.user.organization || "Not set" },
-                    { Icon: I.Briefcase, label: "Department",    value: profile.user.department   || "Not set" },
-                    { Icon: I.Target,    label: "Hiring Focus",  value: profile.user.hiring_focus || "Not set" },
-                    { Icon: I.Calendar,  label: "Member Since",  value: _fmtMonthYear(profile.user.member_since) },
-                  ].map(({ Icon, label, value }) => (
-                    <div key={label} className="rp-meta-row">
-                      <div className="rp-meta-icon"><Icon /></div>
-                      <div>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 3 }}>{label}</div>
-                        <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>{value}</div>
+                <div className="rp-info-grid">
+                  {infoGrid.map(item => {
+                    const Icon = item.icon;
+                    return (
+                      <div className="rp-info-item" key={item.label}>
+                        <span><Icon size={16} /></span>
+                        <div>
+                          <small>{item.label}</small>
+                          <strong>{item.value}</strong>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-              </>
-            ) : null
-          )}
+              </section>
 
-          {/* Talent Overview */}
-          {!loading && profile?.talent_overview && (
-            <div>
-              {sectionTitle("Talent Decision Overview")}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
-                {[
-                  { Icon: I.Users, label: "Candidates Evaluated",    value: profile.talent_overview.candidates_evaluated, sub: "Total profiles analyzed",  bg: "linear-gradient(135deg,rgba(99,102,241,0.8),rgba(236,72,153,0.7))", iconBg: "rgba(255,255,255,0.15)", iconColor: "rgba(255,255,255,0.9)", valColor: "white",   subColor: "rgba(255,255,255,0.6)", border: "none" },
-                  { Icon: I.Alert, label: "High-Priority Identified", value: profile.talent_overview.high_priority,        sub: "Above priority threshold", bg: "rgba(248,113,113,0.06)",  iconBg: "rgba(248,113,113,0.12)", iconColor: "#f87171", valColor: "#f87171", subColor: "var(--text-muted)", border: "1px solid rgba(248,113,113,0.2)" },
-                  { Icon: I.Star,  label: "Profiles Shortlisted",     value: profile.talent_overview.profiles_shortlisted, sub: "Marked for consideration", bg: "rgba(167,139,250,0.06)",  iconBg: "rgba(167,139,250,0.12)", iconColor: "#a78bfa", valColor: "#a78bfa", subColor: "var(--text-muted)", border: "1px solid rgba(167,139,250,0.2)" },
-                ].map((c) => (
-                  <div key={c.label} style={{ padding: "22px 24px", borderRadius: 16, background: c.bg, border: c.border }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-                      <div style={{ fontSize: 11.5, fontWeight: 700, color: c.valColor === "white" ? "rgba(255,255,255,0.75)" : c.valColor, textTransform: "uppercase", letterSpacing: "0.5px" }}>{c.label}</div>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: c.iconBg, display: "flex", alignItems: "center", justifyContent: "center", color: c.iconColor }}><c.Icon /></div>
-                    </div>
-                    <div style={{ fontSize: 42, fontWeight: 900, color: c.valColor, lineHeight: 1, marginBottom: 6 }}>{c.value}</div>
-                    <div style={{ fontSize: 12, color: c.subColor }}>{c.sub}</div>
+              <section>
+                <SectionTitle>Talent Overview</SectionTitle>
+                <div className="rp-kpi-grid">
+                  <section className="rp-card">
+                    <div className="rp-card-top"><span>Candidates Evaluated</span><Users size={18} /></div>
+                    <strong>{fmtNumber(profile.talent_overview.candidates_evaluated)}</strong>
+                    <small>Total completed evaluations</small>
+                  </section>
+                  <section className="rp-card">
+                    <div className="rp-card-top"><span>High Priority</span><AlertTriangle size={18} /></div>
+                    <strong>{fmtNumber(profile.talent_overview.high_priority)}</strong>
+                    <small>Above current threshold</small>
+                  </section>
+                  <section className="rp-card">
+                    <div className="rp-card-top"><span>Shortlisted</span><Sparkles size={18} /></div>
+                    <strong>{fmtNumber(profile.talent_overview.profiles_shortlisted)}</strong>
+                    <small>Marked for consideration</small>
+                  </section>
+                </div>
+              </section>
+
+              <section className="rp-panel">
+                <div className="rp-panel-head">
+                  <div>
+                    <h2>Recent Activity</h2>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Bottom 2-col */}
-          {!loading && profile && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-
-              {/* Recent Activity */}
-              {card(
-                <>
-                  {sectionTitle("Recent Decision Activity")}
-                  {!securityOn && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 10, background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.15)", marginBottom: 14 }}>
-                      <I.EyeOff />
-                      <span style={{ fontSize: 12, color: "rgba(248,113,113,0.85)", fontWeight: 600 }}>Security scores are hidden in candidate reports</span>
-                    </div>
+                  {profile.recent_activity.length > 5 && (
+                    <button className="rp-link-button" type="button" onClick={() => setShowAllActivities(prev => !prev)}>
+                      {showAllActivities ? "Show Less" : "View All Activities"}
+                    </button>
                   )}
-                  <div style={{ display: "flex", flexDirection: "column" }}>
-                    {(profile.recent_activity ?? []).slice(0, 5).map((act, i, arr) => (
-                      <div key={i} className="activity-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(99,102,241,0.1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#a78bfa", flexShrink: 0 }}>
-                            {act.title.toLowerCase().includes("compar") ? <I.Chart /> : <I.File />}
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 2 }}>{act.title}</div>
-                            <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{act.description}</div>
-                          </div>
-                        </div>
-                        <div style={{ textAlign: "right", flexShrink: 0 }}>
-                          <div style={{ fontSize: 11, color: "var(--text-faint)" }}>{_fmtAgo(act.completed_at)}</div>
-                          {act.score !== null && securityOn && (
-                            <div style={{ fontSize: 13, fontWeight: 700, color: _scoreColor(act.score!), marginTop: 2 }}>{act.score}</div>
-                          )}
-                          {act.score !== null && !securityOn && (
-                            <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2, fontStyle: "italic" }}>hidden</div>
-                          )}
-                        </div>
+                </div>
+                <div className="rp-activity-list">
+                  {visibleActivities.map((item, index) => (
+                    <article className="rp-activity-row" key={`${item.title}-${item.completed_at}-${index}`}>
+                      <span className="rp-activity-icon"><FileCheck2 size={16} /></span>
+                      <div>
+                        <strong>{item.title}</strong>
+                        <p>{item.description}</p>
                       </div>
-                    ))}
-                    {(!profile.recent_activity || profile.recent_activity.length === 0) && (
-                      <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No recent activity yet.</div>
-                    )}
-                  </div>
-                  <button className="rp-view-btn" onClick={() => navigate("/dashboard/recruiter/candidates")}>
-                    View All Decision Logs <I.ArrowRight />
-                  </button>
-                </>
-              )}
+                      <span className="rp-activity-time">
+                        {fmtAgo(item.completed_at)}
+                        {item.score !== null && securityOn && <span className="rp-activity-score">{item.score}</span>}
+                        {item.score !== null && !securityOn && <span className="rp-activity-score">hidden</span>}
+                      </span>
+                    </article>
+                  ))}
+                  {!visibleActivities.length && <div className="rp-empty">No recent activity yet.</div>}
+                </div>
+              </section>
 
-              {/* Evaluation Settings */}
-              {card(
-                <>
-                  {sectionTitle("Evaluation Settings")}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-
-                    {/* Evaluation Preferences */}
-                    <div className="rp-setting-row">
-                      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                        <div className="rp-icon-box" style={{ background: "rgba(99,102,241,0.1)", color: "#a78bfa" }}><I.Sliders /></div>
-                        <div>
-                          <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Evaluation Preferences</div>
-                          <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>Adjust how SkillPulse weighs skill categories for your hiring needs.</div>
-                          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                            {[
-                              { label: "Code",          val: wCodeQuality,   color: "#6366f1" },
-                              { label: "Security",      val: wSecurity,       color: "#f87171" },
-                              { label: "Problem Solving", val: wProblemSolving, color: "#34d399" },
-                            ].map((w) => (
-                              <span key={w.label} style={{ fontSize: 10.5, fontWeight: 700, color: w.color, background: `${w.color}18`, padding: "2px 8px", borderRadius: 20, border: `1px solid ${w.color}30` }}>{w.label} {w.val}%</span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                      <button className="rp-action-btn" onClick={() => setPrefOpen(true)}>Configure</button>
-                    </div>
-
-                    {/* Priority Thresholds */}
-                    <div className="rp-setting-row">
-                      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                        <div className="rp-icon-box" style={{ background: "rgba(248,113,113,0.08)", color: "#f87171" }}><I.Alert /></div>
-                        <div>
-                          <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Priority Thresholds</div>
-                          <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>Define the minimum score to flag a candidate as "High Priority".</div>
-                          <div style={{ marginTop: 8 }}>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, color: threshold >= 80 ? "#34d399" : threshold >= 60 ? "#fbbf24" : "#f87171", background: threshold >= 80 ? "rgba(52,211,153,0.1)" : threshold >= 60 ? "rgba(251,191,36,0.1)" : "rgba(248,113,113,0.1)", padding: "2px 8px", borderRadius: 20, border: `1px solid ${threshold >= 80 ? "rgba(52,211,153,0.3)" : threshold >= 60 ? "rgba(251,191,36,0.3)" : "rgba(248,113,113,0.3)"}` }}>
-                              Threshold: {threshold}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <button className="rp-action-btn" onClick={() => setPrioOpen(true)}>Manage</button>
-                    </div>
-
-                    {/* Security Score Visibility */}
-                    <div className="rp-setting-row" style={{ background: securityOn ? "var(--bg-card-hover)" : "rgba(248,113,113,0.04)", border: securityOn ? "1px solid var(--border)" : "1px solid rgba(248,113,113,0.15)" }}>
-                      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                        <div className="rp-icon-box" style={{ background: securityOn ? "rgba(52,211,153,0.08)" : "rgba(248,113,113,0.1)", color: securityOn ? "#34d399" : "#f87171", transition: "all 0.2s" }}><I.Shield /></div>
-                        <div>
-                          <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Security Score Visibility</div>
-                          <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>Show or hide security vulnerability analysis in candidate reports.</div>
-                          <div style={{ marginTop: 7 }}>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, color: securityOn ? "#34d399" : "#f87171", background: securityOn ? "rgba(52,211,153,0.1)" : "rgba(248,113,113,0.1)", padding: "2px 8px", borderRadius: 20, border: `1px solid ${securityOn ? "rgba(52,211,153,0.3)" : "rgba(248,113,113,0.25)"}` }}>
-                              {securityOn ? "● Visible" : "● Hidden"}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <Toggle on={securityOn} onToggle={handleSecurityToggle} />
-                    </div>
-
-                  </div>
-                </>
-              )}
-            </div>
+              <div className="rp-two-col">
+                <SectionTitle>Profile Settings</SectionTitle>
+                <aside className="rp-settings-grid" aria-label="Recruiter profile settings">
+                  {settingRows.map(row => {
+                    const Icon = row.icon;
+                    return (
+                      <button
+                        key={row.key}
+                        type="button"
+                        className={`rp-setting-row ${activeView === row.key ? "is-active" : ""}`}
+                        onClick={() => {
+                          if (row.key === "account") {
+                            navigate("/dashboard/recruiter/account-settings");
+                            return;
+                          }
+                          setActiveView(row.key);
+                        }}
+                      >
+                        <span className="rp-setting-icon"><Icon size={17} /></span>
+                        <span className="rp-setting-copy">
+                          <strong>{row.label}</strong>
+                          <small>{row.description}</small>
+                        </span>
+                        <ChevronRight size={16} />
+                      </button>
+                    );
+                  })}
+                </aside>
+                {renderSettings()}
+              </div>
+            </>
           )}
-
         </div>
-      </div>
+      </main>
     </DashboardLayout>
   );
 }

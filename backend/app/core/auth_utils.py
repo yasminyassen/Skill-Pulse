@@ -3,8 +3,8 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Optional
 from jose import jwt
+from passlib.exc import UnknownHashError
 from passlib.context import CryptContext
-from passlib.hash import argon2
 from app.core.config import settings
 import secrets
 from app.db.database import get_db
@@ -24,8 +24,18 @@ pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
+def has_usable_password_hash(hashed_password: str | None) -> bool:
+    if not hashed_password:
+        return False
+    return pwd_context.identify(hashed_password) is not None
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not plain_password or not has_usable_password_hash(hashed_password):
+        return False
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (UnknownHashError, TypeError, ValueError):
+        return False
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()

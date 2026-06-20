@@ -300,3 +300,4 @@ async def send_reset_password_email(email: str, token: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send reset password email to %s", email)
         raise EmailDeliveryError("Failed to send reset password email") from exc
+

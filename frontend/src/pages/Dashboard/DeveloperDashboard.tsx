@@ -63,7 +63,6 @@ interface ProfileDashboard {
   settings: {
     account_settings: string;
     connected_repositories: string;
-    notification_preferences: string;
   };
 }
 
