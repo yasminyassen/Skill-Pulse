@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import tempfile
@@ -763,3 +764,7 @@ async def background_analysis_task(
             logger.info("[run=%s] Failure status persisted after background task error", run_id)
     finally:
         db.close()
+
+
+def run_background_analysis_task(*args, **kwargs):
+    asyncio.run(background_analysis_task(*args, **kwargs))

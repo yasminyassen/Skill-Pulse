@@ -3,9 +3,10 @@ import os
 
 
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_BACKEND_DIR, ".."))
 _CWD = os.path.abspath(os.getcwd())
 
-for _p in [_BACKEND_DIR, _CWD]:
+for _p in [_BACKEND_DIR, _PROJECT_ROOT, _CWD]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -19,6 +20,7 @@ from app.api import analysis
 from app.api import security_report
 from app.api import repos
 from app.api import requirements
+from app.api import requirement_coverage
 from app.api import github_classroom
 from app.api import recruiter_bulk
 
@@ -79,3 +81,4 @@ app.include_router(github_classroom.router)
 app.include_router(recruiter_bulk.router)
 app.include_router(recruiter_router)
 app.include_router(requirements.router)
+app.include_router(requirement_coverage.router)

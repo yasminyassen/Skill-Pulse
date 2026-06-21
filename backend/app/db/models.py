@@ -190,7 +190,31 @@ class DocumentType(str, enum.Enum):
 class DocumentStatus(str, enum.Enum):
     processing = "processing"
     extracted = "extracted"
+    confirmed = "confirmed"
     failed = "failed"
+
+
+class CoverageRunStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class AcCoverageStatus(str, enum.Enum):
+    covered = "COVERED"
+    partially_covered = "PARTIALLY_COVERED"
+    not_covered = "NOT_COVERED"
+
+
+def _enum_values(enum_cls):
+    return [member.value for member in enum_cls]
+
+
+class StoryCoverageStatus(str, enum.Enum):
+    implemented = "implemented"
+    partially_implemented = "partially_implemented"
+    not_implemented = "not_implemented"
 
 
 class StoryPriority(str, enum.Enum):
@@ -242,6 +266,8 @@ class UserStory(Base):
     acceptance_criteria = Column(JSON, nullable=False, default=[])
     priority = Column(String, nullable=False, default="medium")
     tags = Column(JSON, nullable=False, default=[])
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     technical_tasks = relationship("TechnicalTask", back_populates="story", cascade="all, delete-orphan")
     document = relationship("RequirementDocument", back_populates="user_stories")
@@ -273,3 +299,93 @@ class RepositoryContributor(Base):
 
     repository = relationship("Repository")
     user = relationship("User")
+
+
+class RequirementCoverageRun(Base):
+    __tablename__ = "requirement_coverage_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    repository_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    document_id = Column(Integer, ForeignKey("requirement_documents.id", ondelete="CASCADE"), nullable=False)
+    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id", ondelete="SET NULL"), nullable=True)
+    status = Column(Enum(CoverageRunStatus), default=CoverageRunStatus.pending, nullable=False)
+    overall_coverage = Column(Float, nullable=True)
+    error_message = Column(Text, nullable=True)
+    discovery_links = Column(JSON, nullable=True)
+    developer_task_results = Column(JSON, nullable=True)
+    branch = Column(String, nullable=True)
+    commit_sha = Column(String, nullable=True)
+    requirements_snapshot_hash = Column(String, nullable=True)
+    tasks_snapshot_hash = Column(String, nullable=True)
+    assignments_snapshot_hash = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    repository = relationship("Repository")
+    document = relationship("RequirementDocument")
+    ac_results = relationship("AcCoverageResult", back_populates="coverage_run", cascade="all, delete-orphan")
+    story_summaries = relationship("StoryCoverageSummary", back_populates="coverage_run", cascade="all, delete-orphan")
+    code_embeddings = relationship("CodeEmbeddingRecord", back_populates="coverage_run", cascade="all, delete-orphan")
+    task_embeddings = relationship("TaskEmbeddingRecord", back_populates="coverage_run", cascade="all, delete-orphan")
+
+
+class CodeEmbeddingRecord(Base):
+    __tablename__ = "code_embedding_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_run_id = Column(Integer, ForeignKey("requirement_coverage_runs.id", ondelete="CASCADE"), nullable=False)
+    faiss_id = Column(Integer, nullable=False)
+    file_path = Column(String, nullable=False)
+    symbol_name = Column(String, nullable=True)
+    symbol_type = Column(String, nullable=True)
+    chunk_id = Column(String, nullable=False)
+    start_line = Column(Integer, nullable=True)
+    end_line = Column(Integer, nullable=True)
+    chunk_text = Column(Text, nullable=False)
+    language = Column(String, nullable=False)
+
+    coverage_run = relationship("RequirementCoverageRun", back_populates="code_embeddings")
+
+
+class TaskEmbeddingRecord(Base):
+    __tablename__ = "task_embedding_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_run_id = Column(Integer, ForeignKey("requirement_coverage_runs.id", ondelete="CASCADE"), nullable=False)
+    faiss_id = Column(Integer, nullable=False)
+    task_id = Column(Integer, ForeignKey("technical_tasks.id", ondelete="CASCADE"), nullable=False)
+    story_id = Column(Integer, ForeignKey("user_stories.id", ondelete="CASCADE"), nullable=False)
+    embedding_text = Column(Text, nullable=False)
+
+    coverage_run = relationship("RequirementCoverageRun", back_populates="task_embeddings")
+
+
+class AcCoverageResult(Base):
+    __tablename__ = "ac_coverage_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_run_id = Column(Integer, ForeignKey("requirement_coverage_runs.id", ondelete="CASCADE"), nullable=False)
+    story_id = Column(Integer, ForeignKey("user_stories.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(Integer, ForeignKey("technical_tasks.id", ondelete="SET NULL"), nullable=True)
+    ac_id = Column(Integer, nullable=False)
+    status = Column(Enum(AcCoverageStatus, values_callable=_enum_values), nullable=False)
+    score = Column(Float, nullable=False)
+    confidence = Column(Float, nullable=True)
+    evidence = Column(JSON, nullable=True)
+    matched_chunk_ids = Column(JSON, nullable=True)
+    llm_reason = Column(Text, nullable=True)
+
+    coverage_run = relationship("RequirementCoverageRun", back_populates="ac_results")
+
+
+class StoryCoverageSummary(Base):
+    __tablename__ = "story_coverage_summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_run_id = Column(Integer, ForeignKey("requirement_coverage_runs.id", ondelete="CASCADE"), nullable=False)
+    story_id = Column(Integer, ForeignKey("user_stories.id", ondelete="CASCADE"), nullable=False)
+    coverage_score = Column(Float, nullable=False)
+    status = Column(Enum(StoryCoverageStatus), nullable=False)
+    matched_symbols = Column(JSON, nullable=True)
+
+    coverage_run = relationship("RequirementCoverageRun", back_populates="story_summaries")
