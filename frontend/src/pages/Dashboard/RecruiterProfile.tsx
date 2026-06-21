@@ -41,6 +41,8 @@ interface RecruiterProfileData {
     security_score_visible: boolean | null;
     high_priority_threshold: number | null;
     weight_code_quality: number | null;
+    weight_architecture: number | null;
+    weight_maintainability: number | null;
     weight_security: number | null;
     weight_git_activity: number | null;
   };
@@ -74,9 +76,11 @@ const emptyProfile: RecruiterProfileData = {
     has_password: false,
     security_score_visible: true,
     high_priority_threshold: 75,
-    weight_code_quality: 40,
-    weight_security: 30,
-    weight_git_activity: 30,
+    weight_code_quality: 20,
+    weight_architecture: 20,
+    weight_maintainability: 20,
+    weight_security: 20,
+    weight_git_activity: 20,
   },
   talent_overview: {
     candidates_evaluated: 0,
@@ -198,7 +202,7 @@ export default function RecruiterProfilePage() {
   const [savingEval, setSavingEval] = useState(false);
   const [securityOn, setSecurityOn] = useState(true);
   const [threshold, setThreshold] = useState(75);
-  const [weights, setWeights] = useState({ code: 40, security: 30, activity: 30 });
+  const [weights, setWeights] = useState({ code: 20, architecture: 20, maintainability: 20, security: 20, activity: 20 });
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -216,9 +220,11 @@ export default function RecruiterProfilePage() {
     setSecurityOn(data.user.security_score_visible ?? true);
     setThreshold(data.user.high_priority_threshold ?? 75);
     setWeights({
-      code: data.user.weight_code_quality ?? 40,
-      security: data.user.weight_security ?? 30,
-      activity: data.user.weight_git_activity ?? 30,
+      code: data.user.weight_code_quality ?? 20,
+      architecture: data.user.weight_architecture ?? 20,
+      maintainability: data.user.weight_maintainability ?? 20,
+      security: data.user.weight_security ?? 20,
+      activity: data.user.weight_git_activity ?? 20,
     });
   };
 
@@ -284,6 +290,8 @@ export default function RecruiterProfilePage() {
   const saveWeights = async () => {
     await saveEvalSettings({
       weight_code_quality: weights.code,
+      weight_architecture: weights.architecture,
+      weight_maintainability: weights.maintainability,
       weight_security: weights.security,
       weight_git_activity: weights.activity,
     });
@@ -308,7 +316,7 @@ export default function RecruiterProfilePage() {
     [profile],
   );
 
-  const totalWeight = weights.code + weights.security + weights.activity;
+  const totalWeight = weights.code + weights.architecture + weights.maintainability + weights.security + weights.activity;
   const visibleActivities = showAllActivities ? profile.recent_activity : profile.recent_activity.slice(0, 5);
 
   const renderSettings = () => {
@@ -382,11 +390,19 @@ export default function RecruiterProfilePage() {
             <input type="range" min={0} max={100} value={weights.code} onChange={event => setWeights(prev => ({ ...prev, code: Number(event.target.value) }))} />
           </label>
           <label className="rp-slider-block">
+            <div className="rp-slider-label"><strong>Architecture</strong><span>{weights.architecture}%</span></div>
+            <input type="range" min={0} max={100} value={weights.architecture} onChange={event => setWeights(prev => ({ ...prev, architecture: Number(event.target.value) }))} />
+          </label>
+          <label className="rp-slider-block">
+            <div className="rp-slider-label"><strong>Maintainability</strong><span>{weights.maintainability}%</span></div>
+            <input type="range" min={0} max={100} value={weights.maintainability} onChange={event => setWeights(prev => ({ ...prev, maintainability: Number(event.target.value) }))} />
+          </label>
+          <label className="rp-slider-block">
             <div className="rp-slider-label"><strong>Security</strong><span>{weights.security}%</span></div>
             <input type="range" min={0} max={100} value={weights.security} onChange={event => setWeights(prev => ({ ...prev, security: Number(event.target.value) }))} />
           </label>
           <label className="rp-slider-block">
-            <div className="rp-slider-label"><strong>Git Activity</strong><span>{weights.activity}%</span></div>
+            <div className="rp-slider-label"><strong>Problem Solving</strong><span>{weights.activity}%</span></div>
             <input type="range" min={0} max={100} value={weights.activity} onChange={event => setWeights(prev => ({ ...prev, activity: Number(event.target.value) }))} />
           </label>
         </div>

@@ -130,14 +130,14 @@ export default function RepositoryAnalysis() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAutoRun]);
 
-  const fetchHistory = async () => {
-    setHistoryLoading(true);
+  const fetchHistory = async (showLoading = true) => {
+    if (showLoading) setHistoryLoading(true);
     try {
       const res = await api.get("/analysis/history");
       setAnalyses(res.data.history);
     } catch (err: any) {
       if (err.response?.status === 401) { localStorage.clear(); window.location.href = "/login"; }
-    } finally { setHistoryLoading(false); }
+    } finally { if (showLoading) setHistoryLoading(false); }
   };
 
   const handlePrdUpload = async (f: File) => {
@@ -275,6 +275,17 @@ export default function RepositoryAnalysis() {
     return () => clearInterval(iv);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
+
+  useEffect(() => {
+    if (runId) return;
+    if (!analyses.some(a => a.status === "running" || a.status === "pending")) return;
+
+    const iv = setInterval(() => {
+      fetchHistory(false);
+    }, 5000);
+    return () => clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyses, runId]);
 
   const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handlePrdUpload(f); };
 
@@ -669,7 +680,7 @@ export default function RepositoryAnalysis() {
                     <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{analyses.length} {analyses.length === 1 ? "repository" : "repositories"} analyzed</div>
                   </div>
                 </div>
-                <button className="ra-btn-ghost" style={{ fontSize: 12, padding: "7px 13px" }} onClick={fetchHistory}>
+                <button className="ra-btn-ghost" style={{ fontSize: 12, padding: "7px 13px" }} onClick={() => fetchHistory()}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                   Refresh
                 </button>

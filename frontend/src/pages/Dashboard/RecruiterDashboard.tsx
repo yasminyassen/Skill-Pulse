@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
@@ -34,12 +34,23 @@ type SkippedItem = {
   reason: string;
 };
 
+type ApiError = {
+  response?: {
+    data?: {
+      detail?: unknown;
+    };
+  };
+};
+
 const progressSteps = [
   "Reading candidate list",
   "Confirming candidates",
   "Running analysis",
   "Ranking candidates",
 ];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
 
 const CheckIcon = () => (
   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -244,6 +255,7 @@ export default function RecruiterDashboard() {
 
   const pollingRef = useRef<number | null>(null);
   const repositoriesRef = useRef<RepoItem[]>([]);
+  const restoredRef = useRef(false);
 
   const candidateRows = useMemo(() => {
     return [...repositories]
@@ -251,7 +263,7 @@ export default function RecruiterDashboard() {
         candidate: repo.candidate,
         repo_name: repo.repo_name,
         overall_score: repo.overall_score ?? null,
-        analysis_status: repo.status || repo.analysis_status || "pending",
+        analysis_status: repo.analysis_status || repo.status || "pending",
         analyzed_at: repo.analyzed_at ?? null,
         latest_commit_sha: repo.latest_commit_sha ?? null,
       }))
@@ -270,12 +282,18 @@ export default function RecruiterDashboard() {
     }
   };
 
+  const isPendingRepo = useCallback((repo: RepoItem) => {
+    const status = repo.analysis_status || repo.status || "pending";
+    return Boolean(repo.analysis_run_id) && (status === "running" || status === "pending");
+  }, []);
+
   useEffect(() => { repositoriesRef.current = repositories; }, [repositories]);
   useEffect(() => {
     if (repositories.length) localStorage.setItem("recruiter_candidate_repos", JSON.stringify(repositories));
   }, [repositories]);
   useEffect(() => {
-    if (repositories.length) return;
+    if (restoredRef.current) return;
+    restoredRef.current = true;
     try {
       const raw = localStorage.getItem("recruiter_candidate_repos");
       if (raw) {
@@ -286,8 +304,14 @@ export default function RecruiterDashboard() {
   }, []);
   useEffect(() => () => stopPolling(), []);
 
-  const updateRepo = (repoName: string, patch: Partial<RepoItem>) =>
-    setRepositories((prev) => prev.map((r) => (r.repo_name === repoName ? { ...r, ...patch } : r)));
+  const updateRepo = useCallback((target: RepoItem, patch: Partial<RepoItem>) =>
+    setRepositories((prev) => prev.map((repo) => {
+      const sameRun = target.analysis_run_id && repo.analysis_run_id === target.analysis_run_id;
+      const sameCandidateRepo = repo.candidate === target.candidate && repo.repo_name === target.repo_name;
+      if (!sameRun && !sameCandidateRepo) return repo;
+      const changed = Object.entries(patch).some(([key, value]) => repo[key as keyof RepoItem] !== value);
+      return changed ? { ...repo, ...patch } : repo;
+    })), []);
 
   const updatePreviewRow = (index: number, patch: Partial<PreviewRow>) =>
     setPreviewRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -295,10 +319,10 @@ export default function RecruiterDashboard() {
   const removePreviewRow = (index: number) =>
     setPreviewRows((prev) => prev.filter((_, i) => i !== index));
 
-  const pollAnalysisStatus = async () => {
+  const pollAnalysisStatus = useCallback(async () => {
     const current = repositoriesRef.current;
     const pending = current.filter(
-      (r) => r.analysis_run_id && (r.analysis_status === "running" || r.analysis_status === "pending"),
+      isPendingRepo,
     );
     if (pending.length === 0) {
       if (current.length > 0) setActiveStep(3);
@@ -310,37 +334,48 @@ export default function RecruiterDashboard() {
         const res = await api.get(`/analysis/${repo.analysis_run_id}`);
         const status = res.data.status || "running";
         if (status === "completed") {
-          updateRepo(repo.repo_name, {
+          updateRepo(repo, {
             analysis_status: "completed",
+            status: "completed",
             overall_score: res.data?.scores?.overall ?? null,
           });
         } else if (status === "failed") {
-          updateRepo(repo.repo_name, {
+          updateRepo(repo, {
             analysis_status: "failed",
+            status: "failed",
             analysis_error: res.data?.message || "Analysis failed",
           });
         } else {
-          updateRepo(repo.repo_name, { analysis_status: status });
+          updateRepo(repo, { analysis_status: status, status });
         }
       } catch {
-        updateRepo(repo.repo_name, {
+        updateRepo(repo, {
           analysis_status: "failed",
+          status: "failed",
           analysis_error: "Unable to fetch analysis status.",
         });
       }
     }));
-  };
+  }, [isPendingRepo, updateRepo]);
 
-  const startPolling = () => {
+  const startPolling = useCallback((force = false) => {
+    if (pollingRef.current && !force) return;
     stopPolling();
+    void pollAnalysisStatus();
     pollingRef.current = window.setInterval(pollAnalysisStatus, 4000);
-  };
+  }, [pollAnalysisStatus]);
 
-  const handleAuthError = (err: any) => {
-    const detail = err?.response?.data?.detail;
-    const needsAuth = typeof detail === "object" && detail?.requires_github_auth;
+  useEffect(() => {
+    if (!repositories.some(isPendingRepo)) return;
+    setActiveStep(2);
+    startPolling();
+  }, [isPendingRepo, repositories, startPolling]);
+
+  const handleAuthError = (err: unknown) => {
+    const detail = (err as ApiError)?.response?.data?.detail;
+    const needsAuth = isRecord(detail) && Boolean(detail.requires_github_auth);
     if (needsAuth) {
-      setGithubAuthUrl(detail?.auth_url || null);
+      setGithubAuthUrl(typeof detail.auth_url === "string" ? detail.auth_url : null);
       setError("Connect GitHub to analyze candidate repositories.");
     } else {
       setError(typeof detail === "string" ? detail : "Request failed. Please try again.");
@@ -369,7 +404,7 @@ export default function RecruiterDashboard() {
       setShowPreview(true);
       if ((response.data.rows || []).length === 0)
         setError("No valid candidate rows were found. Check the skipped rows below and fix your file.");
-    } catch (err: any) {
+    } catch (err: unknown) {
       handleAuthError(err); setActiveStep(null);
     } finally { setLoading(false); }
   };
@@ -396,8 +431,8 @@ export default function RecruiterDashboard() {
       }));
       setRepositories(fetchedRepos);
       setSkipped(response.data.skipped || []);
-      setShowPreview(false); setActiveStep(2); startPolling();
-    } catch (err: any) {
+      setShowPreview(false); setActiveStep(2); startPolling(true);
+    } catch (err: unknown) {
       handleAuthError(err); setActiveStep(null);
     } finally { setLoading(false); }
   };
@@ -683,7 +718,7 @@ export default function RecruiterDashboard() {
                     </div>
                     <div>
                       <div className="rec-meta-label">Status</div>
-                      <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{repo.status || repo.analysis_status || "pending"}</div>
+                      <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{repo.analysis_status || repo.status || "pending"}</div>
                       {repo.analysis_error && <div style={{ fontSize: 11, color: "rgba(248,113,113,0.85)", marginTop: 3 }}>{repo.analysis_error}</div>}
                     </div>
                     <div>

@@ -50,8 +50,10 @@ class User(Base):
 
     security_score_visible  = Column(Boolean, nullable=True, default=True)
     high_priority_threshold = Column(Integer, nullable=True, default=75)
-    weight_code_quality     = Column(Integer, nullable=True, default=40)
-    weight_security         = Column(Integer, nullable=True, default=30)
+    weight_code_quality     = Column(Integer, nullable=True, default=20)
+    weight_architecture     = Column(Integer, nullable=True, default=20)
+    weight_maintainability  = Column(Integer, nullable=True, default=20)
+    weight_security         = Column(Integer, nullable=True, default=20)
     weight_git_activity     = Column(Integer, nullable=True, default=20)
     weight_requirements     = Column(Integer, nullable=True, default=10)
     global_team_insights    = Column(JSON, nullable=True)

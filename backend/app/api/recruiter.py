@@ -50,17 +50,24 @@ router = APIRouter(prefix="/recruiter", tags=["recruiter"])
 
 
 def compute_weighted_score(score: SkillScore, recruiter: User) -> float:
-    w_code    = (recruiter.weight_code_quality if recruiter.weight_code_quality is not None else 40) / 100.0
-    w_sec     = (recruiter.weight_security     if recruiter.weight_security     is not None else 30) / 100.0
-    w_problem = (recruiter.weight_git_activity if recruiter.weight_git_activity is not None else 30) / 100.0
+    w_code = (recruiter.weight_code_quality if recruiter.weight_code_quality is not None else 20) / 100.0
+    w_architecture = (getattr(recruiter, "weight_architecture", None) if getattr(recruiter, "weight_architecture", None) is not None else 20) / 100.0
+    w_maintainability = (getattr(recruiter, "weight_maintainability", None) if getattr(recruiter, "weight_maintainability", None) is not None else 20) / 100.0
+    w_sec = (recruiter.weight_security if recruiter.weight_security is not None else 20) / 100.0
+    problem_weight = getattr(recruiter, "weight_problem_solving", None)
+    if problem_weight is None:
+        problem_weight = getattr(recruiter, "weight_git_activity", None)
+    w_problem = (problem_weight if problem_weight is not None else 20) / 100.0
 
-    total_weight = w_code + w_sec + w_problem
+    total_weight = w_code + w_architecture + w_maintainability + w_sec + w_problem
     if total_weight == 0:
         return float(score.overall_score or 0.0)
 
     weighted = (
-        (score.code_quality_score       or 0.0) * w_code    +
-        (score.security_awareness_score or 0.0) * w_sec     +
+        (score.code_quality_score       or 0.0) * w_code +
+        (score.architecture_score       or 0.0) * w_architecture +
+        (score.maintainability_score    or 0.0) * w_maintainability +
+        (score.security_awareness_score or 0.0) * w_sec +
         (score.problem_solving_score    or 0.0) * w_problem
     )
     return round(weighted / total_weight, 1)
@@ -86,6 +93,8 @@ class UpdateEvalSettingsRequest(BaseModel):
     security_score_visible:  Optional[bool] = None
     high_priority_threshold: Optional[int]  = None
     weight_code_quality:     Optional[int]  = None
+    weight_architecture:     Optional[int]  = None
+    weight_maintainability:  Optional[int]  = None
     weight_security:         Optional[int]  = None
     weight_git_activity:     Optional[int]  = None
 
@@ -107,9 +116,11 @@ def _recruiter_profile_payload(current_user: User) -> dict:
         "member_since": current_user.created_at.isoformat() if current_user.created_at else None,
         "security_score_visible": current_user.security_score_visible if current_user.security_score_visible is not None else True,
         "high_priority_threshold": current_user.high_priority_threshold if current_user.high_priority_threshold is not None else 75,
-        "weight_code_quality": current_user.weight_code_quality if current_user.weight_code_quality is not None else 40,
-        "weight_security": current_user.weight_security if current_user.weight_security is not None else 30,
-        "weight_git_activity": current_user.weight_git_activity if current_user.weight_git_activity is not None else 30,
+        "weight_code_quality": current_user.weight_code_quality if current_user.weight_code_quality is not None else 20,
+        "weight_architecture": current_user.weight_architecture if current_user.weight_architecture is not None else 20,
+        "weight_maintainability": current_user.weight_maintainability if current_user.weight_maintainability is not None else 20,
+        "weight_security": current_user.weight_security if current_user.weight_security is not None else 20,
+        "weight_git_activity": current_user.weight_git_activity if current_user.weight_git_activity is not None else 20,
     }
 
 
@@ -344,6 +355,8 @@ async def update_eval_settings(
 
     for field, val in [
         ("weight_code_quality", data.weight_code_quality),
+        ("weight_architecture", data.weight_architecture),
+        ("weight_maintainability", data.weight_maintainability),
         ("weight_security",     data.weight_security),
         ("weight_git_activity", data.weight_git_activity),
     ]:
@@ -359,6 +372,8 @@ async def update_eval_settings(
         "security_score_visible":  current_user.security_score_visible,
         "high_priority_threshold": current_user.high_priority_threshold,
         "weight_code_quality":     current_user.weight_code_quality,
+        "weight_architecture":     current_user.weight_architecture,
+        "weight_maintainability":  current_user.weight_maintainability,
         "weight_security":         current_user.weight_security,
         "weight_git_activity":     current_user.weight_git_activity,
     }
@@ -425,9 +440,11 @@ async def get_recruiter_profile_dashboard(
         "has_password":            has_usable_password_hash(current_user.hashed_password),
         "security_score_visible":  current_user.security_score_visible  if current_user.security_score_visible  is not None else True,
         "high_priority_threshold": current_user.high_priority_threshold if current_user.high_priority_threshold is not None else 75,
-        "weight_code_quality":     current_user.weight_code_quality     if current_user.weight_code_quality     is not None else 40,
-        "weight_security":         current_user.weight_security         if current_user.weight_security         is not None else 30,
-        "weight_git_activity":     current_user.weight_git_activity     if current_user.weight_git_activity     is not None else 30,
+        "weight_code_quality":     current_user.weight_code_quality     if current_user.weight_code_quality     is not None else 20,
+        "weight_architecture":     current_user.weight_architecture     if current_user.weight_architecture     is not None else 20,
+        "weight_maintainability":  current_user.weight_maintainability  if current_user.weight_maintainability  is not None else 20,
+        "weight_security":         current_user.weight_security         if current_user.weight_security         is not None else 20,
+        "weight_git_activity":     current_user.weight_git_activity     if current_user.weight_git_activity     is not None else 20,
     }
 
     candidates_evaluated = (

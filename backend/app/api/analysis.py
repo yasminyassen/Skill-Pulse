@@ -100,6 +100,39 @@ def compute_repository_display_score(code_score: float | None, security_score: f
     return round((code * code_weight) + (security * security_weight), 2)
 
 
+def compute_recruiter_weighted_score(score: SkillScore, recruiter: User) -> float:
+    """
+    Computes a candidate's overall score using the recruiter's own evaluation
+    weights (Code Quality / Architecture / Maintainability / Security /
+    Problem Solving), set in the Evaluation Preferences panel. This mirrors
+    compute_weighted_score() used in app/api/routes/recruiter.py so the score
+    shown in profile-dashboard (Recent Activity / KPIs) matches the score
+    shown in the Candidate Evaluation page exactly.
+
+    NOTE: `weight_git_activity` is the DB column name, but it is actually
+    applied to `problem_solving_score` — the UI label for this slider is
+    "Problem Solving", not "Git Activity".
+    """
+    w_code = (getattr(recruiter, "weight_code_quality", None) if getattr(recruiter, "weight_code_quality", None) is not None else 20) / 100.0
+    w_architecture = (getattr(recruiter, "weight_architecture", None) if getattr(recruiter, "weight_architecture", None) is not None else 20) / 100.0
+    w_maintainability = (getattr(recruiter, "weight_maintainability", None) if getattr(recruiter, "weight_maintainability", None) is not None else 20) / 100.0
+    w_sec = (getattr(recruiter, "weight_security", None) if getattr(recruiter, "weight_security", None) is not None else 20) / 100.0
+    w_problem = (getattr(recruiter, "weight_git_activity", None) if getattr(recruiter, "weight_git_activity", None) is not None else 20) / 100.0
+
+    total_weight = w_code + w_architecture + w_maintainability + w_sec + w_problem
+    if total_weight == 0:
+        return float(score.overall_score or 0.0)
+
+    weighted = (
+        (score.code_quality_score       or 0.0) * w_code +
+        (score.architecture_score       or 0.0) * w_architecture +
+        (score.maintainability_score    or 0.0) * w_maintainability +
+        (score.security_awareness_score or 0.0) * w_sec +
+        (score.problem_solving_score    or 0.0) * w_problem
+    )
+    return round(weighted / total_weight, 1)
+
+
 MIN_AWARE_DATETIME = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -659,24 +692,8 @@ async def get_recruiter_candidates(
         .all()
     )
 
-    active_run_by_repo = {
-        row.repository_id: row.last_run_id
-        for row in (
-            db.query(RepositoryAnalysis)
-            .filter(
-                RepositoryAnalysis.user_id == current_user.id,
-                RepositoryAnalysis.last_run_id.isnot(None),
-            )
-            .all()
-        )
-    }
-
     latest_by_candidate: dict[str, tuple[AnalysisRun, Repository, SkillScore, RecruiterCandidate]] = {}
     for run, repo, score, candidate in rows:
-        active_run_id = active_run_by_repo.get(run.repository_id)
-        if active_run_id is not None and active_run_id != run.id:
-            continue
-
         candidate_key = (candidate.github_login or candidate.candidate_name or "").strip().lower()
         if not candidate_key:
             candidate_key = str(run.id)
@@ -713,10 +730,10 @@ async def get_recruiter_candidates(
         key=lambda item: _run_sort_time(item[0]),
         reverse=True,
     ):
-        recruiter_overall = compute_repository_display_score(
-            score.overall_score,
-            score.security_awareness_score,
-        )
+        # Overall score must reflect the recruiter's own evaluation weights
+        # (Code Quality / Security / Problem Solving), set in Evaluation
+        # Preferences — not a fixed 70/30 code/security split.
+        recruiter_overall = compute_recruiter_weighted_score(score, current_user)
         response.append(RecruiterCandidateRow(
             candidate_name=candidate.candidate_name,
             github_login=candidate.github_login or "",
@@ -1576,5 +1593,3 @@ async def get_skills_summary(
             "github_login": repos_list[0]["analysis_context"].get("github_login") if repos_list else None,
         },
     }
-
-
