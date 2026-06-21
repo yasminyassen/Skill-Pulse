@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import api from "../api/auth";
 import DashboardLayout from "./DashboardLayout";
+import { ExtractedRequirementsReviewModal, PrdUploadDropZone } from "../components/requirements/PrdWorkflow";
 
 interface Analysis {
   analysis_id: number;
@@ -17,7 +18,9 @@ interface TechnicalTask {
   description: string;
   type: string;
   status: string;
+  assigned_to?: number | null;
   ac_ids: number[];
+  due_date?: string | null;
 }
 
 interface UserStory {
@@ -40,6 +43,20 @@ interface EditState {
   text: string;
   title: string;
 }
+
+interface Contributor {
+  id: number;
+  username: string;
+  full_name: string;
+  email?: string;
+  specialization?: string | null;
+}
+
+const withTimeout = <T,>(promise: Promise<T>, ms = 10000): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error("Request timed out")), ms)),
+  ]);
 
 const scoreColor = (s: number | null) => {
   if (s === null) return "rgba(148,163,184,0.6)";
@@ -75,23 +92,31 @@ const timeAgo = (iso: string) => {
 
 export default function RepositoryAnalysis() {
   const [repoUrl, setRepoUrl]   = useState("");
-  const [branch]                = useState("main");
+  const [programmingLanguage, setProgrammingLanguage] = useState("python");
+  const [branch, setBranch]     = useState("main");
   const [file, setFile]         = useState<File | null>(null);
   const [loading, setLoading]   = useState(false);
   const [runId, setRunId]       = useState<number | null>(null);
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [urlError, setUrlError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const role = localStorage.getItem("role") || "developer";
 
-  const [pendingAutoRun, setPendingAutoRun] = useState<{ url: string; branch: string } | null>(null);
+  const [pendingAutoRun, setPendingAutoRun] = useState<{ url: string; branch: string; programmingLanguage?: string } | null>(null);
   const [uploadingPrd, setUploadingPrd]     = useState(false);
   const [prdDocId, setPrdDocId]             = useState<number | null>(null);
   const [prdStories, setPrdStories]         = useState<UserStory[]>([]);
   const [showPrdModal, setShowPrdModal]     = useState(false);
   const [selectedRepoForPrd, setSelectedRepoForPrd] = useState<number | "">("");
+  const [analysisMode, setAnalysisMode] = useState<"analyze" | "requirements">("analyze");
+  const [requirementsRepoId, setRequirementsRepoId] = useState<number | null>(null);
+  const [requirementsAnalysisReady, setRequirementsAnalysisReady] = useState(false);
+  const [requirementsAnalysisMsg, setRequirementsAnalysisMsg] = useState("");
+  const [reviewContributors, setReviewContributors] = useState<Contributor[]>([]);
+  const [requirementsConfirmed, setRequirementsConfirmed] = useState(false);
 
   const [editModal, setEditModal]   = useState<EditState>({ isOpen: false, type: 'story', storyId: 0, text: "", title: "" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -101,7 +126,6 @@ export default function RepositoryAnalysis() {
   const [githubAuthUrl, setGithubAuthUrl] = useState<string | null>(null);
   const [failedMsg, setFailedMsg]   = useState<string | null>(null);
   const [cachedMsg, setCachedMsg]   = useState<{ runId: number; repoName: string; scope?: string; cachedForCurrentUser?: boolean } | null>(null);
-  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
 
   const accent = role === "manager" ? "#8b5cf6" : role === "recruiter" ? "#a855f7" : "#6366f1";
 
@@ -115,11 +139,13 @@ export default function RepositoryAnalysis() {
     if (params.get("github_connected") === "true") {
       const saved = localStorage.getItem("pending_repo");
       if (saved) {
-        const { repoUrl: savedUrl, branch: savedBranch } = JSON.parse(saved);
+        const { repoUrl: savedUrl, branch: savedBranch, programmingLanguage: savedLanguage } = JSON.parse(saved);
         setRepoUrl(savedUrl);
+        setBranch(savedBranch || "main");
+        if (savedLanguage) setProgrammingLanguage(savedLanguage);
         localStorage.removeItem("pending_repo");
         window.history.replaceState({}, document.title, window.location.pathname);
-        setPendingAutoRun({ url: savedUrl, branch: savedBranch });
+        setPendingAutoRun({ url: savedUrl, branch: savedBranch || "main", programmingLanguage: savedLanguage || "python" });
       }
     }
     fetchHistory();
@@ -132,26 +158,65 @@ export default function RepositoryAnalysis() {
 
   const fetchHistory = async (showLoading = true) => {
     if (showLoading) setHistoryLoading(true);
+    setHistoryError("");
     try {
-      const res = await api.get("/analysis/history");
+      const res = await withTimeout(api.get("/analysis/history?limit=50"));
       setAnalyses(res.data.history);
     } catch (err: any) {
       if (err.response?.status === 401) { localStorage.clear(); window.location.href = "/login"; }
+      const detail = err?.response?.data?.detail || err?.message || "Could not load analysis history";
+      setHistoryError(String(detail));
     } finally { if (showLoading) setHistoryLoading(false); }
   };
 
+  const fetchReviewContributors = async (repoId: number) => {
+    try {
+      await api.post(`/requirements/repositories/${repoId}/sync-contributors`);
+    } catch (err) {
+      console.warn("Contributor sync skipped or failed:", err);
+    }
+    try {
+      const res = await api.get(`/requirements/repositories/${repoId}/contributors`);
+      setReviewContributors(res.data || []);
+    } catch (err) {
+      console.warn("Could not load contributors:", err);
+      setReviewContributors([]);
+    }
+  };
+
+  const handleReviewTaskPatch = async (taskId: number, patch: Partial<TechnicalTask>) => {
+    try {
+      const res = await api.patch(`/requirements/tasks/${taskId}`, patch);
+      const updated = res.data;
+      setPrdStories(prev => prev.map(story => ({
+        ...story,
+        technical_tasks: story.technical_tasks.map(task => task.id === taskId ? { ...task, ...updated } : task),
+      })));
+      showToast("Task updated");
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to update task.", "error");
+    }
+  };
+
   const handlePrdUpload = async (f: File) => {
-    if (selectedRepoForPrd === "") { alert("Please select a repository from the dropdown before uploading the PRD."); return; }
+    if (analysisMode === "requirements" && !repoUrl.trim()) { alert("Enter a GitHub repository URL before uploading the PRD."); return; }
     setFile(f); setUploadingPrd(true);
     try {
       const formData = new FormData();
       formData.append("file", f);
-      formData.append("repository_id", selectedRepoForPrd.toString());
+      if (requirementsRepoId) formData.append("repository_id", requirementsRepoId.toString());
+      else formData.append("repo_url", repoUrl.trim());
       const uploadRes = await api.post("/requirements/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
       const docId = uploadRes.data.document_id;
       setPrdDocId(docId);
       const storiesRes = await api.get(`/requirements/${docId}/stories`);
       setPrdStories(storiesRes.data);
+      const firstStory = storiesRes.data?.[0];
+      if (firstStory?.document_id) {
+        // Repository id is returned indirectly by the selected workflow after upload; contributors may be empty until analysis.
+        setRequirementsAnalysisMsg("Requirements extracted. Review and confirm, then analyze repository and detect coverage.");
+      }
       setShowPrdModal(true);
     } catch (err) { console.error(err); alert("Failed to upload and extract PRD."); setFile(null); }
     finally { setUploadingPrd(false); }
@@ -192,7 +257,8 @@ export default function RepositoryAnalysis() {
     try {
       await api.post(`/requirements/${prdDocId}/confirm`);
       setShowPrdModal(false); setFile(null); setSelectedRepoForPrd("");
-      showToast("Requirements confirmed successfully! Ready for assignment.", "success");
+      setRequirementsConfirmed(true);
+      showToast("Requirements confirmed. You can now analyze the repository and detect coverage.", "success");
     } catch (err: any) { showToast(`Failed to confirm: ${err.response?.data?.detail || err.message}`, "error"); }
   };
 
@@ -222,23 +288,44 @@ export default function RepositoryAnalysis() {
   const startAnalysis = async (url: string, br: string) => {
     if (!url) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!/^https:\/\/github\.com\/.+/.test(url)) { setUrlError("URL must start with https://github.com/…"); return; }
+    const selectedBranch = (br || "main").trim() || "main";
     setUrlError(""); setGithubAuthUrl(null); setFailedMsg(null); setCachedMsg(null); setLoading(true);
+    if (analysisMode === "requirements") {
+      setRequirementsAnalysisReady(false);
+      setRequirementsAnalysisMsg("Analyzing repository before requirements can be uploaded.");
+      setRequirementsRepoId(null);
+      setReviewContributors([]);
+    }
     try {
-      const res = await api.post("/analysis/run", { repo_url: url, branch: br });
+      const res = await api.post("/analysis/run", { repo_url: url, branch: selectedBranch, programming_language: programmingLanguage });
       if (res.data.cached) {
         setLoading(false);
         const repoName = url.replace("https://github.com/", "").split("/").pop() || url;
         setCachedMsg({ runId: res.data.analysis_run_id, repoName, scope: res.data.cached_scope, cachedForCurrentUser: res.data.cached_for_current_user ?? true });
-        fetchHistory(); return;
+        if (analysisMode === "requirements" && res.data.repo_id) {
+          setRequirementsRepoId(res.data.repo_id);
+          setRequirementsAnalysisReady(true);
+          setRequirementsAnalysisMsg("Repository analysis is ready. Upload a PRD to extract requirements.");
+          fetchReviewContributors(res.data.repo_id);
+        }
+        fetchHistory(false); return;
+      }
+      if (analysisMode === "requirements" && res.data.repo_id) {
+        setRequirementsRepoId(res.data.repo_id);
       }
       setRunId(res.data.analysis_run_id);
+      fetchHistory(false);
     } catch (err: any) {
       setLoading(false);
+      if (analysisMode === "requirements") {
+        setRequirementsAnalysisReady(false);
+        setRequirementsAnalysisMsg("Repository analysis failed. Resolve the repository issue before uploading, assigning, or confirming requirements.");
+      }
       const status = err.response?.status;
       const detail = err.response?.data?.detail;
       const needsAuth = (typeof detail === "object" && detail?.requires_github_auth) || err.response?.data?.requires_github_auth;
       if (status === 403 && (detail?.recruiter_private_repo || role === "recruiter")) { setUrlError("Private repositories are not supported for Recruiter accounts."); return; }
-      if (needsAuth) { const authUrl = (typeof detail === "object" ? detail?.auth_url : null) ?? err.response?.data?.auth_url; localStorage.setItem("pending_repo", JSON.stringify({ repoUrl: url, branch: br })); setGithubAuthUrl(authUrl); return; }
+      if (needsAuth) { const authUrl = (typeof detail === "object" ? detail?.auth_url : null) ?? err.response?.data?.auth_url; localStorage.setItem("pending_repo", JSON.stringify({ repoUrl: url, branch: selectedBranch, programmingLanguage })); setGithubAuthUrl(authUrl); return; }
       if (status === 403 && detail?.no_developer_contributions) { setUrlError(detail.message || "No commits found."); return; }
       if (status === 400 && detail?.no_python_contributions)   { setUrlError(detail.message || "No Python files found."); return; }
       if (status === 404 && detail?.branch_not_found)          { setUrlError("Repository found, but this branch does not exist."); return; }
@@ -250,10 +337,30 @@ export default function RepositoryAnalysis() {
     }
   };
 
-  const disconnectAnalysis = async (analysisId: number) => {
-    setOpenMenuId(null);
-    try { await api.delete(`/repos/disconnect-analysis/${analysisId}`); await fetchHistory(); }
-    catch (err) { console.error(err); setFailedMsg("Could not disconnect this analysis."); }
+  const analyzeAndDetectCoverage = async () => {
+    if (!repoUrl) { setUrlError("Please enter a GitHub repository URL"); return; }
+    if (!requirementsConfirmed) { showToast("Confirm requirements before analysis and coverage detection.", "error"); return; }
+    const selectedBranch = (branch || "main").trim() || "main";
+    setLoading(true);
+    try {
+      const res = await api.post("/analysis/run", { repo_url: repoUrl, branch: selectedBranch, programming_language: programmingLanguage });
+      const repoId = res.data.repo_id || requirementsRepoId;
+      if (!repoId) throw new Error("Repository id was not returned.");
+      setRequirementsRepoId(repoId);
+      if (!res.data.cached && res.data.analysis_run_id) {
+        setRunId(res.data.analysis_run_id);
+        setRequirementsAnalysisMsg("Repository analysis is running. Coverage detection will be available when analysis completes.");
+      } else {
+        await api.post(`/requirements/coverage/repositories/${repoId}/detect`);
+        setRequirementsAnalysisReady(true);
+        setRequirementsAnalysisMsg("Repository analysis is complete. Coverage detection started.");
+        showToast("Coverage detection started");
+      }
+      fetchHistory(false);
+    } catch (err: any) {
+      setLoading(false);
+      showToast(err.response?.data?.detail || err.message || "Analyze and coverage detection failed", "error");
+    }
   };
 
   useEffect(() => {
@@ -261,14 +368,33 @@ export default function RepositoryAnalysis() {
     const iv = setInterval(async () => {
       try {
         const res = await api.get(`/analysis/${runId}`);
-        if (res.data.status === "completed") { clearInterval(iv); setLoading(false); setRunId(null); fetchHistory(); }
+        fetchHistory(false);
+        if (res.data.status === "completed") {
+          clearInterval(iv); setLoading(false); setRunId(null);
+          if (analysisMode === "requirements" && requirementsRepoId) {
+            setRequirementsAnalysisReady(true);
+            setRequirementsAnalysisMsg("Repository analysis is complete. Starting coverage detection.");
+            fetchReviewContributors(requirementsRepoId);
+            try {
+              await api.post(`/requirements/coverage/repositories/${requirementsRepoId}/detect`);
+              showToast("Coverage detection started");
+            } catch (err: any) {
+              showToast(err.response?.data?.detail || "Coverage detection failed", "error");
+            }
+          }
+          fetchHistory(false);
+        }
         else if (res.data.status === "failed") {
           clearInterval(iv); setLoading(false); setRunId(null);
+          if (analysisMode === "requirements") {
+            setRequirementsAnalysisReady(false);
+            setRequirementsAnalysisMsg("Repository analysis failed. Resolve the repository issue before uploading, assigning, or confirming requirements.");
+          }
           const reason = res.data.error_reason;
           if (reason === "rate_limit") setFailedMsg("__rate_limit__");
           else if (reason === "not_found") setFailedMsg("Repository or branch not found.");
           else setFailedMsg("Analysis failed. Check the URL and branch, then try again.");
-          fetchHistory();
+          fetchHistory(false);
         }
       } catch { clearInterval(iv); setLoading(false); }
     }, 3000);
@@ -444,8 +570,21 @@ export default function RepositoryAnalysis() {
         </div>
       )}
 
-      {/* PRD Review Modal */}
-      {showPrdModal && (
+      <ExtractedRequirementsReviewModal
+        accent={accent}
+        stories={showPrdModal ? prdStories as any : []}
+        contributors={reviewContributors}
+        selectedTaskIds={selectedTaskIds}
+        setSelectedTaskIds={setSelectedTaskIds}
+        onClose={() => setShowPrdModal(false)}
+        onConfirm={confirmPRD}
+        onEdit={openEditModal}
+        onMerge={handleOpenMergeModal}
+        onTaskUpdate={handleReviewTaskPatch as any}
+      />
+
+      {/* Legacy PRD Review Modal replaced by shared workflow component */}
+      {false && showPrdModal && (
         <div className="ra-modal-overlay">
           <div className="ra-modal">
             <div className="ra-modal-header">
@@ -513,6 +652,29 @@ export default function RepositoryAnalysis() {
                               </div>
                               <div style={{ fontSize: 13, color: "var(--text-primary)", lineHeight: 1.4 }}>{task.description}</div>
                               {task.ac_ids.length > 0 && <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>Covers AC: {task.ac_ids.map(id => `#${id}`).join(", ")}</div>}
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+                                <select
+                                  className="ra-select"
+                                  value={task.assigned_to ?? ""}
+                                  onChange={e => handleReviewTaskPatch(task.id, { assigned_to: e.target.value ? Number(e.target.value) : null })}
+                                  style={{ padding: "7px 9px", fontSize: 12 }}
+                                >
+                                  <option value="">Unassigned</option>
+                                  {reviewContributors.filter(c => !task.type || !c.specialization || c.specialization === task.type).map(c => (
+                                    <option key={c.id} value={c.id}>{c.full_name || c.username}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  className="ra-select"
+                                  value={task.status || "todo"}
+                                  onChange={e => handleReviewTaskPatch(task.id, { status: e.target.value })}
+                                  style={{ padding: "7px 9px", fontSize: 12 }}
+                                >
+                                  <option value="todo">To Do</option>
+                                  <option value="in_progress">In Progress</option>
+                                  <option value="done">Done</option>
+                                </select>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -568,10 +730,43 @@ export default function RepositoryAnalysis() {
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 </div>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>1. Analyze Repository Code</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Enter a public or private GitHub repository to analyze developer skills.</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>{analysisMode === "requirements" ? "Analyze + Requirements" : "Analyze Only"}</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{analysisMode === "requirements" ? "Upload a PRD, review and confirm requirements, then analyze the repository and detect coverage." : "Enter a public or private GitHub repository to analyze developer skills."}</div>
                 </div>
               </div>
+
+              {role === "manager" && (
+                <div style={{ display: "inline-flex", gap: 8, padding: 4, background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 12, width: "fit-content" }}>
+                  <button
+                    onClick={() => setAnalysisMode("analyze")}
+                    style={{
+                      padding: "8px 14px",
+                      border: "none",
+                      borderRadius: 9,
+                      cursor: "pointer",
+                      background: analysisMode === "analyze" ? `${accent}24` : "transparent",
+                      color: analysisMode === "analyze" ? accent : "var(--text-muted)",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Analyze Only
+                  </button>
+                  <button
+                    onClick={() => setAnalysisMode("requirements")}
+                    style={{
+                      padding: "8px 14px",
+                      border: "none",
+                      borderRadius: 9,
+                      cursor: "pointer",
+                      background: analysisMode === "requirements" ? `${accent}24` : "transparent",
+                      color: analysisMode === "requirements" ? accent : "var(--text-muted)",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Analyze + Requirements
+                  </button>
+                </div>
+              )}
 
               <div>
                 <label className="ra-label">GitHub Repository URL</label>
@@ -589,6 +784,28 @@ export default function RepositoryAnalysis() {
                 )}
               </div>
 
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                <div>
+                  <label className="ra-label">Programming Language</label>
+                  <select className="ra-select" value={programmingLanguage} onChange={e => setProgrammingLanguage(e.target.value)}>
+                    <option value="python">Python (MVP)</option>
+                  </select>
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--text-muted)" }}>
+                    Multi-language support is planned beyond MVP.
+                  </div>
+                </div>
+                <div>
+                  <label className="ra-label">Branch (Optional)</label>
+                  <input
+                    type="text"
+                    className="ra-input"
+                    placeholder="main"
+                    value={branch}
+                    onChange={e => setBranch(e.target.value)}
+                  />
+                </div>
+              </div>
+
               {githubAuthUrl && role !== "recruiter" && (
                 <div style={{ padding: "14px 16px", background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 12, display: "flex", alignItems: "center", gap: 14 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, background: "rgba(251,191,36,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -604,19 +821,54 @@ export default function RepositoryAnalysis() {
                 </div>
               )}
 
-              <div>
+              {(cachedMsg || failedMsg) && (
+                <div style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  background: cachedMsg ? "rgba(52,211,153,0.08)" : "rgba(248,113,113,0.08)",
+                  border: `1px solid ${cachedMsg ? "rgba(52,211,153,0.22)" : "rgba(248,113,113,0.22)"}`,
+                  color: cachedMsg ? "#34d399" : "#f87171",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                }}>
+                  {cachedMsg ? `${cachedMsg.repoName} is already analyzed and ready.` : (failedMsg === "__rate_limit__" ? "GitHub rate limit reached. Try again later or connect GitHub." : failedMsg)}
+                </div>
+              )}
+
+              {analysisMode === "analyze" && <div>
                 <button className="ra-btn-primary" disabled={loading} onClick={() => startAnalysis(repoUrl, branch)}>
                   {loading
                     ? <><div className="pulse-dot" />Analyzing Code…</>
                     : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Analyze Repository</>
                   }
                 </button>
-              </div>
+              </div>}
+
+              {role === "manager" && analysisMode === "requirements" && (
+                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{
+                    padding: "12px 14px",
+                    borderRadius: 10,
+                    background: requirementsAnalysisReady ? "rgba(52,211,153,0.08)" : "rgba(251,191,36,0.08)",
+                    border: `1px solid ${requirementsAnalysisReady ? "rgba(52,211,153,0.22)" : "rgba(251,191,36,0.22)"}`,
+                    color: requirementsAnalysisReady ? "#34d399" : "#fbbf24",
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                  }}>
+                    {requirementsAnalysisMsg || "Upload a PRD to extract requirements. Repository analysis and coverage run after confirmation."}
+                  </div>
+
+                  <PrdUploadDropZone accent={accent} uploading={uploadingPrd} onFile={handlePrdUpload} disabledMessage={!repoUrl.trim() ? "Enter a GitHub repository URL first." : undefined} />
+                  <button className="ra-btn-primary" disabled={!requirementsConfirmed || loading} onClick={analyzeAndDetectCoverage}>
+                    {loading ? <><div className="pulse-dot" />Analyzing…</> : "Analyze Repository & Detect Coverage"}
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
           {/* ── Manager PRD card ── */}
-          {role === "manager" && card(
+          {false && role === "manager" && card(
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 34, height: 34, borderRadius: 10, background: `${accent}18`, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -648,8 +900,8 @@ export default function RepositoryAnalysis() {
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                     </div>
                     <div style={{ textAlign: "left" as const }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{file.name}</div>
-                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{(file.size / 1024 / 1024).toFixed(2)} MB</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{file!.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{(file!.size / 1024 / 1024).toFixed(2)} MB</div>
                     </div>
                   </div>
                 ) : (
@@ -677,7 +929,9 @@ export default function RepositoryAnalysis() {
                   </div>
                   <div>
                     <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Recent Analyses</div>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{analyses.length} {analyses.length === 1 ? "repository" : "repositories"} analyzed</div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {historyError ? "History could not be loaded" : `${analyses.length} ${analyses.length === 1 ? "repository" : "repositories"} analyzed`}
+                    </div>
                   </div>
                 </div>
                 <button className="ra-btn-ghost" style={{ fontSize: 12, padding: "7px 13px" }} onClick={() => fetchHistory()}>
@@ -701,7 +955,14 @@ export default function RepositoryAnalysis() {
                 </div>
               )}
 
-              {!historyLoading && analyses.length === 0 && (
+              {!historyLoading && historyError && (
+                <div style={{ textAlign: "center", padding: "48px 20px" }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#f87171", marginBottom: 4 }}>Could not load analysis history</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{historyError}</div>
+                </div>
+              )}
+
+              {!historyLoading && !historyError && analyses.length === 0 && (
                 <div style={{ textAlign: "center", padding: "48px 20px" }}>
                   <div style={{ width: 56, height: 56, borderRadius: 16, background: "var(--bg-card-hover)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/></svg>

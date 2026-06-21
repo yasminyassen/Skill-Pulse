@@ -1,7 +1,7 @@
 """add user attribution to security metrics
 
 Revision ID: f4a5b6c7d8e9
-Revises: e8b9c0d1e2f3
+Revises: a0b1c2d3e4f5
 Create Date: 2026-06-21 00:00:00.000000
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "f4a5b6c7d8e9"
-down_revision: Union[str, None] = "e8b9c0d1e2f3"
+down_revision: Union[str, None] = "a0b1c2d3e4f5"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

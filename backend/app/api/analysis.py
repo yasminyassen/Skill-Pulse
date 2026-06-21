@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from pydantic import BaseModel
 
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -47,6 +47,7 @@ from app.services.analysis_orchestrator import (
     background_manager_team_analysis_task,
     resolve_github_identity,
     build_personal_repo_context,
+    run_background_analysis_task,
 )
 from app.services.code_analysis_service import (
     compute_overall_score,
@@ -70,6 +71,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 class RepoRequest(BaseModel):
     repo_url: str
     branch: str = "main"
+    programming_language: str = "python"
 
 
 class RecruiterCandidateRow(BaseModel):
@@ -544,6 +546,7 @@ async def run_analysis(
                         else "Existing analysis results are ready for this contribution scope."
                     ),
                     "analysis_run_id": existing_run.id,
+                    "repo_id": repo.id,
                     "status": "completed",
                     "cached": True,
                     "cached_scope": analysis_scope,
@@ -602,6 +605,7 @@ async def run_analysis(
     return {
         "message": "Analysis started successfully. Running in the background.",
         "analysis_run_id": run.id,
+        "repo_id": repo.id,
         "status": "running",
         "analysis_scope": analysis_scope,
         "contributors_matched": len(manager_contributors) if is_manager else None,

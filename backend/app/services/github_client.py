@@ -426,6 +426,32 @@ def read_local_repo_files(repo_path):
                     })
     return python_files
 
+
+_SKIP_DIRS = {
+    ".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build",
+    ".next", "coverage", ".pytest_cache", ".mypy_cache", "htmlcov",
+}
+_SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx"}
+
+
+def read_local_source_files(repo_path: str) -> list[dict]:
+    """Walk repo and return Python + JS/TS/TSX source files for coverage indexing."""
+    files: list[dict] = []
+    for root, dirs, filenames in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for name in filenames:
+            if not any(name.endswith(ext) for ext in _SOURCE_SUFFIXES):
+                continue
+            full_path = os.path.join(root, name)
+            rel_path = os.path.relpath(full_path, repo_path).replace("\\", "/")
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    content = fh.read()
+            except OSError:
+                continue
+            files.append({"filename": name, "path": rel_path, "content": content})
+    return files
+
 def _raise_for_github_error(response: httpx.Response, resource: str = "resource") -> None:
     """Translate GitHub API error responses into clean HTTPExceptions."""
     if response.is_success:
@@ -455,12 +481,23 @@ async def fetch_repo_collaborators(github_token: str | None, full_name: str) -> 
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
+    collaborators: list[dict] = []
     async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{full_name}/collaborators",
-            headers=headers,
-            params={"per_page": 100}
-        )
+        page = 1
+        while True:
+            response = await client.get(
+                f"{GITHUB_API_BASE}/repos/{full_name}/collaborators",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
 
-    _raise_for_github_error(response, resource="repository collaborators")
-    return response.json()
+            _raise_for_github_error(response, resource="repository collaborators")
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                break
+            collaborators.extend(rows)
+            if len(rows) < 100:
+                break
+            page += 1
+
+    return collaborators

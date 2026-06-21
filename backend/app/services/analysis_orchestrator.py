@@ -1127,3 +1127,7 @@ async def _background_manager_team_analysis_task_async(
         }
     finally:
         db.close()
+
+
+def run_background_analysis_task(*args, **kwargs):
+    asyncio.run(background_analysis_task(*args, **kwargs))

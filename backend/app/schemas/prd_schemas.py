@@ -63,7 +63,21 @@ class UserStoryResponse(BaseModel):
 
 class UserStoryUpdate(BaseModel):
     title: Optional[str] = None
+    role: Optional[str] = None
+    feature: Optional[str] = None
+    benefit: Optional[str] = None
+    description: Optional[str] = None
     acceptance_criteria: Optional[List[Dict[str, Any]]] = None
+    priority: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+class UserStoryCreate(UserStoryUpdate):
+    title: str
+    description: str
+    acceptance_criteria: List[Dict[str, Any]] = Field(default_factory=list)
+    priority: str = "medium"
+    tags: List[str] = Field(default_factory=list)
+    technical_tasks: List[TechnicalTaskCreate] = Field(default_factory=list)
 # ==========================================
 # 3. LLM AI Extraction Schemas
 # ==========================================

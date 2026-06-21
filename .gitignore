@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.cache/
 backend/*.db
 backend/*.sqlite3
 
@@ -49,3 +50,8 @@ backend/.env
 
 Thumbs.db
 gitleaks.exe
+
+# FAISS cache
+ai_services/rag/faiss_index/
+*.faiss
+*.meta.json

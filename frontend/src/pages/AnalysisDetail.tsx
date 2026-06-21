@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../api/auth";
 import DashboardLayout from "./DashboardLayout";
@@ -190,7 +190,6 @@ export default function AnalysisDetail() {
   const [notFound, setNotFound] = useState(false);
   const [polling, setPolling] = useState(false);
   const [securityVisible, setSecurityVisible] = useState(true);
-  const [visible, setVisible] = useState(false);
 
   const dashboardPath = `/dashboard/${role}/analysis`;
 
@@ -214,7 +213,6 @@ export default function AnalysisDetail() {
         if (data.status === "pending" && !data.analysis_run_id) { setNotFound(true); setLoading(false); return; }
         setResult(data); setLoading(false);
         setPolling(data.status === "running" || data.status === "pending");
-        setTimeout(() => setVisible(true), 60);
       } catch (err: any) {
         if (err.response?.status === 401) { localStorage.clear(); window.location.href = "/login"; return; }
         setNotFound(true); setLoading(false);
@@ -231,7 +229,6 @@ export default function AnalysisDetail() {
         setResult(res.data);
         if (res.data.status === "completed" || res.data.status === "failed") {
           setPolling(false); clearInterval(iv);
-          setTimeout(() => setVisible(true), 60);
         }
       } catch { clearInterval(iv); }
     }, 3000);
