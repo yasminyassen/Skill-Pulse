@@ -10,6 +10,7 @@ import RoleSelection from './pages/RoleSelection';
 import DeveloperProfile from './pages/Dashboard/DeveloperDashboard';
 import CandidateEvaluation from './pages/Dashboard/CandidateEvaluation';
 import DeveloperLearning from './pages/Dashboard/DeveloperLearning';
+import DeveloperRequirements from './pages/Dashboard/DeveloperRequirements';
 import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
 import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
@@ -47,6 +48,7 @@ function App() {
 
         <Route path="/dashboard/developer/skills" element={<DeveloperSkills />} />
         <Route path="/dashboard/developer/security" element={<DeveloperSecurity />} />
+        <Route path="/dashboard/developer/requirements" element={<DeveloperRequirements />} />
         <Route path="/dashboard/developer/learning" element={<DeveloperLearning />} />
         <Route path="/dashboard/developer/profile" element={<DeveloperProfile />} />
 

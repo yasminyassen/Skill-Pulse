@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from pydantic import BaseModel
 
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -31,9 +31,9 @@ from app.services.github_client import (
     fetch_user_repo_contribution_summary,
 )
 from app.services.analysis_orchestrator import (
-    background_analysis_task,
     resolve_github_identity,
     build_personal_repo_context,
+    run_background_analysis_task,
 )
 from app.services.code_analysis_service import (
     compute_overall_score,
@@ -57,6 +57,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 class RepoRequest(BaseModel):
     repo_url: str
     branch: str = "main"
+    programming_language: str = "python"
 
 
 class RecruiterCandidateRow(BaseModel):
@@ -319,6 +320,7 @@ async def run_analysis(
                         else "Existing analysis results are ready for this contribution scope."
                     ),
                     "analysis_run_id": existing_run.id,
+                    "repo_id": repo.id,
                     "status": "completed",
                     "cached": True,
                     "cached_scope": analysis_scope,
@@ -342,7 +344,7 @@ async def run_analysis(
 
     # Trigger Background Task
     background_tasks.add_task(
-        background_analysis_task,
+        run_background_analysis_task,
         run_id=run.id,
         repo_id=repo.id,
         repo_url=data.repo_url,
@@ -362,6 +364,7 @@ async def run_analysis(
     return {
         "message": "Analysis started successfully. Running in the background.",
         "analysis_run_id": run.id,
+        "repo_id": repo.id,
         "status": "running"
     }
     
@@ -371,27 +374,22 @@ async def get_analysis_history(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    linked_completed_runs = (
-        db.query(AnalysisRun)
-        .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
-        .filter(SkillScore.user_id == current_user.id)
-        .all()
+    linked_run_ids = (
+        select(SkillScore.analysis_run_id)
+        .where(SkillScore.user_id == current_user.id)
     )
-    own_active_runs = (
+    past_runs = (
         db.query(AnalysisRun)
         .filter(
-            AnalysisRun.user_id == current_user.id,
-            AnalysisRun.status != "completed",
+            or_(
+                AnalysisRun.user_id == current_user.id,
+                AnalysisRun.id.in_(linked_run_ids),
+            )
         )
+        .order_by(AnalysisRun.triggered_at.desc())
+        .limit(limit)
         .all()
     )
-
-    unique_runs = {run.id: run for run in linked_completed_runs + own_active_runs}
-    past_runs = sorted(
-        unique_runs.values(),
-        key=lambda run: run.triggered_at or datetime.min.replace(tzinfo=timezone.utc),
-        reverse=True,
-    )[:limit]
 
     result = []
 
