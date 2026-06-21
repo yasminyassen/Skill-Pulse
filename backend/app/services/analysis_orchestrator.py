@@ -36,8 +36,10 @@ from app.api.manager_dashboard import (
     _analysis_run_ids,
     _build_team_aggregate_metrics,
     _build_team_score_payload,
+    _generate_and_store_member_detail_insights_from_rows,
+    _manager_team_insight_payload,
+    _normalise_team_insights,
     _query_manager_score_rows,
-    _stringify_attention_items,
 )
 from ai_services.insights.ai_insights import generate_insights
 from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
@@ -60,37 +62,37 @@ def _build_manager_dashboard_payload(rows: list, db: Session) -> dict:
             "team_size": len({user.id for _, _, _, user in rows}),
             "repository_count": len({run.repository_id for _, run, _, _ in rows}),
         },
-        "manager_dashboard_prompt": (
-            "CRITICAL: Rely STRICTLY on the numerical metrics provided in the payload. "
-            "DO NOT invent, guess, or hallucinate numbers like file counts or scores. "
-            "DO NOT mention or evaluate Security/Vulnerabilities at all. Focus only on "
-            "Code Quality, Maintainability, Architecture, and Problem Solving. "
-            "DO NOT force exactly 3 items. Generate only the truly relevant team_strengths "
-            "and areas_needing_attention based on the actual data. If the codebase has very "
-            "low scores, it is perfectly fine to return fewer strengths, and vice versa."
-        ),
     }
 
 
-def _pure_manager_insights(raw_insights: object) -> dict | None:
+def _merge_preserved_member_details(existing: object, new_insights: dict) -> dict:
+    result = dict(new_insights)
+    if isinstance(existing, dict) and isinstance(existing.get("member_detail_insights"), dict):
+        result["member_detail_insights"] = existing["member_detail_insights"]
+    return result
+
+
+def _model_to_dict(model: BaseModel) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
+def _pure_manager_insights(
+    raw_insights: object,
+    scores: dict[str, float],
+    metrics: dict,
+) -> dict | None:
     if not isinstance(raw_insights, dict):
         return None
     if (
-        "team_strengths" not in raw_insights
-        and "areas_needing_attention" not in raw_insights
+        "actionable_recommendations" not in raw_insights
     ):
         return None
 
-    return {
-        "team_strengths": [
-            str(item).strip()
-            for item in (raw_insights.get("team_strengths") or [])
-            if str(item).strip()
-        ],
-        "areas_needing_attention": _stringify_attention_items(
-            raw_insights.get("areas_needing_attention") or []
-        ),
-    }
+    return _manager_team_insight_payload(
+        _normalise_team_insights(raw_insights, scores, metrics)
+    )
 
 
 async def _generate_manager_dashboard_insights_from_rows(
@@ -107,13 +109,18 @@ async def _generate_manager_dashboard_insights_from_rows(
         )
         return None
 
+    analysis_payload = _build_manager_dashboard_payload(rows, db)
     raw_insights = await generate_insights(
         role="manager",
-        analysis_result=_build_manager_dashboard_payload(rows, db),
+        analysis_result=analysis_payload,
         security_report={},
         doc_id=STANDARDS_DOC_ID,
     )
-    pure_insights = _pure_manager_insights(raw_insights)
+    pure_insights = _pure_manager_insights(
+        raw_insights,
+        analysis_payload["scores"],
+        analysis_payload["aggregate_metrics"],
+    )
     if pure_insights is None:
         logger.warning(
             "Manager dashboard LLM returned no cacheable team insights manager_user_id=%s scope=%s",
@@ -627,6 +634,7 @@ async def _background_analysis_task_async(
 
             db.add(SecurityFinding(
                 analysis_run_id=run.id,
+                user_id=current_user_id,
                 tool=validated.tool,
                 rule=validated.rule,
                 cwe=validated.cwe,
@@ -646,6 +654,7 @@ async def _background_analysis_task_async(
 
             db.add(CodeMetrics(
                 analysis_run_id=run.id,
+                user_id=current_user_id,
                 file_path=file_report.get("path"),
                 cyclomatic_complexity=float(metrics.get("cyclomatic_complexity", 0.0) or 0.0),
                 lines_of_code=int(metrics.get("loc", 0) or 0),
@@ -1000,6 +1009,7 @@ async def _background_manager_team_analysis_task_async(
         )
         run.completed_at = datetime.now(timezone.utc)
         run.status = "completed" if score_count else "failed"
+        db.flush()
         if run.status == "completed":
             manager_user = db.query(User).filter(User.id == manager_user_id).first()
             repo_score_rows = (
@@ -1045,13 +1055,35 @@ async def _background_manager_team_analysis_task_async(
                         "global",
                     )
                     if global_insights is not None:
-                        manager_user.global_team_insights = global_insights
+                        manager_user.global_team_insights = _merge_preserved_member_details(
+                            manager_user.global_team_insights,
+                            global_insights,
+                        )
                         flag_modified(manager_user, "global_team_insights")
                         logger.info(
                             "[run=%s] Saved global manager team insights manager_user_id=%s",
                             run_id,
                             manager_user_id,
                         )
+
+                    if global_rows:
+                        rows_by_member: dict[int, list] = {}
+                        for row in global_rows:
+                            rows_by_member.setdefault(row[3].id, []).append(row)
+                        for member_rows in rows_by_member.values():
+                            try:
+                                await _generate_and_store_member_detail_insights_from_rows(
+                                    db,
+                                    manager_user,
+                                    member_rows,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "[run=%s] Manager member detail insight generation failed manager_user_id=%s member_user_id=%s",
+                                    run_id,
+                                    manager_user_id,
+                                    member_rows[0][3].id if member_rows else None,
+                                )
             except Exception:
                 logger.exception(
                     "[run=%s] Global manager team insight generation failed manager_user_id=%s",

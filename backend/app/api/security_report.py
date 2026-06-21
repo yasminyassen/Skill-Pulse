@@ -33,9 +33,11 @@ def get_security_report(
 ):
     has_access = (
         db.query(SkillScore)
+        .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
         .filter(
             SkillScore.analysis_run_id == analysis_id,
             SkillScore.user_id == current_user.id,
+            AnalysisRun.user_id == current_user.id,
         )
         .first()
     )

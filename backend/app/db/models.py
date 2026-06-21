@@ -133,6 +133,7 @@ class CodeMetrics(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     file_path = Column(String)
     cyclomatic_complexity = Column(Float, nullable=True)
     lines_of_code = Column(Integer, nullable=True)
@@ -141,12 +142,14 @@ class CodeMetrics(Base):
     raw_metrics = Column(JSON, nullable=True)
 
     analysis_run = relationship("AnalysisRun", back_populates="code_metrics")
+    user = relationship("User")
 
 class SecurityFinding(Base):
     __tablename__ = "security_findings"
 
     id = Column(Integer, primary_key=True, index=True)
     analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     tool = Column(String)
     rule = Column(String)
     cwe = Column(String)
@@ -157,6 +160,7 @@ class SecurityFinding(Base):
     owasp_category = Column(String)
 
     analysis_run = relationship("AnalysisRun", back_populates="security_findings")
+    user = relationship("User")
 
 class SkillScore(Base):
     __tablename__ = "skill_scores"

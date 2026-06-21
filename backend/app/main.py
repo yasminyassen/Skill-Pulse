@@ -23,6 +23,7 @@ from app.api import github_classroom
 from app.api import recruiter_bulk
 from app.api import manager_dashboard
 from app.api import manager_profile
+from app.api import manager_security
 
 from app.core.rate_limiter import limiter
 from slowapi.middleware import SlowAPIMiddleware
@@ -83,3 +84,4 @@ app.include_router(recruiter_router)
 app.include_router(requirements.router)
 app.include_router(manager_dashboard.router)
 app.include_router(manager_profile.router)
+app.include_router(manager_security.router)

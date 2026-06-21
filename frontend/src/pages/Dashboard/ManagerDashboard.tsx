@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Activity,
   AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
   BarChart3,
   Brain,
   CheckCircle2,
   Code2,
+  Eye,
   GitBranch,
+  Minus,
   Network,
   RefreshCcw,
   Star,
@@ -14,6 +19,7 @@ import {
   Trophy,
   Users,
   Wrench,
+  X,
 } from "lucide-react";
 import {
   Bar,
@@ -54,8 +60,13 @@ interface Kpis {
 }
 
 interface TrendPoint {
-  month: string;
+  period: string;
+  label: string;
   average_score: number;
+  code_quality: number;
+  problem_solving: number;
+  architecture: number;
+  maintainability: number;
 }
 
 interface SkillDistribution {
@@ -79,11 +90,25 @@ interface TeamMember {
   maintainability: number;
   repository_count: number;
   analysis_count: number;
+  overall_delta: number | null;
 }
 
 interface TeamInsights {
-  team_strengths: string[];
-  areas_needing_attention: string[];
+  actionable_recommendations?: ActionableRecommendations;
+}
+
+interface ActionableRecommendations {
+  mandatory: string[];
+  highly_required: string[];
+  nice_to_have: string[];
+  enhanced: string[];
+}
+
+interface MemberDetail {
+  member: TeamMember;
+  timeline: TrendPoint[];
+  key_strengths: string[];
+  areas_for_improvement: string[];
 }
 
 const accent = "#8b5cf6";
@@ -102,11 +127,77 @@ const emptySkills: SkillDistribution = {
   maintainability: 0,
 };
 
+const emptyActionableRecommendations: ActionableRecommendations = {
+  mandatory: [],
+  highly_required: [],
+  nice_to_have: [],
+  enhanced: [],
+};
+
+const emptyInsights: TeamInsights = {
+  actionable_recommendations: emptyActionableRecommendations,
+};
+
 const skillMeta = [
   { key: "code_quality", label: "Code Quality", icon: Code2, color: "#6366f1" },
   { key: "problem_solving", label: "Problem Solving", icon: Brain, color: "#06b6d4" },
   { key: "architecture", label: "Architecture", icon: Network, color: "#22c55e" },
   { key: "maintainability", label: "Maintainability", icon: Wrench, color: "#f59e0b" },
+] as const;
+
+const scoreLineMeta = [
+  { key: "average_score", label: "Overall", color: accent },
+  { key: "code_quality", label: "Code Quality", color: "#6366f1" },
+  { key: "problem_solving", label: "Problem Solving", color: "#06b6d4" },
+  { key: "architecture", label: "Architecture", color: "#22c55e" },
+  { key: "maintainability", label: "Maintainability", color: "#f59e0b" },
+] as const;
+
+const trendRangeOptions = [
+  { value: "30d", label: "30D" },
+  { value: "90d", label: "90D" },
+  { value: "6m", label: "6M" },
+  { value: "12m", label: "12M" },
+  { value: "all", label: "All" },
+] as const;
+
+const recommendationSections = [
+  {
+    key: "mandatory",
+    title: "Fix First",
+    emptyTitle: "No immediate actions",
+    emptyCopy: "Nothing critical is flagged for this view.",
+    icon: AlertTriangle,
+    color: "#ef4444",
+    bg: "rgba(239,68,68,0.13)",
+  },
+  {
+    key: "highly_required",
+    title: "Prioritize Next",
+    emptyTitle: "No high-priority actions",
+    emptyCopy: "Near-term improvement items will appear here.",
+    icon: TrendingUp,
+    color: "#f59e0b",
+    bg: "rgba(245,158,11,0.14)",
+  },
+  {
+    key: "nice_to_have",
+    title: "Plan When Possible",
+    emptyTitle: "No scheduled improvements",
+    emptyCopy: "Useful but non-urgent actions will appear here.",
+    icon: CheckCircle2,
+    color: "#06b6d4",
+    bg: "rgba(6,182,212,0.13)",
+  },
+  {
+    key: "enhanced",
+    title: "Strengthen Further",
+    emptyTitle: "No polish actions",
+    emptyCopy: "Enhancement ideas will appear as the team baseline grows.",
+    icon: Star,
+    color: "#22c55e",
+    bg: "rgba(34,197,94,0.14)",
+  },
 ] as const;
 
 const fmtScore = (value: number | null | undefined, digits = 0) => {
@@ -124,12 +215,6 @@ const initials = (name: string) =>
     .map(part => part[0])
     .join("")
     .toUpperCase() || "SP";
-
-const formatMonth = (month: string) => {
-  const date = new Date(`${month}-01T00:00:00`);
-  if (Number.isNaN(date.getTime())) return month;
-  return date.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
-};
 
 const scoreBadge = (score: number) => {
   if (score >= 90) return { label: "Excellent", color: "#16a34a", bg: "rgba(34,197,94,0.13)" };
@@ -193,7 +278,29 @@ function KpiCard({
   );
 }
 
-function MemberRow({ member }: { member: TeamMember }) {
+function ScoreDelta({ value }: { value: number | null }) {
+  if (value === null || value === undefined) return null;
+  const rounded = Number(value.toFixed(1));
+  const isUp = rounded > 0;
+  const isDown = rounded < 0;
+  const Icon = isUp ? ArrowUpRight : isDown ? ArrowDownRight : Minus;
+  return (
+    <span className={`mgr-delta ${isUp ? "mgr-delta-up" : isDown ? "mgr-delta-down" : "mgr-delta-flat"}`}>
+      <Icon size={13} strokeWidth={2.4} />
+      {isUp ? "+" : ""}{fmtScore(rounded, 1)}
+    </span>
+  );
+}
+
+function MemberRow({
+  member,
+  onViewDetails,
+  showDetails,
+}: {
+  member: TeamMember;
+  onViewDetails: (member: TeamMember) => void;
+  showDetails: boolean;
+}) {
   const badge = scoreBadge(member.average_overall_score);
   return (
     <article className="mgr-member">
@@ -207,7 +314,16 @@ function MemberRow({ member }: { member: TeamMember }) {
         </div>
         <div className="mgr-member-score">
           <span style={{ color: badge.color, background: badge.bg }}>{badge.label}</span>
-          <strong>{fmtScore(member.average_overall_score)}</strong>
+          <div className="mgr-score-stack">
+            <strong>{fmtScore(member.average_overall_score)}</strong>
+            <ScoreDelta value={member.overall_delta} />
+          </div>
+          {showDetails && (
+            <button className="mgr-detail-button" type="button" onClick={() => onViewDetails(member)}>
+              <Eye size={14} strokeWidth={2} />
+              View Details
+            </button>
+          )}
         </div>
       </div>
 
@@ -237,11 +353,15 @@ function MemberRow({ member }: { member: TeamMember }) {
 export default function ManagerDashboard() {
   const [repos, setRepos] = useState<DashboardRepo[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string>("all");
+  const [selectedTrendRange, setSelectedTrendRange] = useState<string>("6m");
   const [kpis, setKpis] = useState<Kpis>(emptyKpis);
   const [trends, setTrends] = useState<TrendPoint[]>([]);
   const [skills, setSkills] = useState<SkillDistribution>(emptySkills);
   const [members, setMembers] = useState<TeamMember[]>([]);
-  const [insights, setInsights] = useState<TeamInsights>({ team_strengths: [], areas_needing_attention: [] });
+  const [insights, setInsights] = useState<TeamInsights>(emptyInsights);
+  const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
+  const [memberDetail, setMemberDetail] = useState<MemberDetail | null>(null);
+  const [loadingMemberDetail, setLoadingMemberDetail] = useState(false);
   const [loadingRepos, setLoadingRepos] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -270,11 +390,12 @@ export default function ManagerDashboard() {
     setLoadingDashboard(true);
     setError(null);
     const params = selectedRepoId === "all" ? {} : { repo_id: Number(selectedRepoId) };
+    const trendParams = { ...params, range: selectedTrendRange };
 
     try {
       const [kpiRes, trendRes, skillRes, memberRes, insightRes] = await Promise.all([
         api.get<Kpis>("/manager/dashboard/kpis", { params }),
-        api.get<TrendPoint[]>("/manager/dashboard/trends", { params }),
+        api.get<TrendPoint[]>("/manager/dashboard/trends", { params: trendParams }),
         api.get<SkillDistribution>("/manager/dashboard/skills", { params }),
         api.get<TeamMember[]>("/manager/dashboard/members", { params }),
         api.get<TeamInsights>("/manager/dashboard/insights", { params }),
@@ -305,10 +426,34 @@ export default function ManagerDashboard() {
   useEffect(() => {
     fetchDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRepoId, selectedTrendRange]);
+
+  useEffect(() => {
+    if (selectedRepoId !== "all" && selectedMemberId) {
+      closeMemberDetails();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepoId]);
 
+  useEffect(() => {
+    if (!selectedMemberId) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMemberDetails();
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMemberId]);
+
   const trendData = useMemo(
-    () => trends.map(point => ({ ...point, label: formatMonth(point.month) })),
+    () => trends.map(point => ({ ...point, label: point.label || point.period })),
     [trends],
   );
 
@@ -322,9 +467,58 @@ export default function ManagerDashboard() {
     [skills],
   );
 
+  const recommendationGroups = useMemo(() => {
+    const source = insights.actionable_recommendations ?? emptyActionableRecommendations;
+
+    return recommendationSections
+      .map(section => ({
+        ...section,
+        items: source[section.key],
+      }))
+      .filter(group => group.items.length > 0);
+  }, [insights]);
+
+  const selectedMember = useMemo(
+    () => members.find(member => member.id === selectedMemberId) || memberDetail?.member || null,
+    [memberDetail, members, selectedMemberId],
+  );
+
+  const memberTimelineData = useMemo(
+    () => (memberDetail?.timeline || []).map(point => ({ ...point, label: point.label || point.period })),
+    [memberDetail],
+  );
+
   const refreshAll = () => {
     fetchRepos();
     fetchDashboard();
+  };
+
+  const openMemberDetails = async (member: TeamMember) => {
+    setSelectedMemberId(member.id);
+    setMemberDetail(null);
+    setLoadingMemberDetail(true);
+    const params = { range: selectedTrendRange };
+
+    try {
+      const response = await api.get<MemberDetail>(`/manager/dashboard/members/${member.id}/details`, { params });
+      setMemberDetail(response.data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        localStorage.clear();
+        window.location.href = "/login";
+        return;
+      }
+      setError("Unable to load developer details.");
+    } finally {
+      setLoadingMemberDetail(false);
+    }
+  };
+
+  const closeMemberDetails = () => {
+    setSelectedMemberId(null);
+    setMemberDetail(null);
+    setLoadingMemberDetail(false);
   };
 
   return (
@@ -415,6 +609,31 @@ export default function ManagerDashboard() {
           border-color: rgba(139, 92, 246, 0.45);
           color: ${accent};
         }
+        .mgr-segmented {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 4px;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--bg-input);
+        }
+        .mgr-segmented button {
+          min-width: 42px;
+          height: 30px;
+          border: 0;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--text-muted);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .mgr-segmented button.active {
+          background: rgba(139, 92, 246, 0.18);
+          color: var(--text-primary);
+        }
         .mgr-kpi-grid {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -498,6 +717,27 @@ export default function ManagerDashboard() {
         .mgr-chart {
           width: 100%;
           height: 280px;
+        }
+        .mgr-chart-legend {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-wrap: wrap;
+          gap: 10px 14px;
+          margin-top: 10px;
+          color: var(--text-muted);
+          font-size: 12px;
+        }
+        .mgr-chart-legend span {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+        }
+        .mgr-chart-legend i {
+          width: 9px;
+          height: 9px;
+          border-radius: 50%;
+          display: inline-block;
         }
         .mgr-split,
         .mgr-bottom-insights {
@@ -623,6 +863,50 @@ export default function ManagerDashboard() {
           min-width: 38px;
           text-align: right;
         }
+        .mgr-score-stack {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 4px;
+        }
+        .mgr-delta {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          font-size: 11px;
+          font-weight: 900;
+          line-height: 1;
+        }
+        .mgr-delta-up {
+          color: #22c55e;
+        }
+        .mgr-delta-down {
+          color: #f87171;
+        }
+        .mgr-delta-flat {
+          color: var(--text-muted);
+        }
+        .mgr-detail-button {
+          height: 32px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          border: 1px solid rgba(139, 92, 246, 0.28);
+          border-radius: 8px;
+          padding: 0 10px;
+          background: rgba(139, 92, 246, 0.1);
+          color: var(--text-secondary);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .mgr-detail-button:hover {
+          border-color: rgba(139, 92, 246, 0.55);
+          color: var(--text-primary);
+        }
         .mgr-member-skills {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -665,6 +949,257 @@ export default function ManagerDashboard() {
           color: var(--text-muted);
           font-size: 12px;
           margin-top: 14px;
+        }
+        .mgr-detail-panel {
+          border-color: rgba(139, 92, 246, 0.28);
+        }
+        .mgr-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 9999;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 32px;
+          background: rgba(2, 6, 23, 0.72);
+        }
+        .mgr-member-modal {
+          width: min(1120px, 100%);
+          max-height: min(88vh, 920px);
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          border-radius: 8px;
+          border: 1px solid var(--border);
+          background: var(--bg-base);
+          color: var(--text-primary);
+          box-shadow: 0 28px 80px rgba(2, 6, 23, 0.38);
+        }
+        .mgr-modal-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 28px 30px 24px;
+          border-bottom: 1px solid var(--border);
+        }
+        .mgr-modal-profile {
+          display: flex;
+          align-items: center;
+          gap: 18px;
+          min-width: 0;
+        }
+        .mgr-modal-avatar {
+          width: 80px;
+          height: 80px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          background: linear-gradient(135deg, #7c3aed, #9333ea);
+          color: white;
+          font-size: 24px;
+          font-weight: 900;
+          flex: 0 0 auto;
+        }
+        .mgr-modal-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .mgr-modal-profile h2 {
+          margin: 0 0 6px;
+          color: var(--text-primary);
+          font-size: 26px;
+          line-height: 1.1;
+          letter-spacing: 0;
+        }
+        .mgr-modal-profile p {
+          margin: 0 0 12px;
+          color: var(--text-secondary);
+          font-size: 16px;
+        }
+        .mgr-modal-meta {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 9px 12px;
+          color: var(--text-muted);
+          font-size: 13px;
+        }
+        .mgr-modal-meta span:first-child {
+          border-radius: 8px;
+          padding: 4px 10px;
+          font-weight: 800;
+        }
+        .mgr-modal-close {
+          width: 36px;
+          height: 36px;
+          border: 0;
+          border-radius: 8px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          color: var(--text-primary);
+          cursor: pointer;
+        }
+        .mgr-modal-close:hover {
+          background: var(--bg-card-hover);
+        }
+        .mgr-modal-body {
+          overflow: auto;
+          padding: 30px;
+          background: var(--bg-base);
+        }
+        .mgr-overall-card {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 160px;
+          gap: 24px;
+          align-items: center;
+          min-height: 172px;
+          margin-bottom: 30px;
+          padding: 28px 30px;
+          border: 1px solid rgba(139, 92, 246, 0.28);
+          border-radius: 8px;
+          background: linear-gradient(135deg, rgba(139, 92, 246, 0.13), rgba(6, 182, 212, 0.08));
+        }
+        .mgr-overall-card span {
+          color: var(--text-secondary);
+          font-size: 15px;
+        }
+        .mgr-overall-card strong {
+          display: block;
+          margin: 12px 0;
+          color: var(--text-primary);
+          font-size: 56px;
+          line-height: 0.95;
+          letter-spacing: 0;
+        }
+        .mgr-overall-mark {
+          width: 126px;
+          height: 126px;
+          border: 9px solid rgba(139, 92, 246, 0.24);
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #4f46e5;
+          background: var(--bg-card);
+          justify-self: end;
+        }
+        .mgr-modal-section-title {
+          margin: 0 0 16px;
+          color: var(--text-primary);
+          font-size: 21px;
+          letter-spacing: 0;
+        }
+        .mgr-skill-card-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 14px;
+          margin-bottom: 30px;
+        }
+        .mgr-skill-card {
+          min-height: 118px;
+          padding: 22px 20px;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--bg-input);
+        }
+        .mgr-skill-card > div {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 22px;
+        }
+        .mgr-skill-card span {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+          color: var(--text-primary);
+          font-size: 15px;
+          font-weight: 800;
+        }
+        .mgr-skill-card svg {
+          color: #4f46e5;
+        }
+        .mgr-skill-card strong {
+          color: var(--text-primary);
+          font-size: 24px;
+          line-height: 1;
+        }
+        .mgr-skill-card .mgr-progress {
+          background: var(--border);
+        }
+        .mgr-modal-chart-card {
+          padding: 22px 22px 24px;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--bg-input);
+        }
+        .mgr-member-modal .mgr-chart-legend {
+          color: var(--text-muted);
+        }
+        .mgr-modal-chart-card .mgr-empty {
+          border-color: var(--border-hover);
+          background: var(--bg-card);
+          color: var(--text-muted);
+        }
+        .mgr-modal-insights {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+          margin-top: 28px;
+        }
+        .mgr-modal-insight-card {
+          min-height: 180px;
+          padding: 24px 26px;
+          border-radius: 8px;
+        }
+        .mgr-modal-insight-card h3 {
+          margin: 0 0 18px;
+          font-size: 20px;
+          letter-spacing: 0;
+        }
+        .mgr-modal-insight-card ul {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          margin: 0;
+          padding-left: 18px;
+          color: var(--text-secondary);
+          font-size: 14px;
+          line-height: 1.45;
+        }
+        .mgr-modal-strength {
+          border: 1px solid rgba(34, 197, 94, 0.3);
+          background: rgba(34, 197, 94, 0.1);
+        }
+        .mgr-modal-strength h3 {
+          color: #22c55e;
+        }
+        .mgr-modal-improvement {
+          border: 1px solid rgba(245, 158, 11, 0.32);
+          background: rgba(245, 158, 11, 0.1);
+        }
+        .mgr-modal-improvement h3 {
+          color: #f59e0b;
+        }
+        .mgr-detail-insights {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+          margin-top: 18px;
+        }
+        .mgr-detail-insights h3 {
+          margin: 0 0 10px;
+          color: var(--text-primary);
+          font-size: 14px;
+          letter-spacing: 0;
         }
         .mgr-insight-list {
           display: flex;
@@ -754,8 +1289,22 @@ export default function ManagerDashboard() {
           }
           .mgr-kpi-grid,
           .mgr-member-skills,
-          .mgr-bottom-insights {
+          .mgr-bottom-insights,
+          .mgr-detail-insights,
+          .mgr-skill-card-grid,
+          .mgr-modal-insights {
             grid-template-columns: 1fr;
+          }
+          .mgr-panel-head {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+          .mgr-segmented {
+            width: 100%;
+            justify-content: space-between;
+          }
+          .mgr-segmented button {
+            flex: 1;
           }
           .mgr-member-main {
             grid-template-columns: 44px minmax(0, 1fr);
@@ -764,10 +1313,39 @@ export default function ManagerDashboard() {
             grid-column: 1 / -1;
             justify-self: stretch;
             justify-content: space-between;
+            flex-wrap: wrap;
           }
           .mgr-member-foot {
             align-items: flex-start;
             flex-direction: column;
+          }
+          .mgr-modal-backdrop {
+            align-items: stretch;
+            padding: 12px;
+          }
+          .mgr-member-modal {
+            max-height: 100%;
+          }
+          .mgr-modal-header,
+          .mgr-modal-body {
+            padding: 20px;
+          }
+          .mgr-modal-profile {
+            align-items: flex-start;
+          }
+          .mgr-modal-avatar {
+            width: 62px;
+            height: 62px;
+            font-size: 19px;
+          }
+          .mgr-overall-card {
+            grid-template-columns: 1fr;
+            padding: 22px;
+          }
+          .mgr-overall-mark {
+            justify-self: start;
+            width: 96px;
+            height: 96px;
           }
         }
       `}</style>
@@ -845,35 +1423,63 @@ export default function ManagerDashboard() {
                     </div>
                     <div className="mgr-panel-sub">{selectedRepo ? selectedRepo.full_name : "All repositories"}</div>
                   </div>
+                  <div className="mgr-segmented" aria-label="Trend range">
+                    {trendRangeOptions.map(option => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={selectedTrendRange === option.value ? "active" : ""}
+                        onClick={() => setSelectedTrendRange(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 {trendData.length ? (
-                  <div className="mgr-chart">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={trendData} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
-                        <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} />
-                        <YAxis domain={[0, 100]} tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} width={34} />
-                        <Tooltip
-                          cursor={{ stroke: "rgba(139,92,246,0.35)" }}
-                          contentStyle={{
-                            background: "var(--tooltip-bg)",
-                            border: "1px solid var(--tooltip-border)",
-                            borderRadius: 8,
-                            color: "var(--text-primary)",
-                          }}
-                          formatter={(value: unknown) => [fmtScore(Number(value), 1), "Team Average"]}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="average_score"
-                          stroke={accent}
-                          strokeWidth={3}
-                          dot={{ r: 4, strokeWidth: 2, fill: "var(--bg-base)", stroke: accent }}
-                          activeDot={{ r: 6, strokeWidth: 0, fill: "#06b6d4" }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                  <>
+                    <div className="mgr-chart">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={trendData} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
+                          <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
+                          <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} />
+                          <YAxis domain={[0, 100]} tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} width={34} />
+                          <Tooltip
+                            cursor={{ stroke: "rgba(139,92,246,0.35)" }}
+                            contentStyle={{
+                              background: "var(--tooltip-bg)",
+                              border: "1px solid var(--tooltip-border)",
+                              borderRadius: 8,
+                              color: "var(--text-primary)",
+                            }}
+                            formatter={(value: unknown, name: unknown) => {
+                              const meta = scoreLineMeta.find(item => item.key === name);
+                              return [fmtScore(Number(value), 1), meta?.label || String(name)];
+                            }}
+                          />
+                          {scoreLineMeta.map(line => (
+                            <Line
+                              key={line.key}
+                              type="monotone"
+                              dataKey={line.key}
+                              stroke={line.color}
+                              strokeWidth={line.key === "average_score" ? 3 : 2}
+                              dot={{ r: 3, strokeWidth: 2, fill: "var(--bg-base)", stroke: line.color }}
+                              activeDot={{ r: 5, strokeWidth: 0, fill: line.color }}
+                            />
+                          ))}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="mgr-chart-legend">
+                      {scoreLineMeta.map(line => (
+                        <span key={line.key}>
+                          <i style={{ background: line.color }} />
+                          {line.label}
+                        </span>
+                      ))}
+                    </div>
+                  </>
                 ) : (
                   <div className="mgr-empty">
                     <strong>No trend data yet</strong>
@@ -925,7 +1531,14 @@ export default function ManagerDashboard() {
 
               {members.length ? (
                 <div className="mgr-members">
-                  {members.map(member => <MemberRow key={member.id} member={member} />)}
+                  {members.map(member => (
+                    <MemberRow
+                      key={member.id}
+                      member={member}
+                      onViewDetails={openMemberDetails}
+                      showDetails={selectedRepoId === "all"}
+                    />
+                  ))}
                 </div>
               ) : (
                 <div className="mgr-empty">
@@ -934,62 +1547,201 @@ export default function ManagerDashboard() {
                 </div>
               )}
 
-              <div className="mgr-bottom-insights">
-                <section className="mgr-panel mgr-text-card">
-                  <div className="mgr-panel-head">
-                    <div className="mgr-panel-title">
-                      <AlertTriangle size={17} strokeWidth={2} />
-                      Areas Needing Attention
+              {recommendationGroups.length > 0 && (
+                <>
+                  <div className="mgr-section-head">
+                    <h2>Actionable Recommendations</h2>
+                    <span>Prioritized team next moves</span>
+                  </div>
+
+                  <div className="mgr-bottom-insights">
+                    {recommendationGroups.map(group => {
+                      const Icon = group.icon;
+                      return (
+                        <section key={group.key} className="mgr-panel mgr-text-card">
+                          <div className="mgr-panel-head">
+                            <div className="mgr-panel-title">
+                              <Icon size={17} strokeWidth={2} />
+                              {group.title}
+                            </div>
+                          </div>
+                          <ul className="mgr-text-list">
+                            {group.items.map((item, index) => (
+                              <li key={`${item}-${index}`} className="mgr-text-item">
+                                <span className="mgr-text-item-icon" style={{ color: group.color, background: group.bg }}>
+                                  <Icon size={16} strokeWidth={2} />
+                                </span>
+                                <span>{item}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {selectedMemberId && createPortal((
+          <div className="mgr-modal-backdrop" role="presentation" onMouseDown={closeMemberDetails}>
+            <section
+              className="mgr-member-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Developer performance details"
+              onMouseDown={event => event.stopPropagation()}
+            >
+              <div className="mgr-modal-header">
+                <div className="mgr-modal-profile">
+                  <div className="mgr-modal-avatar">
+                    {selectedMember?.avatar_url ? <img src={selectedMember.avatar_url} alt="" /> : initials(selectedMember?.full_name || "SP")}
+                  </div>
+                  <div>
+                    <h2>{selectedMember?.full_name || "Developer Details"}</h2>
+                    <p>{specializationLabel(selectedMember?.specialization || null)}</p>
+                    <div className="mgr-modal-meta">
+                      {selectedMember && (
+                        <>
+                          <span style={{ color: scoreBadge(selectedMember.average_overall_score).color, background: scoreBadge(selectedMember.average_overall_score).bg }}>
+                            {scoreBadge(selectedMember.average_overall_score).label}
+                          </span>
+                          <span>{selectedMember.repository_count} repositories</span>
+                          <span>{selectedMember.analysis_count} snapshots</span>
+                        </>
+                      )}
                     </div>
                   </div>
-                  {insights.areas_needing_attention.length ? (
-                    <ul className="mgr-text-list">
-                      {insights.areas_needing_attention.map((item, index) => (
-                        <li key={`${item}-${index}`} className="mgr-text-item">
-                          <span className="mgr-text-item-icon" style={{ color: "#f59e0b", background: "rgba(245,158,11,0.14)" }}>
-                            <AlertTriangle size={16} strokeWidth={2} />
-                          </span>
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="mgr-empty">
-                      <strong>No attention areas yet</strong>
-                      Insights appear after a manager team analysis completes.
+                </div>
+                <button className="mgr-modal-close" type="button" onClick={closeMemberDetails} title="Close details">
+                  <X size={20} strokeWidth={2} />
+                </button>
+              </div>
+
+              <div className="mgr-modal-body">
+                {selectedMember && (
+                  <section className="mgr-overall-card">
+                    <div>
+                      <span>Overall Performance Score</span>
+                      <strong>{fmtScore(selectedMember.average_overall_score)}</strong>
+                      <ScoreDelta value={selectedMember.overall_delta} />
+                    </div>
+                    <div className="mgr-overall-mark">
+                      <Trophy size={48} strokeWidth={1.8} />
+                    </div>
+                  </section>
+                )}
+
+                <section>
+                  <h3 className="mgr-modal-section-title">Skill Breakdown</h3>
+                  {selectedMember && (
+                    <div className="mgr-skill-card-grid">
+                      {skillMeta.map(skill => {
+                        const Icon = skill.icon;
+                        const value = selectedMember[skill.key];
+                        return (
+                          <article key={skill.key} className="mgr-skill-card">
+                            <div>
+                              <span>
+                                <Icon size={16} strokeWidth={2} />
+                                {skill.label}
+                              </span>
+                              <strong>{fmtScore(value)}</strong>
+                            </div>
+                            <ProgressBar value={value} color={skill.color} />
+                          </article>
+                        );
+                      })}
                     </div>
                   )}
                 </section>
 
-                <section className="mgr-panel mgr-text-card">
-                  <div className="mgr-panel-head">
-                    <div className="mgr-panel-title">
-                      <CheckCircle2 size={17} strokeWidth={2} />
-                      Team Strengths
-                    </div>
-                  </div>
-                  {insights.team_strengths.length ? (
-                    <ul className="mgr-text-list">
-                      {insights.team_strengths.map((item, index) => (
-                        <li key={`${item}-${index}`} className="mgr-text-item">
-                          <span className="mgr-text-item-icon" style={{ color: "#22c55e", background: "rgba(34,197,94,0.14)" }}>
-                            <CheckCircle2 size={16} strokeWidth={2} />
+                <section className="mgr-modal-chart-card">
+                  <h3 className="mgr-modal-section-title">Performance Timeline</h3>
+                  {loadingMemberDetail ? (
+                    <div className="mgr-skeleton" style={{ height: 280, borderRadius: 8 }} />
+                  ) : memberDetail && memberTimelineData.length ? (
+                    <>
+                      <div className="mgr-chart" style={{ height: 280 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={memberTimelineData} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
+                            <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
+                            <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} />
+                            <YAxis domain={[0, 100]} tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} width={34} />
+                            <Tooltip
+                              cursor={{ stroke: "rgba(99,102,241,0.35)" }}
+                              contentStyle={{
+                                background: "var(--tooltip-bg)",
+                                border: "1px solid var(--tooltip-border)",
+                                borderRadius: 8,
+                                color: "var(--text-primary)",
+                              }}
+                              formatter={(value: unknown, name: unknown) => {
+                                const meta = scoreLineMeta.find(item => item.key === name);
+                                return [fmtScore(Number(value), 1), meta?.label || String(name)];
+                              }}
+                            />
+                            {scoreLineMeta.map(line => (
+                              <Line
+                                key={line.key}
+                                type="monotone"
+                                dataKey={line.key}
+                                stroke={line.color}
+                                strokeWidth={line.key === "average_score" ? 3 : 2}
+                                dot={{ r: 3, strokeWidth: 2, fill: "var(--bg-card)", stroke: line.color }}
+                                activeDot={{ r: 5, strokeWidth: 0, fill: line.color }}
+                              />
+                            ))}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="mgr-chart-legend mgr-chart-legend-centered">
+                        {scoreLineMeta.map(line => (
+                          <span key={line.key}>
+                            <i style={{ background: line.color }} />
+                            {line.label}
                           </span>
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
+                        ))}
+                      </div>
+                    </>
                   ) : (
                     <div className="mgr-empty">
-                      <strong>No strengths yet</strong>
-                      Insights appear after a manager team analysis completes.
+                      <strong>No performance timeline yet</strong>
+                      More score snapshots are needed to draw this developer's trend.
                     </div>
                   )}
                 </section>
+
+                {memberDetail && (memberDetail.key_strengths.length > 0 || memberDetail.areas_for_improvement.length > 0) && (
+                  <section className="mgr-modal-insights">
+                    {memberDetail.key_strengths.length > 0 && (
+                      <div className="mgr-modal-insight-card mgr-modal-strength">
+                        <h3>Key Strengths</h3>
+                        <ul>
+                          {memberDetail.key_strengths.map((item, index) => (
+                            <li key={`${item}-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {memberDetail.areas_for_improvement.length > 0 && (
+                      <div className="mgr-modal-insight-card mgr-modal-improvement">
+                        <h3>Areas for Improvement</h3>
+                        <ul>
+                          {memberDetail.areas_for_improvement.map((item, index) => (
+                            <li key={`${item}-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
-            </>
-          )}
-        </div>
+            </section>
+          </div>
+        ), document.body)}
       </main>
     </DashboardLayout>
   );

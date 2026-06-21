@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ManagerDashboardRepo(BaseModel):
@@ -28,8 +28,13 @@ class ManagerKpis(BaseModel):
 
 
 class ManagerTrendPoint(BaseModel):
-    month: str
+    period: str
+    label: str
     average_score: float
+    code_quality: float
+    problem_solving: float
+    architecture: float
+    maintainability: float
 
 
 class ManagerSkillDistribution(BaseModel):
@@ -53,8 +58,24 @@ class ManagerTeamMember(BaseModel):
     maintainability: float
     repository_count: int
     analysis_count: int
+    overall_delta: float | None = None
+
+
+class ManagerActionableRecommendations(BaseModel):
+    mandatory: list[str] = Field(default_factory=list)
+    highly_required: list[str] = Field(default_factory=list)
+    nice_to_have: list[str] = Field(default_factory=list)
+    enhanced: list[str] = Field(default_factory=list)
 
 
 class ManagerTeamInsights(BaseModel):
-    team_strengths: list[str]
-    areas_needing_attention: list[str]
+    actionable_recommendations: ManagerActionableRecommendations = Field(
+        default_factory=ManagerActionableRecommendations
+    )
+
+
+class ManagerMemberDetail(BaseModel):
+    member: ManagerTeamMember
+    timeline: list[ManagerTrendPoint] = Field(default_factory=list)
+    key_strengths: list[str] = Field(default_factory=list)
+    areas_for_improvement: list[str] = Field(default_factory=list)

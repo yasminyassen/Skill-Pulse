@@ -181,56 +181,29 @@ JSON structure:
   }
 }"""
 
-
-# _MANAGER_PROMPT = """You are SkillPulse AI — generating a code health report for an Engineering Manager.
-
-# AUDIENCE: Engineering Manager or CTO. No code jargon. Focus on delivery risk and business impact.
-
-# TASK: Translate the technical metrics into clear business risks and team strengths.
-# Every point must be grounded in the actual data — no generic statements.
-
-# HOW TO FRAME THINGS:
-# - Missing tests = risk of bugs reaching production = higher support cost and slower releases
-# - High import coupling = future features take longer to build, changes break other parts
-# - Good code quality = lower maintenance cost, easier onboarding
-# - Good docstring coverage = faster knowledge transfer when team grows
-
-# RULES:
-# - CRITICAL: Rely STRICTLY on the numerical metrics provided in the payload. Do not invent, guess, or hallucinate numbers like file counts or scores.
-# - Do not mention or evaluate Security, Vulnerabilities, OWASP, severity, compliance, exposure, or customer trust risk.
-# - Focus only on Code Quality, Maintainability, Architecture, and Problem Solving.
-# - Do not force exactly 3 items. Generate only the truly relevant team_strengths and areas_needing_attention based on the actual data.
-# - If the codebase has very low scores, it is perfectly fine to return fewer strengths, and vice versa.
-# - areas_needing_attention: short strings — pick the highest impact non-security risks, back each with a provided metric
-# - team_strengths: short strings — cite actual provided metric values as evidence
-# - Use single quotes inside strings, never double quotes
-# - Return ONLY valid JSON
-
-# JSON structure:
-# {
-#   "areas_needing_attention": [
-#     "Specific risk name — business impact with metric evidence.",
-#     "Specific risk name — business impact with metric evidence."
-#   ],
-#   "team_strengths": [
-#     "Strength — backed by metric (e.g. zero style violations across X files)",
-#     "Strength — backed by metric"
-#   ]
-# }"""
 _MANAGER_PROMPT = """You are SkillPulse AI, acting as a Senior VP of Engineering and expert technical leader assessing an engineering team's code health.
 
 AUDIENCE:
 Engineering Managers, CTOs, and technical leaders who need strategic, plain-English insight into team velocity, maintainability, delivery risk, technical debt, and future execution cost.
 
 TASK:
-Translate the provided team metrics into thoughtful executive-level observations. Each insight must explain what the data means for the business and engineering organization, not merely restate a score.
+Turn the provided team metrics into prioritized management recommendations for the Team Dashboard. The output should help a manager decide where to allocate capacity, which risks need ownership, what quality gates to set, and what outcomes to monitor.
 
 TONE AND STYLE:
 - Professional, empathetic, strategic, and highly actionable.
 - Write in natural, flowing sentences. Avoid robotic fragments like 'Metric: Score - Rating - Impact' or 'Poor architecture: 37.66 - poor - longer development cycles'.
-- Sound like an experienced engineering leader giving a concise assessment in a leadership review.
+- Sound like an experienced engineering leader giving concise next steps in a leadership review.
 - Be direct about risks, but frame them constructively and with practical implications.
+- Each recommendation should start with a manager-level action verb or action phrase.
+- Do not prefix recommendations with labels like 'must', 'have to', 'should', 'better', 'mandatory', or 'nice to have'. The JSON bucket already carries the priority.
 - Each string should be 1-2 polished sentences, not a label or bullet fragment.
+
+MANAGER-ACTION RULES:
+- Write for the person managing the team, not for the developer editing the code.
+- Tell the manager what decision, prioritization, ownership, review cadence, or quality gate to put in place.
+- Prefer manager verbs such as prioritize, assign an owner, allocate sprint capacity, set a release gate, schedule a refactor window, track, review, protect, standardize, and use.
+- Avoid developer-task wording such as implement, refactor the code, add docstrings, decouple modules, write tests, clean up variables, or introduce a framework.
+- Every recommendation should connect the metric to a management impact: delivery confidence, roadmap risk, coordination cost, onboarding, release readiness, or future capacity.
 
 STRICT DATA RULES:
 - Use ONLY the exact numbers and metrics provided in the payload. Do not invent, estimate, extrapolate, or perform unsupported math.
@@ -243,6 +216,12 @@ FOCUS AREAS:
 - Do NOT mention or evaluate Security, Vulnerabilities, OWASP, compliance, exposure, or customer trust risk.
 - Prefer meaning over raw numbers: explain how the metrics affect team velocity, release confidence, onboarding, regression risk, technical debt, maintenance cost, and ability to evolve the product.
 
+PRIORITY MODEL:
+- mandatory: immediate management actions that protect release confidence, delivery continuity, or future change safety. Use this for the most urgent measurable risks.
+- highly_required: high-impact management actions that should be planned into the next sprint or near-term refactor window.
+- nice_to_have: useful management follow-ups that are worth scheduling when delivery pressure allows, especially if they compound an existing strength.
+- enhanced: polish or leverage actions that help a manager make a healthy area stronger, more repeatable, or easier to scale.
+
 HOW TO INTERPRET COMMON SIGNALS:
 - Strong problem-solving scores indicate the team can handle complex feature logic and ambiguous implementation work efficiently.
 - Low or zero test files reduce release confidence and increase the chance that regressions reach users.
@@ -253,20 +232,78 @@ HOW TO INTERPRET COMMON SIGNALS:
 
 OUTPUT REQUIREMENTS:
 - Return ONLY valid JSON. No markdown, no prose outside the JSON object.
-- The JSON object must contain exactly these keys: 'team_strengths' and 'areas_needing_attention'.
-- Each key must contain a list of strings.
+- The JSON object must contain exactly one key: 'actionable_recommendations'.
+- 'actionable_recommendations' must contain exactly these keys: 'mandatory', 'highly_required', 'nice_to_have', and 'enhanced'.
+- Every recommendation list must contain strings. Empty lists are allowed when the metrics do not justify that priority because empty buckets are hidden in the UI.
 - Generate only genuinely relevant items. Do not force exactly 3 items; fewer is better than filler.
-- Each string must be a rich 1-2 sentence professional insight grounded in the actual metrics.
+- Each string must be a rich 1-3 sentence professional insight grounded in the actual metrics.
 - Do not include generic advice like 'improve testing' unless it is tied to a concrete provided metric and a clear business impact.
+- Do not copy wording, numbers, or examples from this prompt. Use only values from the repository data section.
 - Use double quotes for valid JSON keys and strings.
 
 JSON STRUCTURE:
 {
-  "team_strengths": [
-    "The team's strong problem-solving score of 88 suggests they are well-equipped to handle complex feature logic without excessive delivery drag. That strength can be used to tackle higher-risk roadmap items, provided the surrounding codebase remains maintainable."
+  "actionable_recommendations": {
+    "mandatory": [
+      "A manager-level immediate action grounded in one or more provided risk metrics."
+    ],
+    "highly_required": [
+      "A manager-level near-term high-impact action grounded in one or more provided metrics."
+    ],
+    "nice_to_have": [
+      "A useful management follow-up grounded in one or more provided metrics."
+    ],
+    "enhanced": [
+      "A manager-level polish or leverage action grounded in one or more provided strength metrics."
+    ]
+  }
+}"""
+
+
+_MANAGER_MEMBER_PROMPT = """You are SkillPulse AI, advising an Engineering Manager about one developer on their team.
+
+AUDIENCE:
+Engineering Manager, team lead, or CTO. The recommendations must help them coach, staff, pair, review, and support this developer.
+
+TASK:
+Generate concise manager-facing notes for this developer's detail panel. Explain what the manager should do with this person next, based only on the provided scores, timeline, and metrics.
+
+MANAGER-ACTION RULES:
+- Write to the manager, not to the developer.
+- Prefer manager actions like assign, pair, use as reviewer, schedule coaching, protect focus time, set checkpoints, monitor, delegate, or create a growth plan.
+- Avoid developer-facing instructions like 'write tests', 'refactor code', 'add docstrings', 'fix architecture', or 'clean up code'.
+- Each item must be useful as a management decision or coaching action.
+- Keep each item under 28 words.
+- For low Problem Solving, recommend pair-programming, senior mentorship, scenario reviews, or complex-task coaching.
+- For low Architecture, recommend design review ownership, architecture pairing, or scoped design checkpoints.
+- For low Maintainability, recommend handoff review, documentation ownership, or refactor planning time.
+- For low Code Quality, recommend review standards, checklist use, or targeted code review support.
+
+DATA RULES:
+- Use only the exact values provided in the payload.
+- Do not invent trends, dates, scores, or causes.
+- Discuss only Code Quality, Maintainability, Architecture, and Problem Solving.
+- Do not mention Security, Vulnerabilities, OWASP, compliance, or customer trust risk.
+- If there is no evidence for a key strength or improvement area, return an empty list for that key.
+- If valid skill scores exist, do not return both lists empty.
+- Use the provided skill_summary strongest and weakest fields to choose the most relevant manager action.
+
+OUTPUT REQUIREMENTS:
+- Return ONLY valid JSON.
+- The JSON object must contain exactly these keys: 'key_strengths' and 'areas_for_improvement'.
+- 'key_strengths' should describe how the manager can leverage this developer's strongest measurable capabilities.
+- 'areas_for_improvement' should describe concrete manager actions to coach or support weaker areas.
+- Return 1-2 key_strengths when there is a clear strongest score at or above 70.
+- Return 1-2 areas_for_improvement when the weakest score is below 75 or materially lower than the strongest score.
+- Do not force extra items; fewer is better than filler.
+
+JSON STRUCTURE:
+{
+  "key_strengths": [
+    "Use this developer as a reviewer for code-quality sensitive work because their code quality score is strong."
   ],
-  "areas_needing_attention": [
-    "With 0 test files reported, release confidence is structurally weak even if individual implementation scores look healthy. This increases the likelihood of regression bugs and makes every future change more expensive to validate manually."
+  "areas_for_improvement": [
+    "Assign pair-programming sessions with a senior developer on complex algorithmic tasks because problem solving is the lowest score."
   ]
 }"""
 
@@ -348,31 +385,78 @@ SECURITY FINDINGS GROUPED BY SEVERITY AND FILE:
 def _manager_content(analysis: dict, security_report: dict, rag_context: str = "") -> str:
     scores = analysis.get("scores", {})
     m      = analysis.get("aggregate_metrics", {})
-    dashboard_prompt = analysis.get("manager_dashboard_prompt")
 
-    base = f"""SCORES (out of 100):
-- Code Quality:    {scores.get('code_quality')} — {_score_label(scores.get('code_quality', 0))}
-- Maintainability: {scores.get('maintainability')} — {_score_label(scores.get('maintainability', 0))}
-- Architecture:    {scores.get('architecture')} — {_score_label(scores.get('architecture', 0))}
-- Problem Solving: {scores.get('problem_solving')} — {_score_label(scores.get('problem_solving', 0))}
-- Overall:         {scores.get('overall')} — {_score_label(scores.get('overall', 0))}
+    base = f"""EXACT SCORES (out of 100, use these exact values only):
+- Code Quality: {scores.get('code_quality')}
+- Maintainability: {scores.get('maintainability')}
+- Architecture: {scores.get('architecture')}
+- Problem Solving: {scores.get('problem_solving')}
+- Overall: {scores.get('overall')}
 
-TEAM METRICS:
-- Total files analyzed: {m.get('total_files_analyzed')} | Test files: {_test_label(m.get('test_files', 0))}
+EXACT TEAM METRICS (use these exact values only):
+- Team size: {m.get('team_size')}
+- Repository count: {m.get('repository_count')}
+- Total files analyzed: {m.get('total_files_analyzed')}
+- Test files: {m.get('test_files', 0)}
 - Avg test function ratio: {m.get('avg_test_function_ratio', 0)}
 - Avg complexity: {m.get('avg_cyclomatic_complexity')} | Long functions: {m.get('long_functions', 0)}
 - Avg function size: {m.get('avg_function_size', 0)}
 - Avg nesting depth: {m.get('avg_nesting_depth', 0)}
 - Avg maintainability index: {m.get('avg_maintainability_index', 0)}
-- Docstring coverage: {m.get('avg_docstring_coverage', 0)*100:.0f}%
+- Docstring coverage value: {m.get('avg_docstring_coverage', 0)}
 - Import coupling: {m.get('import_coupling_total')}
 - Style violations: {m.get('style_violations', 0)}
-- Code duplication: {m.get('avg_duplication_score', 0)*100:.0f}%
+- Code duplication value: {m.get('avg_duplication_score', 0)}
 - Unused variables: {m.get('unused_variables', 0)}
 - Total lines of code: {m.get('total_loc', 0)}"""
 
-    if dashboard_prompt:
-        base += f"\n\nMANAGER DASHBOARD OUTPUT INSTRUCTION:\n{dashboard_prompt}"
+    if rag_context:
+        base += f"\n\nCODING STANDARDS CONTEXT:\n{rag_context}"
+
+    return base
+
+
+def _manager_member_content(analysis: dict, security_report: dict, rag_context: str = "") -> str:
+    developer = analysis.get("developer", {})
+    scores = analysis.get("scores", {})
+    m = analysis.get("aggregate_metrics", {})
+    skill_summary = analysis.get("skill_summary", {})
+    timeline = analysis.get("timeline", [])
+
+    base = f"""DEVELOPER PROFILE:
+- Name: {developer.get('name')}
+- Specialization: {developer.get('specialization')}
+- Analysis count: {developer.get('analysis_count')}
+- Repository count: {developer.get('repository_count')}
+- Overall delta: {developer.get('overall_delta')}
+
+EXACT SCORES (out of 100, use these exact values only):
+- Code Quality: {scores.get('code_quality')}
+- Maintainability: {scores.get('maintainability')}
+- Architecture: {scores.get('architecture')}
+- Problem Solving: {scores.get('problem_solving')}
+- Overall: {scores.get('overall')}
+
+SKILL SUMMARY:
+{json.dumps(skill_summary, ensure_ascii=False)}
+
+EXACT CONTRIBUTION METRICS (use these exact values only):
+- Total files analyzed: {m.get('total_files_analyzed')}
+- Test files: {m.get('test_files', 0)}
+- Avg test function ratio: {m.get('avg_test_function_ratio', 0)}
+- Avg complexity: {m.get('avg_cyclomatic_complexity')} | Long functions: {m.get('long_functions', 0)}
+- Avg function size: {m.get('avg_function_size', 0)}
+- Avg nesting depth: {m.get('avg_nesting_depth', 0)}
+- Avg maintainability index: {m.get('avg_maintainability_index', 0)}
+- Docstring coverage value: {m.get('avg_docstring_coverage', 0)}
+- Import coupling: {m.get('import_coupling_total')}
+- Style violations: {m.get('style_violations', 0)}
+- Code duplication value: {m.get('avg_duplication_score', 0)}
+- Unused variables: {m.get('unused_variables', 0)}
+- Total lines of code: {m.get('total_loc', 0)}
+
+RECENT PERFORMANCE TIMELINE POINTS:
+{json.dumps(timeline, ensure_ascii=False)}"""
 
     if rag_context:
         base += f"\n\nCODING STANDARDS CONTEXT:\n{rag_context}"
@@ -407,6 +491,7 @@ PROFILE FACTS:
 _ROLE_MAP = {
     "developer": (_DEVELOPER_PROMPT, _developer_content),
     "manager":   (_MANAGER_PROMPT,   _manager_content),
+    "manager_member": (_MANAGER_MEMBER_PROMPT, _manager_member_content),
     "recruiter": (_RECRUITER_PROMPT, _recruiter_content),
 }
 

@@ -16,6 +16,7 @@ import DeveloperLearning from './pages/Dashboard/DeveloperLearning';
 import DeveloperSecurity from './pages/Dashboard/DeveloperSecurity';
 import DeveloperSkills from './pages/Dashboard/DeveloperSkills';
 import ManagerDashboard from './pages/Dashboard/ManagerDashboard';
+import ManagerSecurityDashboard from './pages/Dashboard/ManagerSecurityDashboard';
 import ManagerAccountSettings from './pages/Dashboard/ManagerAccountSettings';
 import ManagerProfile from './pages/Dashboard/ManagerProfile';
 import RecruiterDashboard from './pages/Dashboard/RecruiterDashboard';
@@ -66,7 +67,7 @@ function App() {
         {/* ── Manager routes ── */}
         <Route path="/dashboard/manager" element={<RepositoryAnalysis />} />
         <Route path="/dashboard/manager/analysis" element={<RepositoryAnalysis />} />
-        {/* <Route path="/dashboard/manager/security" element={<ManagerDashboard />} /> */}
+        <Route path="/dashboard/manager/security" element={<ManagerSecurityDashboard />} />
         <Route path="/dashboard/manager/requirements" element={<ManagerRequirements/>} />
         <Route path="/dashboard/manager/profile" element={<ManagerProfile />} />
         <Route path="/dashboard/manager/account-settings" element={<ManagerAccountSettings />} />

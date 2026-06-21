@@ -632,7 +632,10 @@ async def get_analysis_history(
     linked_runs = (
         db.query(AnalysisRun)
         .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
-        .filter(SkillScore.user_id == current_user.id)
+        .filter(
+            SkillScore.user_id == current_user.id,
+            AnalysisRun.user_id == current_user.id,
+        )
         .all()
     )
     own_runs = (
@@ -841,7 +844,7 @@ async def get_detailed_metrics_breakdown(
         .first()
     )
 
-    if not run or (run.status == "completed" and not score_belongs_to_user(db, run.id, current_user.id)) or (run.status != "completed" and run.user_id != current_user.id):
+    if not run or run.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Analysis run not found")
 
     if run.status != "completed":
@@ -1076,7 +1079,7 @@ async def get_learning_recommendations(
         .first()
     )
 
-    if not run or (run.status == "completed" and not score_belongs_to_user(db, run.id, current_user.id)) or (run.status != "completed" and run.user_id != current_user.id):
+    if not run or run.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Analysis run not found")
 
     if run.status != "completed":
@@ -1204,6 +1207,7 @@ async def get_profile_dashboard(
         .join(Repository,  AnalysisRun.repository_id  == Repository.id)
         .filter(
             SkillScore.user_id == current_user.id,
+            AnalysisRun.user_id == current_user.id,
             AnalysisRun.status == "completed",
         )
         .order_by(AnalysisRun.completed_at.asc())   # asc for timeline
@@ -1398,7 +1402,7 @@ async def get_analysis_result(
     is_owner = run.user_id == current_user.id
     has_score = score_belongs_to_user(db, run.id, current_user.id)
 
-    if not (is_owner or has_score):
+    if not is_owner:
         return {"analysis_id": analysis_id, "status": "pending"}
 
     if run.status != "completed":
@@ -1481,7 +1485,10 @@ async def get_skills_summary(
     all_runs_count = (
         db.query(SkillScore)
         .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
-        .filter(SkillScore.user_id == current_user.id)
+        .filter(
+            SkillScore.user_id == current_user.id,
+            AnalysisRun.user_id == current_user.id,
+        )
         .count()
     )
     logging.info(
@@ -1496,6 +1503,7 @@ async def get_skills_summary(
         .join(Repository,  AnalysisRun.repository_id == Repository.id)
         .filter(
             SkillScore.user_id    == current_user.id,
+            AnalysisRun.user_id   == current_user.id,
             AnalysisRun.status    == "completed",
         )
         .order_by(AnalysisRun.triggered_at.desc())
