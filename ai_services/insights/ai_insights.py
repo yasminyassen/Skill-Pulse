@@ -6,6 +6,7 @@
 import os
 import json
 import logging
+import inspect
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,19 +36,24 @@ def _get_client():
 
 async def _call_llm(system_prompt: str, user_content: str) -> dict:
     client, model = _get_client()
-    full_prompt = f"{system_prompt}\n\n=== REPOSITORY DATA TO ANALYZE ===\n{user_content}"
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": full_prompt}],
-        temperature=0.4,
-        max_tokens=2000,
-    )
-    raw = response.choices[0].message.content
     try:
-        return json.loads(repair_json(raw))
-    except Exception as e:
-        logger.error(f"Parse failed: {e}\nRaw: {raw[:300]}")
-        raise ValueError(f"Unparseable response: {e}")
+        full_prompt = f"{system_prompt}\n\n=== REPOSITORY DATA TO ANALYZE ===\n{user_content}"
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": full_prompt}],
+            temperature=0.4,
+            max_tokens=2000,
+        )
+        raw = response.choices[0].message.content
+        try:
+            return json.loads(repair_json(raw))
+        except Exception as e:
+            logger.error(f"Parse failed: {e}\nRaw: {raw[:300]}")
+            raise ValueError(f"Unparseable response: {e}")
+    finally:
+        close_result = client.close()
+        if inspect.isawaitable(close_result):
+            await close_result
 
 
 # ===================================================

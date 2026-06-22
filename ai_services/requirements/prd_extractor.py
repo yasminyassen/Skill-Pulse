@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import inspect
 from pathlib import Path
 import pandas as pd
 import pdfplumber
@@ -171,3 +172,7 @@ async def parse_prd_to_stories(file_path: str) -> list[dict]:
         
     except Exception as e:
         raise
+    finally:
+        close_result = client.close()
+        if inspect.isawaitable(close_result):
+            await close_result

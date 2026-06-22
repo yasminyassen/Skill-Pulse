@@ -169,6 +169,17 @@ export default function RepositoryAnalysis() {
     } finally { if (showLoading) setHistoryLoading(false); }
   };
 
+  const updateHistoryRunStatus = (analysisId: number, data: any) => {
+    setAnalyses(prev => prev.map(item => {
+      if (item.analysis_id !== analysisId) return item;
+      return {
+        ...item,
+        status: data.status ?? item.status,
+        score: data.score ?? data.overall_score ?? item.score,
+      };
+    }));
+  };
+
   const fetchReviewContributors = async (repoId: number) => {
     try {
       await api.post(`/requirements/repositories/${repoId}/sync-contributors`);
@@ -368,7 +379,7 @@ export default function RepositoryAnalysis() {
     const iv = setInterval(async () => {
       try {
         const res = await api.get(`/analysis/${runId}`);
-        fetchHistory(false);
+        updateHistoryRunStatus(runId, res.data);
         if (res.data.status === "completed") {
           clearInterval(iv); setLoading(false); setRunId(null);
           if (analysisMode === "requirements" && requirementsRepoId) {
@@ -401,17 +412,6 @@ export default function RepositoryAnalysis() {
     return () => clearInterval(iv);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
-
-  useEffect(() => {
-    if (runId) return;
-    if (!analyses.some(a => a.status === "running" || a.status === "pending")) return;
-
-    const iv = setInterval(() => {
-      fetchHistory(false);
-    }, 5000);
-    return () => clearInterval(iv);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analyses, runId]);
 
   const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handlePrdUpload(f); };
 
