@@ -26,6 +26,9 @@ from app.db.models import (
     RequirementDocument,
     SecurityFinding,
     SkillScore,
+    SonarAnalysisSummary,
+    SonarFileMeasure,
+    SonarIssue,
     TechnicalTask,
     User,
     UserStory,
@@ -45,32 +48,9 @@ from app.schemas.profile_schemas import (
     SetPasswordRequest,
 )
 from app.services.email_service import EmailDeliveryError, send_verification_email
+from app.services.sonarqube_score_service import build_skill_score_fields, build_sonar_repo_summary
 
 router = APIRouter(prefix="/recruiter", tags=["recruiter"])
-
-
-def compute_weighted_score(score: SkillScore, recruiter: User) -> float:
-    w_code = (recruiter.weight_code_quality if recruiter.weight_code_quality is not None else 20) / 100.0
-    w_architecture = (getattr(recruiter, "weight_architecture", None) if getattr(recruiter, "weight_architecture", None) is not None else 20) / 100.0
-    w_maintainability = (getattr(recruiter, "weight_maintainability", None) if getattr(recruiter, "weight_maintainability", None) is not None else 20) / 100.0
-    w_sec = (recruiter.weight_security if recruiter.weight_security is not None else 20) / 100.0
-    problem_weight = getattr(recruiter, "weight_problem_solving", None)
-    if problem_weight is None:
-        problem_weight = getattr(recruiter, "weight_git_activity", None)
-    w_problem = (problem_weight if problem_weight is not None else 20) / 100.0
-
-    total_weight = w_code + w_architecture + w_maintainability + w_sec + w_problem
-    if total_weight == 0:
-        return float(score.overall_score or 0.0)
-
-    weighted = (
-        (score.code_quality_score       or 0.0) * w_code +
-        (score.architecture_score       or 0.0) * w_architecture +
-        (score.maintainability_score    or 0.0) * w_maintainability +
-        (score.security_awareness_score or 0.0) * w_sec +
-        (score.problem_solving_score    or 0.0) * w_problem
-    )
-    return round(weighted / total_weight, 1)
 
 
 def _require_recruiter(current_user: User) -> User:
@@ -279,6 +259,9 @@ def _delete_recruiter_account(db: Session, current_user: User) -> MessageRespons
         db.query(RecruiterCandidate).filter(RecruiterCandidate.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(SonarIssue).filter(SonarIssue.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(SonarFileMeasure).filter(SonarFileMeasure.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(SonarAnalysisSummary).filter(SonarAnalysisSummary.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(SkillScore).filter(SkillScore.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(AnalysisRun).filter(AnalysisRun.id.in_(run_ids)).delete(synchronize_session=False)
 
@@ -411,6 +394,10 @@ async def delete_candidate(
         RecruiterCandidate.analysis_run_id == run_id
     ).delete(synchronize_session="fetch")
 
+    db.query(SonarIssue).filter(SonarIssue.analysis_run_id == run_id).delete(synchronize_session=False)
+    db.query(SonarFileMeasure).filter(SonarFileMeasure.analysis_run_id == run_id).delete(synchronize_session=False)
+    db.query(SonarAnalysisSummary).filter(SonarAnalysisSummary.analysis_run_id == run_id).delete(synchronize_session=False)
+
     db.delete(run)
     db.commit()
 
@@ -465,36 +452,47 @@ async def get_recruiter_profile_dashboard(
         .subquery()
     )
 
-    all_scores = (
-        db.query(SkillScore)
+    latest_candidate_runs = (
+        db.query(AnalysisRun)
         .filter(
-            SkillScore.analysis_run_id.in_(latest_run_per_candidate),
-            SkillScore.user_id == current_user.id,
+            AnalysisRun.id.in_(latest_run_per_candidate),
+            AnalysisRun.user_id == current_user.id,
+            AnalysisRun.status == "completed",
         )
         .all()
     )
 
     priority_threshold = current_user.high_priority_threshold if current_user.high_priority_threshold is not None else 75
+    candidate_score_rows = {
+        score.analysis_run_id: score
+        for score in db.query(SkillScore)
+        .filter(SkillScore.analysis_run_id.in_([run.id for run in latest_candidate_runs]))
+        .all()
+    }
+    sonar_scores = [build_sonar_repo_summary(run)["sonar_health_score"] for run in latest_candidate_runs]
+    skill_scores = [
+        build_skill_score_fields(
+            candidate_score_rows.get(run.id),
+            sonar_health_score=build_sonar_repo_summary(run)["sonar_health_score"],
+            security_score=getattr(candidate_score_rows.get(run.id), "security_awareness_score", None),
+        )["skill_score"]
+        for run in latest_candidate_runs
+    ]
 
     high_priority_count = sum(
-        1 for s in all_scores
-        if compute_weighted_score(s, current_user) >= priority_threshold
+        1 for skill_score in skill_scores
+        if skill_score is not None and skill_score >= priority_threshold
     )
 
     shortlisted_count = sum(
-        1 for s in all_scores
-        if compute_weighted_score(s, current_user) >= 65
+        1 for skill_score in skill_scores
+        if skill_score is not None and skill_score >= 65
     )
 
     recent_runs = (
-        db.query(AnalysisRun, Repository, RecruiterCandidate, SkillScore)
+        db.query(AnalysisRun, Repository, RecruiterCandidate)
         .join(Repository, AnalysisRun.repository_id == Repository.id)
         .join(RecruiterCandidate, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
-        .outerjoin(
-            SkillScore,
-            (SkillScore.analysis_run_id == AnalysisRun.id) &
-            (SkillScore.user_id == current_user.id)
-        )
         .filter(
             AnalysisRun.user_id == current_user.id,
             AnalysisRun.status == "completed",
@@ -506,18 +504,28 @@ async def get_recruiter_profile_dashboard(
     )
 
     recent_activity = []
-    for run, repo, candidate, score in recent_runs:
-        weighted_overall = compute_weighted_score(score, current_user) if score else None
+    for run, repo, candidate in recent_runs:
+        sonar_summary = build_sonar_repo_summary(run)
+        sonar_health_score = sonar_summary["sonar_health_score"]
+        score_row = candidate_score_rows.get(run.id)
+        skill_fields = build_skill_score_fields(
+            score_row,
+            sonar_health_score=sonar_health_score,
+            security_score=getattr(score_row, "security_awareness_score", None),
+        )
         recent_activity.append({
             "type":           "candidate_evaluated",
             "title":          "Candidate evaluated",
             "description":    (
-                f"{candidate.candidate_name} - Overall score: {weighted_overall}"
-                if weighted_overall is not None else candidate.candidate_name
+                f"{candidate.candidate_name} - Skill Score: {skill_fields['skill_score']}"
+                if skill_fields["skill_score"] is not None else f"{candidate.candidate_name} - score unavailable"
             ),
             "candidate_name": candidate.candidate_name,
             "repo_name":      repo.name,
-            "score":          weighted_overall,
+            **skill_fields,
+            "sonar_health_score": sonar_health_score,
+            "sonar_state": sonar_summary["sonar_state"],
+            "quality_gate": sonar_summary["quality_gate"],
             "run_id":         run.id,
             "completed_at":   run.completed_at.isoformat() if run.completed_at else None,
         })

@@ -1,5 +1,5 @@
 #config
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     DATABASE_URL: str
@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     # Encryption for GitHub tokens
     ENCRYPTION_KEY: str = "V4b5gxkYREWRMc3NDzwbPzypjCtasGVSKzdNiSn8xSQ="
     
+    # SonarQube Local
+    sonar_host_url: str = "http://localhost:9000"
+    sonar_token: str = ""
+    sonar_scanner_path: str = ""
+    sonar_scanner_timeout: int = 600
+    sonar_ce_timeout: int = 180
+
     # Tool Paths
     GITLEAKS_PATH: str = "gitleaks"
     SEMGREP_PATH: str = "semgrep"
@@ -39,6 +46,6 @@ class Settings(BaseSettings):
     llm_context_limit: int = 32000
     analysis_version: str = "v1"
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
 settings = Settings()

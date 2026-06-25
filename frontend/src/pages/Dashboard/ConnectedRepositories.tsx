@@ -5,7 +5,7 @@ import DashboardLayout from "../DashboardLayout";
 
 interface AnalyzedRepo {
   analysis_id: number; repo_id: number; repo_name: string; branch: string;
-  status: string; triggered_at: string; completed_at: string | null; score: number | null;
+  status: string; triggered_at: string; completed_at: string | null; sonar_health_score: number | null; sonar_state: string;
 }
 
 const scoreColor = (s: number | null) => { if (s === null) return "#6b7280"; if (s >= 80) return "#34d399"; if (s >= 60) return "#fbbf24"; return "#f87171"; };
@@ -129,7 +129,7 @@ export default function ConnectedRepositories() {
           )}
 
           {!loading && completedRepos.map((repo) => {
-            const sc = repo.score; const sColor = scoreColor(sc); const isDisconnecting = disconnecting === repo.analysis_id;
+            const sc = repo.sonar_health_score; const sColor = scoreColor(sc); const isDisconnecting = disconnecting === repo.analysis_id;
             return (
               <div key={repo.analysis_id} className="repo-row" style={{ display: "flex", alignItems: "center", gap: "14px", padding: "14px 8px", borderBottom: "1px solid var(--border)" }}>
                 <div style={{ width: 44, height: 44, borderRadius: "12px", flexShrink: 0, background: "var(--bg-input)", display: "flex", alignItems: "center", justifyContent: "center" }}>

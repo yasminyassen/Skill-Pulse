@@ -60,6 +60,7 @@ class User(Base):
    
     
     analysis_runs = relationship("AnalysisRun", back_populates="user", cascade="all, delete-orphan")
+    contributor_analysis_summaries = relationship("ContributorAnalysisSummary", back_populates="user", cascade="all, delete-orphan")
 
 class Repository(Base):
     __tablename__ = "repositories"
@@ -74,6 +75,7 @@ class Repository(Base):
     
     analysis_runs = relationship("AnalysisRun", back_populates="repository")
     repository_analyses = relationship("RepositoryAnalysis", back_populates="repository")
+    contributor_analysis_summaries = relationship("ContributorAnalysisSummary", back_populates="repository", cascade="all, delete-orphan")
 
 class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
@@ -93,6 +95,10 @@ class AnalysisRun(Base):
     code_metrics = relationship("CodeMetrics", back_populates="analysis_run", cascade="all, delete-orphan")
     security_findings = relationship("SecurityFinding", back_populates="analysis_run", cascade="all, delete-orphan")
     skill_scores = relationship("SkillScore", back_populates="analysis_run", cascade="all, delete-orphan")
+    sonar_summary = relationship("SonarAnalysisSummary", back_populates="analysis_run", cascade="all, delete-orphan", uselist=False)
+    sonar_file_measures = relationship("SonarFileMeasure", back_populates="analysis_run", cascade="all, delete-orphan")
+    sonar_issues = relationship("SonarIssue", back_populates="analysis_run", cascade="all, delete-orphan")
+    contributor_analysis_summaries = relationship("ContributorAnalysisSummary", back_populates="analysis_run", cascade="all, delete-orphan")
     user = relationship("User", back_populates="analysis_runs")
     ai_insights = Column(JSON, nullable=True)
     recruiter_candidate = relationship("RecruiterCandidate", back_populates="analysis_run", uselist=False)
@@ -144,6 +150,107 @@ class CodeMetrics(Base):
     analysis_run = relationship("AnalysisRun", back_populates="code_metrics")
     user = relationship("User")
 
+class SonarAnalysisSummary(Base):
+    __tablename__ = "sonar_analysis_summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    project_key = Column(String, nullable=True)
+    quality_gate = Column(String, nullable=True)
+    sonar_health_score = Column(Float, nullable=True)
+    measures = Column(JSON, nullable=True)
+    coverage = Column(JSON, nullable=True)
+    scanner = Column(JSON, nullable=True)
+    ce_task = Column(JSON, nullable=True)
+    raw_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    analysis_run = relationship("AnalysisRun", back_populates="sonar_summary")
+    user = relationship("User")
+
+class ContributorAnalysisSummary(Base):
+    __tablename__ = "contributor_analysis_summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"), nullable=False, index=True)
+    repository_id = Column(Integer, ForeignKey("repositories.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    contributor_login = Column(String, nullable=True)
+    files_count = Column(Integer, nullable=False, default=0)
+    touched_files = Column(JSON, nullable=True)
+
+    skill_score = Column(Float, nullable=True)
+    sonar_health_score = Column(Float, nullable=True)
+    security_score = Column(Float, nullable=True)
+
+    coverage = Column(Float, nullable=True)
+    bugs = Column(Integer, nullable=True)
+    code_smells = Column(Integer, nullable=True)
+    duplicated_lines = Column(Float, nullable=True)
+    duplicated_lines_density = Column(Float, nullable=True)
+    complexity = Column(Float, nullable=True)
+    cognitive_complexity = Column(Float, nullable=True)
+    ncloc = Column(Float, nullable=True)
+
+    quality_gate = Column(String, nullable=True)
+    measures = Column(JSON, nullable=True)
+    raw_payload = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    analysis_run = relationship("AnalysisRun", back_populates="contributor_analysis_summaries")
+    repository = relationship("Repository", back_populates="contributor_analysis_summaries")
+    user = relationship("User", back_populates="contributor_analysis_summaries")
+
+    __table_args__ = (
+        UniqueConstraint("analysis_run_id", "user_id", name="uq_contributor_analysis_summary_run_user"),
+    )
+
+class SonarFileMeasure(Base):
+    __tablename__ = "sonar_file_measures"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    file_path = Column(String, nullable=False)
+    measures = Column(JSON, nullable=True)
+    coverage = Column(Float, nullable=True)
+    duplicated_lines = Column(Float, nullable=True)
+    duplicated_lines_density = Column(Float, nullable=True)
+    ncloc = Column(Float, nullable=True)
+    complexity = Column(Float, nullable=True)
+    cognitive_complexity = Column(Float, nullable=True)
+    functions = Column(Float, nullable=True)
+    classes = Column(Float, nullable=True)
+    statements = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    analysis_run = relationship("AnalysisRun", back_populates="sonar_file_measures")
+    user = relationship("User")
+
+class SonarIssue(Base):
+    __tablename__ = "sonar_issues"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    issue_key = Column(String, nullable=True)
+    file_path = Column(String, nullable=True)
+    line = Column(Integer, nullable=True)
+    type = Column(String, nullable=True)
+    severity = Column(String, nullable=True)
+    rule = Column(String, nullable=True)
+    message = Column(Text, nullable=True)
+    status = Column(String, nullable=True)
+    raw_issue = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    analysis_run = relationship("AnalysisRun", back_populates="sonar_issues")
+    user = relationship("User")
+
 class SecurityFinding(Base):
     __tablename__ = "security_findings"
 
@@ -174,6 +281,7 @@ class SkillScore(Base):
     security_awareness_score = Column(Float)
     problem_solving_score = Column(Float)
     overall_score = Column(Float)
+    sonar_health_score = Column(Float, nullable=True)
     
 
     analysis_run = relationship("AnalysisRun", back_populates="skill_scores")

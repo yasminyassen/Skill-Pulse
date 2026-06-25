@@ -1,521 +1,712 @@
-import { useEffect, useState } from "react";
-import api, { API_BASE_URL } from "../../api/auth";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
 
+interface RepoSummary {
+  analysis_id: number;
+  repo_name: string;
+  full_name: string;
+  branch: string;
+  completed_at: string | null;
+  skill_score: number | null;
+  skill_score_level: string;
+  sonar_health_score: number | null;
+  sonar_state: string;
+  quality_gate: string | null;
+  bugs: number | null;
+  code_smells: number | null;
+  coverage: number | null;
+  coverage_available?: boolean;
+  coverage_status?: string | null;
+  coverage_reason?: string | null;
+  coverage_source?: string | null;
+  duplication_percentage: number | null;
+  cognitive_complexity: number | null;
+  reliability_rating: string | null;
+  maintainability_rating: string | null;
+  technical_debt_minutes: number | null;
+  lines_of_code: number | null;
+}
+
 interface SkillsSummary {
-  overall: number; delta: number;
-  viewer?: { has_github_identity: boolean; github_login: string | null };
-  scores: { code_quality: number; maintainability: number; architecture: number; problem_solving: number };
-  deltas: { code_quality: number; maintainability: number; architecture: number; problem_solving: number };
-  repos: Array<{ analysis_id: number; repo_name: string; full_name: string; branch: string; completed_at: string | null; is_private: boolean; analysis_context?: AnalysisContext }>;
+  skill_score: number | null;
+  skill_score_level: string;
+  skill_score_delta?: number | null;
+  sonar_health_score: number | null;
+  sonar_state: string;
+  delta: number | null;
+  sonar_metrics: Partial<RepoSummary>;
+  repos: RepoSummary[];
 }
-interface AnalysisContext { has_github_identity: boolean; github_login: string | null; is_private: boolean; user_contributed: boolean; commit_count_sample: number; latest_commit_at: string | null; }
-interface ArchitectureMetricEntry {
-  score: number;
-  method?: string;
-  confidence?: number;
-  reason?: string;
-  details?: Record<string, unknown>;
+
+type Issue = { type: string; severity: string; file: string | null; line: number | null; message: string };
+type FileMetric = {
+  file: string | null;
+  lines_of_code: number | null;
+  complexity: number | null;
+  cognitive_complexity: number | null;
+  duplication: number | null;
+  coverage: number | null;
+  duplicated_lines: number | null;
+  functions: number | null;
+};
+type ComplexFunction = { function: string; file: string | null; complexity: number | null };
+type TableHeader = string | { label: string; align?: "left" | "right"; width?: string | number };
+
+interface SonarDashboard {
+  repository?: { name: string; full_name: string; branch: string; analysis_date: string | null; duration_seconds?: number | null };
+  overall?: { skill_score: number | null; skill_score_level: string; sonar_health_score: number | null; sonar_state: string; quality_gate: string | { status?: string } | null };
+  reliability?: { rating: string | null; total_bugs: number | null; issues: Issue[] };
+  maintainability?: { rating: string | null; code_smells: number | null; technical_debt_minutes: number | null; debt_ratio: number | null; issues: Issue[] };
+  coverage?: { available?: boolean; status?: string | null; reason?: string | null; source?: string | null; coverage: number | null; line_coverage: number | null; branch_coverage: number | null; uncovered_lines: number | null };
+  duplication?: { percentage: number | null; duplicated_lines: number | null; duplicated_blocks: number | null; duplicated_files: number | null };
+  complexity?: { cyclomatic_complexity: number | null; cognitive_complexity: number | null };
+  project_size?: { lines_of_code: number | null; files: number | null; directories?: number | null; functions: number | null; classes: number | null; statements?: number | null };
+  file_metrics?: FileMetric[];
+  complex_functions?: ComplexFunction[];
+  issues_explorer?: Issue[];
+  analysis_summary?: Record<string, unknown>;
 }
-interface DetailedAnalysis {
-  analysis_run_id: number; repo: string; branch: string; status: string;
-  scores: { code_quality: number; maintainability: number; architecture: number; security_score: number; problem_solving: number; overall: number };
-  detailed_metrics: {
-    code_quality: { python_files: number; total_loc: number; avg_cyclomatic_complexity: number; avg_duplication_score: number; style_violations: number; unused_variables: number };
-    maintainability: { avg_docstring_coverage: number; missing_docstrings: number; avg_maintainability_index: number; avg_comment_ratio: number; long_functions: number; too_many_params: number };
-    architecture: {
-      overall?: number;
-      note?: string;
-      layer_count_srp?: ArchitectureMetricEntry;
-      repository_pattern?: ArchitectureMetricEntry;
-      dependency_injection?: ArchitectureMetricEntry;
-      circular_imports?: ArchitectureMetricEntry;
-      open_closed_readiness?: ArchitectureMetricEntry;
-      swappable_components?: ArchitectureMetricEntry;
-      module_decomposition?: ArchitectureMetricEntry;
-      god_class_function?: ArchitectureMetricEntry;
-      coupling?: ArchitectureMetricEntry;
-      cohesion?: ArchitectureMetricEntry;
-    };
-    problem_solving: { test_files: number; avg_test_function_ratio: number; avg_cyclomatic_complexity: number; long_functions: number };
+
+interface SonarFile {
+  file_path: string;
+  measures: Record<string, number | string>;
+  coverage: number | null;
+  duplicated_lines: number | null;
+  duplicated_lines_density: number | null;
+  ncloc: number | null;
+  complexity: number | null;
+  cognitive_complexity: number | null;
+  functions: number | null;
+  classes: number | null;
+  statements: number | null;
+}
+
+interface SonarIssue {
+  issue_key: string;
+  file_path: string | null;
+  line: number | null;
+  type: string;
+  severity: string;
+  rule: string | null;
+  message: string;
+  status: string | null;
+}
+
+interface SonarResultResponse {
+  analysis_run_id: number;
+  repo: string;
+  branch: string;
+  analysis_scope: string;
+  status: string;
+  completed_at: string | null;
+  skill_score: number | null;
+  skill_score_level: string;
+  sonar: {
+    available: boolean;
+    project_key?: string;
+    quality_gate?: string | null;
+    sonar_health_score?: number | null;
+    measures?: Record<string, number | string>;
+    coverage?: Record<string, unknown>;
+    reason?: string;
   };
-  security: { findings_count: number; severity_distribution: { HIGH: number; MEDIUM: number; LOW: number } };
-  ai_insights: {
-    skills_insights?: { code_quality?: string[]; maintainability?: string[]; architecture?: string[]; problem_solving?: string[] };
-    llm_problem_solving?: { algorithms?: { score: number; confidence?: number; evidence?: string[] }; data_structures?: { score: number; confidence?: number; evidence?: string[] }; balanced_complexity?: { score: number; confidence?: number; evidence?: string[] }; edge_cases?: { score: number; confidence?: number; evidence?: string[] }; generated_at?: number };
-    llm_skill_scores?: { code_quality?: { adjustment: number; confidence?: number; reason?: string }; maintainability?: { adjustment: number; confidence?: number; reason?: string }; architecture?: { adjustment: number; confidence?: number; reason?: string }; generated_at?: number };
-    llm_adjustment_guidance?: { code_quality?: { requested_adjustment?: number; applied_delta?: number; confidence?: number; reason?: string; evidence?: string[]; overall_impact?: number; overall_delta?: number; ignored?: boolean }; maintainability?: { requested_adjustment?: number; applied_delta?: number; confidence?: number; reason?: string; evidence?: string[]; overall_impact?: number; overall_delta?: number; ignored?: boolean }; architecture?: { requested_adjustment?: number; applied_delta?: number; confidence?: number; reason?: string; evidence?: string[]; overall_impact?: number; overall_delta?: number; ignored?: boolean } };
-    security_insights?: string;
+  files: SonarFile[];
+  issues: SonarIssue[];
+  summary: {
+    files_count: number;
+    issues_count: number;
+    bugs_count: number;
+    code_smells_count: number;
   };
-  completed_at: string | null; analysis_context?: AnalysisContext;
 }
 
-const ARCHITECTURE_METHOD_LABELS: Record<string, string> = {
-  LLM: "AI semantic review",
-  "LLM + AST": "Hybrid · AI + structure",
-  "LLM + AST (radon)": "Hybrid · AI + complexity",
-  "pydeps + import-linter": "Tool-based · import graph",
-  AST: "Static · structure map",
+const accent = "#6366f1";
+const success = "#34d399";
+const warning = "#fbbf24";
+const danger = "#f87171";
+const muted = "#94a3b8";
+
+const scoreColor = (score: number | null | undefined) => score == null ? muted : score >= 80 ? success : score >= 60 ? warning : danger;
+const num = (value: number | null | undefined) => typeof value === "number" && Number.isFinite(value) ? value : null;
+const fmt = (value: number | string | null | undefined, suffix = "") => value === null || value === undefined || value === "" ? "—" : `${value}${suffix}`;
+const pct = (value: number | null | undefined) => value == null ? "—" : `${Math.round(value)}%`;
+const dateFmt = (value: string | null | undefined) => value ? new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
+const minutesFmt = (value: number | null | undefined) => {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const h = Math.floor(value / 60);
+  const m = Math.round(value % 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
 };
-
-type ArchitectureMetricMeta = {
-  key: keyof DetailedAnalysis["detailed_metrics"]["architecture"];
-  label: string;
-  description: string;
-  evaluation: "llm" | "hybrid" | "static";
+const secondsFmt = (value: number | null | undefined) => value == null ? "—" : `${Math.round(value)} sec`;
+const severityTone = (severity?: string | null) => {
+  const s = (severity || "").toUpperCase();
+  if (["BLOCKER", "CRITICAL", "HIGH"].includes(s)) return danger;
+  if (["MAJOR", "MEDIUM"].includes(s)) return warning;
+  return success;
 };
+const issueTypeLabel = (type?: string | null) => (type || "").replace("CODE_SMELL", "Code Smell").replace("BUG", "Bug") || "Issue";
 
-const ARCHITECTURE_METRICS: ArchitectureMetricMeta[] = [
-  { key: "layer_count_srp", label: "Layer Count / SRP", description: "Logical layering and single-responsibility separation", evaluation: "llm" },
-  { key: "repository_pattern", label: "Repository Pattern", description: "Data-access abstraction vs scattered persistence logic", evaluation: "llm" },
-  { key: "dependency_injection", label: "Dependency Injection", description: "Injected dependencies vs inline/hard-coded construction", evaluation: "llm" },
-  { key: "circular_imports", label: "Circular Imports", description: "Import cycles detected by pydeps and import-linter", evaluation: "static" },
-  { key: "open_closed_readiness", label: "Open/Closed Readiness", description: "Extensibility without modifying core modules", evaluation: "llm" },
-  { key: "swappable_components", label: "Swappable Components", description: "Abstractions that allow replacing implementations", evaluation: "llm" },
-  { key: "module_decomposition", label: "Module Decomposition", description: "Domain-aligned module boundaries (structure + AI review)", evaluation: "hybrid" },
-  { key: "god_class_function", label: "God Class / Function", description: "Multi-domain responsibilities and cyclomatic complexity", evaluation: "hybrid" },
-  { key: "coupling", label: "Coupling", description: "Semantic coupling and inline concrete service usage", evaluation: "hybrid" },
-  { key: "cohesion", label: "Cohesion", description: "Functional relatedness within modules and classes", evaluation: "llm" },
-];
+function Badge({ children, tone = accent }: { children: ReactNode; tone?: string }) {
+  return <span className="sp-badge" style={{ color: tone, borderColor: `${tone}35`, background: `${tone}14` }}>{children}</span>;
+}
 
-const scoreColor = (s: number) => s >= 80 ? "#34d399" : s >= 60 ? "#fbbf24" : "#f87171";
-const fmt = (n: number, decimals = 1) => Number.isFinite(n) ? n.toFixed(decimals) : "—";
-const pct = (n: number) => `${Math.round((n || 0) * 100)}%`;
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-const normalize = (v: number, low: number, high: number) => high <= low ? 0 : clamp01((v - low) / (high - low));
+function Card({ children, className = "", style }: { children: ReactNode; className?: string; style?: React.CSSProperties }) {
+  return <div className={`sp-card ${className}`} style={style}>{children}</div>;
+}
 
-const formatArchSub = (entry?: ArchitectureMetricEntry, meta?: ArchitectureMetricMeta) => {
-  if (!entry) return "Not available";
-  const parts: string[] = [];
-  if (entry.method) {
-    parts.push(ARCHITECTURE_METHOD_LABELS[entry.method] || entry.method);
-  } else if (meta) {
-    parts.push(meta.evaluation === "llm" ? "AI semantic review" : meta.evaluation === "hybrid" ? "Hybrid evaluation" : "Tool-based");
-  }
-  if (entry.confidence != null) parts.push(`conf ${Math.round(entry.confidence * 100)}%`);
-  return parts.join(" · ") || "Scored";
-};
-
-const computeComplexityScore = (d: DetailedAnalysis) => {
-  const cq = d.detailed_metrics?.code_quality || {};
-  const m = d.detailed_metrics?.maintainability || {};
-  const couplingScore = d.detailed_metrics?.architecture?.coupling?.score;
-  const files = Math.max(1, Number(cq.python_files || 0));
-  const couplingPenalty = couplingScore != null ? (100 - couplingScore) / 100 : 0.3;
-  const penalty = (
-    normalize(Number(cq.avg_cyclomatic_complexity || 0), 5, 40) * 0.30
-    + normalize(Number(m.long_functions || 0) / files, 0.2, 2.5) * 0.20
-    + normalize(Number(m.too_many_params || 0) / files, 0.2, 2.5) * 0.15
-    + normalize(Number(cq.avg_duplication_score || 0), 0.05, 0.4) * 0.15
-    + couplingPenalty * 0.20
-  );
-  return Math.round(100 * (1 - clamp01(penalty)));
-};
-const avgScore = (metrics: Array<{ value: number }>) => { if (!metrics.length) return 0; return Math.round(metrics.reduce((acc, m) => acc + (Number.isFinite(m.value) ? m.value : 0), 0) / metrics.length); };
-const llmScore = (d: DetailedAnalysis, key: keyof DetailedAnalysis["scores"]) => { const val = d.scores?.[key]; return typeof val === "number" ? val : null; };
-
-function CircleRing({ value, size = 80, stroke = 6, accent = "#6366f1" }: { value: number; size?: number; stroke?: number; accent?: string }) {
-  const r = (size - stroke) / 2; const circ = 2 * Math.PI * r; const filled = (Math.min(Math.max(value, 0), 100) / 100) * circ;
+function Metric({ label, value, sub, tone = "var(--text-primary)" }: { label: string; value: ReactNode; sub?: string; tone?: string }) {
   return (
-    <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border)" strokeWidth={stroke} />
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={accent} strokeWidth={stroke} strokeDasharray={`${filled} ${circ}`} strokeLinecap="round" style={{ transition: "stroke-dasharray 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
-    </svg>
+    <Card className="metric-card" style={{ padding: "18px 20px", minHeight: 108 }}>
+      <div className="sp-label">{label}</div>
+      <div style={{ fontSize: 27, fontWeight: 900, color: tone, marginTop: 8, lineHeight: 1, letterSpacing: "-0.8px" }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 9 }}>{sub}</div>}
+    </Card>
   );
 }
 
-function ScoreRing({ value, size = 80 }: { value: number; size?: number }) {
-  const color = scoreColor(value);
+function SectionTitle({ kicker, title, description, right }: { kicker: string; title: string; description?: string; right?: ReactNode }) {
   return (
-    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
-      <CircleRing value={value} size={size} stroke={6} accent={color} />
-      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ fontSize: size * 0.26, fontWeight: 800, color: "var(--text-primary)", lineHeight: 1 }}>{Math.round(value)}</span>
-        <span style={{ fontSize: size * 0.14, color: "var(--text-faint)" }}>/ 100</span>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 18, flexWrap: "wrap" }}>
+      <div>
+        <div className="sp-label">{kicker}</div>
+        <h2 style={{ margin: "6px 0 4px", fontFamily: "'Syne',sans-serif", fontSize: 21, letterSpacing: "-.35px" }}>{title}</h2>
+        {description && <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 13, lineHeight: 1.55 }}>{description}</p>}
       </div>
+      {right}
     </div>
   );
 }
 
-function DeltaBadge({ delta, large = false }: { delta: number; large?: boolean }) {
-  if (delta === 0) return null;
-  const pos = delta > 0;
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: large ? "4px 10px" : "2px 7px", borderRadius: "20px", background: pos ? "rgba(52,211,153,0.15)" : "rgba(248,113,113,0.12)", color: pos ? "#34d399" : "#f87171", fontSize: large ? "13px" : "11px", fontWeight: 700 }}>
-      {pos ? "▲" : "▼"} {pos ? "+" : ""}{Math.abs(delta).toFixed(1)} pts
-    </span>
-  );
+function EmptyState({ text }: { text: string }) {
+  return <div className="sp-empty">{text}</div>;
 }
 
-function ConfidenceDots({ confidence }: { confidence: number }) {
-  const filled = Math.round(confidence * 5);
+function ProgressBar({ value, tone = accent, max = 100 }: { value: number | null | undefined; tone?: string; max?: number }) {
+  const width = Math.max(0, Math.min(100, ((value || 0) / max) * 100));
   return (
-    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: i < filled ? "#34d399" : "var(--border-hover)", border: i < filled ? "none" : "1px solid var(--border-hover)", transition: "background 0.3s" }} />
-      ))}
+    <div style={{ height: 10, borderRadius: 999, background: "var(--border)", overflow: "hidden" }}>
+      <div style={{ width: `${width}%`, height: "100%", borderRadius: 999, background: `linear-gradient(90deg, ${tone}, #ec4899)`, transition: "width .5s ease" }} />
     </div>
   );
 }
 
-function MetricBar({ label, value, sub, max = 100, adjustedValue, confidence }: { label: string; value: number; sub?: string; max?: number; adjustedValue?: number; confidence?: number }) {
-  const staticPct = Math.min(100, (value / max) * 100); const hasAdjust = adjustedValue != null && adjustedValue !== value;
-  const adjPct = hasAdjust ? Math.min(100, ((adjustedValue as number) / max) * 100) : staticPct;
-  const penaltyPct = Math.max(0, staticPct - adjPct); const penalized = hasAdjust && (adjustedValue as number) < value;
+function Donut({ items }: { items: Array<{ label: string; value: number; tone: string }> }) {
+  const total = items.reduce((a, b) => a + b.value, 0);
+  let cursor = 0;
+  const gradient = total ? items.map(item => {
+    const start = cursor;
+    const end = cursor + (item.value / total) * 100;
+    cursor = end;
+    return `${item.tone} ${start}% ${end}%`;
+  }).join(", ") : "var(--border) 0% 100%";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 12.5, color: "var(--text-secondary)", fontWeight: 500, flex: 1 }}>{label}</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          {confidence != null && <ConfidenceDots confidence={confidence} />}
-          {hasAdjust ? (
-            <span style={{ fontSize: 13, fontWeight: 700 }}>
-              <span style={{ color: "var(--text-primary)" }}>{Math.round(value)}</span>
-              <span style={{ color: "var(--text-faint)", margin: "0 4px" }}>→</span>
-              <span style={{ color: penalized ? "#f87171" : "#34d399" }}>{Math.round(adjustedValue as number)}</span>
-            </span>
-          ) : (
-            <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>{Math.round(value)}</span>
-          )}
+    <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+      <div style={{ width: 124, height: 124, borderRadius: "50%", background: `conic-gradient(${gradient})`, display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <div style={{ width: 76, height: 76, borderRadius: "50%", background: "var(--bg-base)", border: "1px solid var(--border)", display: "grid", placeItems: "center", textAlign: "center" }}>
+          <strong style={{ fontSize: 21 }}>{total}</strong>
+          <span style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -12 }}>issues</span>
         </div>
       </div>
-      {sub && <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -2 }}>{sub}</div>}
-      <div style={{ position: "relative", height: 5, background: "var(--border)", borderRadius: 3, overflow: "visible" }}>
-        <div style={{ position: "absolute", left: 0, top: 0, height: "100%", borderRadius: 3, background: "linear-gradient(90deg,#34d399,#10b981)", width: `${adjPct}%`, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
-        {hasAdjust && penaltyPct > 0 && (<div style={{ position: "absolute", left: `${adjPct}%`, top: 0, height: "100%", width: `${penaltyPct}%`, minWidth: 3, background: "rgba(248,113,113,0.55)", transition: "width 0.8s" }} />)}
-        {hasAdjust && penaltyPct > 0 && (<div style={{ position: "absolute", left: `${adjPct}%`, top: -2, width: 2, height: 9, background: "#f87171", borderRadius: 1, transform: "translateX(-50%)", boxShadow: "0 0 4px rgba(248,113,113,0.7)" }} />)}
+      <div style={{ display: "grid", gap: 9, minWidth: 180, flex: 1 }}>
+        {items.map(item => <div key={item.label} style={{ display: "grid", gridTemplateColumns: "80px 1fr 32px", gap: 10, alignItems: "center", fontSize: 12.5 }}><span style={{ color: "var(--text-secondary)" }}>{item.label}</span><ProgressBar value={item.value} max={Math.max(total, 1)} tone={item.tone} /><strong>{item.value}</strong></div>)}
       </div>
     </div>
   );
 }
 
-function InsightBox({ lines }: { lines: string[] }) {
+const numericHeaders = new Set(["Value", "Line", "Lines", "Coverage", "Complexity", "Smells", "Debt", "Duplicated Lines"]);
+
+function Table({ headers, children }: { headers: TableHeader[]; children: ReactNode }) {
+  const normalizedHeaders = headers.map((header) => (
+    typeof header === "string"
+      ? { label: header, align: numericHeaders.has(header) ? "right" as const : "left" as const }
+      : { align: "left" as const, ...header }
+  ));
+
   return (
-    <div style={{ marginTop: 16, padding: "14px 16px", background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.15)", borderRadius: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <span style={{ fontSize: 11.5, fontWeight: 700, color: "#818cf8", letterSpacing: "0.4px" }}>AI Contribution Guidance</span>
-      </div>
-      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-        {lines.map((l, i) => (
-          <li key={i} style={{ display: "flex", gap: 8, fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.55 }}>
-            <span style={{ color: "#818cf8", flexShrink: 0, marginTop: 1 }}>•</span><span>{l}</span>
-          </li>
-        ))}
-      </ul>
+    <div className="sp-table-wrap">
+      <table className="sp-table">
+        <thead>
+          <tr>
+            {normalizedHeaders.map((header) => (
+              <th
+                key={header.label}
+                style={{
+                  textAlign: header.align,
+                  width: header.width,
+                }}
+              >
+                {header.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>{children}</tbody>
+      </table>
     </div>
   );
 }
 
-function connectGithub() { const token = localStorage.getItem("token"); if (token) window.location.href = `${API_BASE_URL}/auth/github?action=connect&token=${token}`; }
+function Row({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+  return <tr onClick={onClick} style={{ cursor: onClick ? "pointer" : "default", borderBottom: "1px solid var(--border)" }}>{children}</tr>;
+}
 
-const DIMENSIONS = [
-  {
-    key: "code_quality" as const, label: "Code Quality", desc: "Measures quality signals in the Python files touched by your commits",
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
-    getMetrics: (d: DetailedAnalysis) => {
-      const cq = d.detailed_metrics?.code_quality || {}; const adj = d.ai_insights?.llm_adjustment_guidance?.code_quality; const confidence = adj?.confidence ?? undefined;
-      const dup = Math.round((cq.avg_duplication_score || 0) * 100); const cc = Number((cq.avg_cyclomatic_complexity || 0).toFixed(2));
-      const delta = adj && !adj.ignored ? (adj.applied_delta ?? 0) : 0; const s = (base: number) => Math.min(100, Math.max(0, base + delta));
-      const ss = Math.max(0, 100 - (cq.style_violations || 0) * 2); const sv = Math.max(0, 100 - (cq.style_violations || 0) * 3);
-      const su = Math.max(0, 100 - (cq.unused_variables || 0) * 5); const sd = Math.max(0, 100 - dup);
-      return [{ label: "Code Smells", value: ss, adjustedValue: s(ss), confidence, sub: `${cq.style_violations ?? 0} found · cyclomatic avg ${cc}` }, { label: "Style Violations", value: sv, adjustedValue: s(sv), confidence, sub: `${cq.style_violations ?? 0} total` }, { label: "Unused Variables", value: su, adjustedValue: s(su), confidence, sub: `${cq.unused_variables ?? 0} instances` }, { label: "Code Duplication", value: sd, adjustedValue: s(sd), confidence, sub: `${dup}% duplication` }];
+function Cell({ children, align = "left" }: { children: ReactNode; align?: "left" | "right" }) {
+  return <td className={align === "right" ? "sp-cell-number" : undefined} style={{ textAlign: align }}>{children}</td>;
+}
+
+function groupSeverity(issues: Issue[] = []) {
+  const critical = issues.filter(i => ["BLOCKER", "CRITICAL", "HIGH"].includes((i.severity || "").toUpperCase())).length;
+  const major = issues.filter(i => ["MAJOR", "MEDIUM"].includes((i.severity || "").toUpperCase())).length;
+  const minor = Math.max(0, issues.length - critical - major);
+  return { critical, major, minor };
+}
+
+function topFilesByIssues(issues: Issue[] = []) {
+  const map = new Map<string, number>();
+  issues.forEach(i => map.set(i.file || "n/a", (map.get(i.file || "n/a") || 0) + 1));
+  return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+}
+
+const sonarNumber = (value: number | string | null | undefined): number | null => {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const sonarString = (value: number | string | null | undefined): string | null => {
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+};
+
+const coverageString = (coverage: Record<string, unknown> | undefined, key: string): string | null => {
+  const value = coverage?.[key];
+  return typeof value === "string" && value ? value : null;
+};
+
+function mapSonarResultToDashboard(response: SonarResultResponse): SonarDashboard {
+  const measures = response.sonar.measures || {};
+  const coverage = response.sonar.coverage || {};
+  const repoName = response.repo?.split("/").pop() || response.repo || "Repository";
+  const mappedIssues = response.issues.map((issue) => ({
+    type: issue.type,
+    severity: issue.severity,
+    file: issue.file_path,
+    line: issue.line,
+    message: issue.message,
+  }));
+
+  if (!response.sonar.available) {
+    return {
+      repository: {
+        name: repoName,
+        full_name: response.repo,
+        branch: response.branch,
+        analysis_date: response.completed_at,
+      },
+      overall: {
+        skill_score: response.skill_score ?? null,
+        skill_score_level: response.skill_score_level || "Unavailable",
+        sonar_health_score: null,
+        sonar_state: response.status,
+        quality_gate: null,
+      },
+      reliability: { rating: null, total_bugs: 0, issues: [] },
+      maintainability: {
+        rating: null,
+        code_smells: 0,
+        technical_debt_minutes: null,
+        debt_ratio: null,
+        issues: [],
+      },
+      coverage: {
+        available: false,
+        status: "unavailable",
+        reason: response.sonar.reason || "sonar_results_not_found",
+        source: null,
+        coverage: null,
+        line_coverage: null,
+        branch_coverage: null,
+        uncovered_lines: null,
+      },
+      duplication: {
+        percentage: null,
+        duplicated_lines: null,
+        duplicated_blocks: null,
+        duplicated_files: null,
+      },
+      complexity: {
+        cyclomatic_complexity: null,
+        cognitive_complexity: null,
+      },
+      project_size: {
+        lines_of_code: null,
+        files: 0,
+        functions: null,
+        classes: null,
+        statements: null,
+      },
+      file_metrics: [],
+      complex_functions: [],
+      issues_explorer: [],
+      analysis_summary: response.summary,
+    };
+  }
+
+  return {
+    repository: {
+      name: repoName,
+      full_name: response.repo,
+      branch: response.branch,
+      analysis_date: response.completed_at,
     },
-    getScore: (d: DetailedAnalysis) => { const v = llmScore(d, "code_quality"); return v != null ? Math.round(v) : avgScore(DIMENSIONS[0].getMetrics(d)); },
-    getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.code_quality || [],
-  },
-  {
-    key: "maintainability" as const, label: "Maintainability", desc: "Evaluates maintainability of the contribution-affected code",
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>,
-    getMetrics: (d: DetailedAnalysis) => {
-      const m = d.detailed_metrics?.maintainability || {}; const adj = d.ai_insights?.llm_adjustment_guidance?.maintainability; const confidence = adj?.confidence ?? undefined;
-      const delta = adj && !adj.ignored ? (adj.applied_delta ?? 0) : 0; const s = (base: number) => Math.min(100, Math.max(0, base + delta));
-      const sd = Math.round((m.avg_docstring_coverage || 0) * 100); const si = Math.min(100, Math.round(m.avg_maintainability_index || 0));
-      const sc = Math.min(100, Math.round((m.avg_comment_ratio || 0) * 200)); const sx = computeComplexityScore(d);
-      return [{ label: "Documentation Coverage", value: sd, adjustedValue: s(sd), confidence, sub: `${pct(m.avg_docstring_coverage || 0)} · ${m.missing_docstrings ?? 0} missing` }, { label: "Maintainability Index", value: si, adjustedValue: s(si), confidence, sub: `${Math.round(m.avg_maintainability_index || 0)} index score` }, { label: "Code Comments", value: sc, adjustedValue: s(sc), confidence, sub: m.avg_comment_ratio ? `${(m.avg_comment_ratio * 100).toFixed(1)}% ratio` : "Low comment ratio" }, { label: "Complexity Score", value: sx, adjustedValue: s(sx), confidence, sub: `${m.long_functions ?? 0} long fns · ${m.too_many_params ?? 0} over-param'd` }];
+    overall: {
+      skill_score: response.skill_score ?? null,
+      skill_score_level: response.skill_score_level || "Unavailable",
+      sonar_health_score: response.sonar.sonar_health_score ?? null,
+      sonar_state: response.status,
+      quality_gate: response.sonar.quality_gate ?? null,
     },
-    getScore: (d: DetailedAnalysis) => { const v = llmScore(d, "maintainability"); return v != null ? Math.round(v) : avgScore(DIMENSIONS[1].getMetrics(d)); },
-    getInsights: (d: DetailedAnalysis) => d.ai_insights?.skills_insights?.maintainability || [],
-  },
-  {
-    key: "architecture" as const, label: "Architecture", desc: "Ten-metric pipeline: AI semantic review, hybrid AST signals, and import-graph tools",
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
-    getMetrics: (d: DetailedAnalysis) => {
-      const arch = d.detailed_metrics?.architecture || {};
-      if (arch.note && !arch.layer_count_srp) {
-        return [{ label: "Architecture metrics", value: arch.overall ?? 0, sub: arch.note }];
-      }
-      return ARCHITECTURE_METRICS.map(({ key, label, description, evaluation }) => {
-        const entry = arch[key] as ArchitectureMetricEntry | undefined;
-        const value = entry?.score ?? 0;
-        return {
-          label,
-          value,
-          confidence: entry?.confidence,
-          sub: `${formatArchSub(entry, { key, label, description, evaluation })} · ${description}`,
-        };
-      });
+    reliability: {
+      rating: sonarString(measures.reliability_rating),
+      total_bugs: response.summary.bugs_count,
+      issues: mappedIssues.filter((issue) => issue.type === "BUG"),
     },
-    getScore: (d: DetailedAnalysis) => {
-      const v = llmScore(d, "architecture");
-      if (v != null) return Math.round(v);
-      const arch = d.detailed_metrics?.architecture;
-      if (arch?.overall != null) return Math.round(arch.overall);
-      return avgScore(DIMENSIONS[2].getMetrics(d));
+    maintainability: {
+      rating: sonarString(measures.sqale_rating),
+      code_smells: response.summary.code_smells_count,
+      technical_debt_minutes: sonarNumber(measures.sqale_index),
+      debt_ratio: sonarNumber(measures.sqale_debt_ratio),
+      issues: mappedIssues.filter((issue) => issue.type === "CODE_SMELL"),
     },
-    getInsights: (d: DetailedAnalysis) => {
-      const arch = d.detailed_metrics?.architecture || {};
-      const fromMetrics = ARCHITECTURE_METRICS.flatMap(({ key, label }) => {
-        const entry = arch[key] as ArchitectureMetricEntry | undefined;
-        if (!entry?.reason) return [];
-        return [`${label}: ${entry.reason}`];
-      });
-      if (fromMetrics.length) return fromMetrics;
-      return d.ai_insights?.skills_insights?.architecture || [];
+    coverage: {
+      available: response.sonar.available,
+      status: coverageString(coverage, "status"),
+      reason: coverageString(coverage, "reason"),
+      source: coverageString(coverage, "source"),
+      coverage: sonarNumber(measures.coverage),
+      line_coverage: sonarNumber(measures.line_coverage),
+      branch_coverage: sonarNumber(measures.branch_coverage),
+      uncovered_lines: sonarNumber(measures.uncovered_lines),
     },
-  },
-  {
-    key: "problem_solving" as const, label: "Problem Solving", desc: "Analyzes complexity and problem-solving signals in your contribution area",
-    icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/><circle cx="12" cy="12" r="10"/></svg>,
-    getMetrics: (d: DetailedAnalysis) => {
-      const llm = d.ai_insights?.llm_problem_solving;
-      if (llm && (llm.algorithms || llm.data_structures || llm.balanced_complexity || llm.edge_cases)) {
-        return [{ label: "Algorithms", value: llm.algorithms?.score ?? 0, sub: llm.algorithms?.confidence != null ? `Conf ${Math.round((llm.algorithms.confidence || 0) * 100)}%` : "" }, { label: "Data Structures", value: llm.data_structures?.score ?? 0, sub: llm.data_structures?.confidence != null ? `Conf ${Math.round((llm.data_structures.confidence || 0) * 100)}%` : "" }, { label: "Balanced Complexity", value: llm.balanced_complexity?.score ?? 0, sub: llm.balanced_complexity?.confidence != null ? `Conf ${Math.round((llm.balanced_complexity.confidence || 0) * 100)}%` : "" }, { label: "Edge Cases", value: llm.edge_cases?.score ?? 0, sub: llm.edge_cases?.confidence != null ? `Conf ${Math.round((llm.edge_cases.confidence || 0) * 100)}%` : "" }];
-      }
-      return [{ label: "Algorithms", value: 0, sub: "LLM required" }, { label: "Data Structures", value: 0, sub: "LLM required" }, { label: "Balanced Complexity", value: 0, sub: "LLM required" }, { label: "Edge Cases", value: 0, sub: "LLM required" }];
+    duplication: {
+      percentage: sonarNumber(measures.duplicated_lines_density),
+      duplicated_lines: sonarNumber(measures.duplicated_lines),
+      duplicated_blocks: sonarNumber(measures.duplicated_blocks),
+      duplicated_files: sonarNumber(measures.duplicated_files),
     },
-    getScore: (d: DetailedAnalysis) => { const v = llmScore(d, "problem_solving"); return v != null ? Math.round(v) : 0; },
-    getInsights: (d: DetailedAnalysis) => {
-      const llm = d.ai_insights?.llm_problem_solving;
-      if (llm) {
-        const lines = [{ label: "Algorithms", value: llm.algorithms?.evidence || [] }, { label: "Data Structures", value: llm.data_structures?.evidence || [] }, { label: "Balanced Complexity", value: llm.balanced_complexity?.evidence || [] }, { label: "Edge Cases", value: llm.edge_cases?.evidence || [] }].flatMap(e => e.value.map(item => `${e.label}: ${item}`));
-        if (lines.length) return lines;
-      }
-      return d.ai_insights?.skills_insights?.problem_solving || [];
+    complexity: {
+      cyclomatic_complexity: sonarNumber(measures.complexity),
+      cognitive_complexity: sonarNumber(measures.cognitive_complexity),
     },
-  },
-];
+    project_size: {
+      lines_of_code: sonarNumber(measures.ncloc),
+      files: sonarNumber(measures.files),
+      functions: sonarNumber(measures.functions),
+      classes: sonarNumber(measures.classes),
+      statements: sonarNumber(measures.statements),
+    },
+    file_metrics: response.files.map((file) => ({
+      file: file.file_path,
+      lines_of_code: file.ncloc,
+      complexity: file.complexity,
+      cognitive_complexity: file.cognitive_complexity,
+      duplication: file.duplicated_lines_density,
+      coverage: file.coverage,
+      duplicated_lines: file.duplicated_lines,
+      functions: file.functions,
+    })),
+    complex_functions: [],
+    issues_explorer: mappedIssues,
+    analysis_summary: response.summary,
+  };
+}
 
 export default function DeveloperSkills() {
-  const role = localStorage.getItem("role") || "developer";
-  const accent = role === "manager" ? "#8b5cf6" : role === "recruiter" ? "#a855f7" : "#6366f1";
   const [summary, setSummary] = useState<SkillsSummary | null>(null);
-  const [detail, setDetail] = useState<DetailedAnalysis | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [loadingSummary, setLoadingSummary] = useState(true);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detail, setDetail] = useState<SonarDashboard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
+  const [expandedIssue, setExpandedIssue] = useState<Issue | null>(null);
+  const [filter, setFilter] = useState<"ALL" | "BUG" | "CODE_SMELL" | "RELIABILITY">("ALL");
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
-    (async () => {
-      try { const res = await api.get("/analysis/skills/summary"); setSummary(res.data); }
-      catch (err: any) { if (err.response?.status === 401) { localStorage.clear(); window.location.href = "/login"; } }
-      finally { setLoadingSummary(false); }
-    })();
+    api.get<SkillsSummary>("/analysis/skills/summary")
+      .then((res) => {
+        setSummary(res.data);
+        setSelectedId(res.data.repos?.[0]?.analysis_id ?? null);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     if (!selectedId) { setDetail(null); return; }
-    (async () => {
-      setLoadingDetail(true);
-      try { const res = await api.get(`/analysis/${selectedId}/detailed-metrics`); setDetail(res.data); }
-      finally { setLoadingDetail(false); }
-    })();
+    let cancelled = false;
+    setDetail(null);
+    api.get<SonarResultResponse>(`/analysis/${selectedId}/sonar-results`)
+      .then((res) => {
+        const dashboard = mapSonarResultToDashboard(res.data);
+        console.log("Sonar API", res.data);
+        console.log("Mapped dashboard", dashboard);
+        if (!cancelled) setDetail(dashboard);
+      })
+      .catch(() => {
+        if (!cancelled) setDetail(null);
+      });
+    return () => { cancelled = true; };
   }, [selectedId]);
 
-  const scores = summary?.scores; const deltas = summary?.deltas; const overall = summary?.overall ?? 0;
-  const selectedRepo = summary?.repos.find(r => r.analysis_id === selectedId);
-  const activeContext = detail?.analysis_context || selectedRepo?.analysis_context;
-  const hasGithubIdentity = Boolean(summary?.viewer?.has_github_identity || activeContext?.has_github_identity);
+  useEffect(() => {
+    setFilter("ALL");
+    setQuery("");
+    setExpandedIssue(null);
+    setSelectedIssue(null);
+  }, [selectedId]);
 
-  const getModeNotice = () => {
-    const contributed = Boolean(activeContext?.user_contributed); const githubLogin = activeContext?.github_login || summary?.viewer?.github_login;
-    if (hasGithubIdentity && selectedId && contributed) return { title: "Developer Contribution Analysis", body: `Connected as ${githubLogin}. Results are based on Python files touched by your commits.`, tone: "#34d399" };
-    if (hasGithubIdentity && selectedId) return { title: "No Contribution Analysis Available", body: `Connected as ${githubLogin || "GitHub user"}. This repo appears only when SkillPulse finds analyzable commits.`, tone: "#fbbf24" };
-    if (hasGithubIdentity) return { title: "Select a Contribution Analysis", body: `Connected as ${githubLogin || "your GitHub account"}. Only repos with your contribution analysis are listed.`, tone: accent };
-    return { title: "Connect GitHub to Start", body: "Developer skills are calculated from your own GitHub contributions. Connect GitHub, then analyze a repository where your account has commits.", tone: accent };
-  };
-  const notice = getModeNotice();
+  const current = summary?.repos.find((repo) => repo.analysis_id === selectedId) ?? null;
+  const repo = detail?.repository;
+  const skillScore = detail?.overall?.skill_score ?? current?.skill_score ?? null;
+  const skillScoreLevel = detail?.overall?.skill_score_level ?? current?.skill_score_level ?? "Unavailable";
+  const healthTone = scoreColor(skillScore);
+  const coverageAvailable = detail?.coverage?.available ?? current?.coverage_available ?? ((detail?.coverage?.coverage ?? current?.coverage) != null);
+  const coverageReason = detail?.coverage?.reason ?? current?.coverage_reason ?? "coverage_report_not_found";
+  const coverageSource = detail?.coverage?.source ?? current?.coverage_source ?? null;
+  const coverageValue = coverageAvailable ? (detail?.coverage?.coverage ?? current?.coverage ?? null) : null;
+  const coverageUnavailableMessage = coverageReason === "sonar_results_not_found"
+    ? "Sonar results unavailable"
+    : coverageReason === "coverage_paths_do_not_match_repository"
+    ? "The uploaded coverage.xml was received, but its file paths do not match this repository, so SonarQube could not import coverage data."
+    : coverageReason === "coverage_xml_could_not_be_parsed"
+      ? "The uploaded coverage.xml was received, but it could not be parsed. Upload a valid Cobertura-style coverage XML report."
+      : "No coverage.xml report was uploaded and no coverage.xml report was found in the repository. Upload a coverage XML report to include test coverage in this analysis.";
+
+  const allIssues = useMemo(() => detail?.issues_explorer || [], [detail?.issues_explorer]);
+  const reliabilityIssues = useMemo(
+    () => allIssues.filter(issue => String(issue.type).toUpperCase() === "BUG"),
+    [allIssues],
+  );
+  const maintainabilityIssues = useMemo(
+    () => allIssues.filter(issue => String(issue.type).toUpperCase() === "CODE_SMELL"),
+    [allIssues],
+  );
+  const totalBugs = detail?.reliability?.total_bugs ?? 0;
+  const visibleReliabilityIssues = Number(totalBugs) > 0 ? reliabilityIssues : [];
+  const bugSeverity = groupSeverity(visibleReliabilityIssues);
+  const smellSeverity = groupSeverity(maintainabilityIssues);
+
+  useEffect(() => {
+    console.log("selectedId", selectedId);
+    console.log("repo", detail?.repository);
+    console.log("reliability issues", reliabilityIssues);
+    console.log("maintainability issues", maintainabilityIssues);
+  }, [selectedId, detail?.repository, reliabilityIssues, maintainabilityIssues]);
+
+  const fileMetrics = detail?.file_metrics || [];
+  const lowCoverage = fileMetrics.filter(f => num(f.coverage) !== null).sort((a, b) => (a.coverage || 0) - (b.coverage || 0)).slice(0, 8);
+  const duplicatedFiles = fileMetrics.filter(f => (f.duplicated_lines || 0) > 0 || (f.duplication || 0) > 0).sort((a, b) => (b.duplicated_lines || 0) - (a.duplicated_lines || 0)).slice(0, 8);
+  const complexFiles = fileMetrics.filter(f => (f.complexity || 0) > 0 || (f.cognitive_complexity || 0) > 0).sort((a, b) => ((b.complexity || 0) + (b.cognitive_complexity || 0)) - ((a.complexity || 0) + (a.cognitive_complexity || 0))).slice(0, 8);
+  const complexFunctions = (detail?.complex_functions || []).slice(0, 10);
+  const showComplexityTables = complexFiles.length > 0 || complexFunctions.length > 0;
+  const complexityGridColumns = complexFiles.length > 0 && complexFunctions.length > 0 ? "1fr 1fr" : "1fr";
+
+  const filteredIssues = useMemo(() => allIssues.filter(issue => {
+    const issueType = String(issue.type).toUpperCase();
+    const matchesType = filter === "ALL" || (filter === "RELIABILITY" ? issueType === "BUG" : issueType === filter);
+    const matchesSearch = !query.trim() || `${issue.file || ""} ${issue.message || ""} ${issue.severity || ""}`.toLowerCase().includes(query.trim().toLowerCase());
+    return matchesType && matchesSearch;
+  }), [allIssues, filter, query]);
+
+  const recommendations = [
+    ...(skillScore != null && skillScore < 70 ? ["Improve the overall Skill Score"] : ["Maintain the current Skill Score level"]),
+    ...(coverageAvailable && coverageValue != null && coverageValue < 80 ? ["Add tests for low coverage files"] : []),
+    ...(!coverageAvailable ? [coverageReason === "coverage_paths_do_not_match_repository" ? "Regenerate coverage.xml with repository-relative file paths" : "Upload coverage.xml to enable test coverage metrics"] : []),
+    ...(detail?.duplication?.percentage != null && detail.duplication.percentage > 5 ? ["Remove duplicate validation and helper logic"] : []),
+    ...(bugSeverity.critical > 0 ? [`Fix ${bugSeverity.critical} critical bugs`] : []),
+    ...(complexFiles[0] ? [`Refactor ${complexFiles[0].file}`] : []),
+  ];
 
   return (
     <DashboardLayout>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
-        input, select { font-family: 'DM Sans', sans-serif; }
-        .sk { background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%); background-size: 400% 100%; animation: shimmer 1.5s ease-in-out infinite; border-radius: 8px; }
-        @keyframes shimmer { 0%{background-position:100% 50%} 100%{background-position:0% 50%} }
-        .dim-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 24px 28px; transition: border-color 0.2s, background 0.3s ease; }
-        .dim-card:hover { border-color: var(--border-hover); }
-        .skl-select { background: var(--bg-input); border: 1px solid rgba(99,102,241,0.25); border-radius: 12px; color: var(--text-primary); font-family: 'DM Sans', sans-serif; font-size: 13.5px; padding: 10px 14px; outline: none; cursor: pointer; transition: border-color 0.2s; min-width: 220px; }
-        .skl-select:focus { border-color: ${accent}80; }
+        .sp-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card); transition: border-color .2s ease, background .3s ease, transform .2s ease; }
+        .sp-card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); }
+        .metric-card:hover { transform: translateY(-1px); }
+        .sp-label { font-size: 11px; font-weight: 800; color: rgba(167,139,250,.82); text-transform: uppercase; letter-spacing: .75px; }
+        .sp-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid; font-size: 11.5px; font-weight: 800; white-space: nowrap; }
+        .sp-empty { padding: 28px 20px; border: 1px dashed var(--border-hover); border-radius: 14px; background: var(--bg-input); color: var(--text-muted); font-size: 13px; text-align: center; }
+        .skl-select, .sp-search { background: var(--bg-input); border: 1px solid rgba(99,102,241,.25); border-radius: 12px; color: var(--text-primary); font-family: 'DM Sans', sans-serif; font-size: 13.5px; padding: 10px 14px; outline: none; transition: border-color .2s; }
+        .skl-select:focus, .sp-search:focus { border-color: ${accent}80; }
         .skl-select option { background: var(--bg-base); color: var(--text-primary); }
-        .skl-label { font-size: 12px; font-weight: 700; color: rgba(167,139,250,0.8); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; display: block; }
-        .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 32px; margin-top: 18px; }
-        .skl-btn-primary { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; background: linear-gradient(135deg, ${accent}, #ec4899); border: none; border-radius: 10px; color: white; font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 16px ${accent}30; }
-        .skl-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 24px ${accent}40; }
-        .legend-bar { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 16px; padding: 10px 14px; background: var(--bg-input); border-radius: 8px; border: 1px solid var(--border); }
+        .filter-btn { border: 1px solid var(--border); background: var(--bg-input); color: var(--text-secondary); padding: 8px 12px; border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 800; }
+        .filter-btn.active { color: ${accent}; border-color: ${accent}70; background: ${accent}14; }
+        .sp-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; }
+        .sp-table { width: 100%; border-collapse: collapse; min-width: 560px; table-layout: fixed; }
+        .sp-table th { padding: 12px 16px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .7px; background: var(--bg-input); border-bottom: 1px solid var(--border); white-space: nowrap; }
+        .sp-table td { padding: 12px 16px; font-size: 13px; color: var(--text-secondary); vertical-align: top; overflow-wrap: anywhere; }
+        .sp-table th:last-child, .sp-table td:last-child { padding-right: 18px; }
+        .sp-cell-number { font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .sp-table tbody tr:hover td { background: var(--bg-input); color: var(--text-primary); }
+        tbody tr:hover td { background: var(--bg-input); color: var(--text-primary); }
       `}</style>
 
-      <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'DM Sans', sans-serif", background: "var(--bg-gradient)", transition: "background 0.3s ease" }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+      <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'DM Sans', sans-serif", background: "var(--bg-gradient)" }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+          <header style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(280px, .85fr)", gap: 18 }}>
+            <Card style={{ padding: "28px 32px" }}>
+              <Badge>Code Quality Dashboard</Badge>
+              <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 34, fontWeight: 800, letterSpacing: "-.8px", margin: "16px 0 8px", lineHeight: 1.1 }}>{repo?.name || current?.repo_name || "Repository"}</h1>
+              <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: 14 }}>Python · FastAPI</p>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 18, color: "var(--text-muted)", fontSize: 13 }}>
+                <span>{fmt(detail?.project_size?.files ?? current?.lines_of_code ? detail?.project_size?.files : null)} Files</span>
+                <span>·</span>
+                <span>{fmt(detail?.project_size?.lines_of_code ?? current?.lines_of_code)} LOC</span>
+                <span>·</span>
+                <span>Analysis Date: {dateFmt(repo?.analysis_date || current?.completed_at)}</span>
+                <span>·</span>
+                <span>Duration: {secondsFmt(repo?.duration_seconds)}</span>
+              </div>
+              {summary && <div style={{ marginTop: 20 }}><select className="skl-select" value={selectedId ?? ""} onChange={(e) => setSelectedId(Number(e.target.value) || null)}>{summary.repos.map(r => <option key={r.analysis_id} value={r.analysis_id}>{r.repo_name} / {r.branch} · {dateFmt(r.completed_at)}</option>)}</select></div>}
+            </Card>
+            <Card style={{ padding: "28px 32px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 12 }}>
+              <div className="sp-label">Skill Score Engine</div>
+              <div style={{ fontSize: 32, fontWeight: 900, color: healthTone }}>Overall Score: {fmt(skillScore)}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: healthTone }}>Score Level: {skillScoreLevel}</div>
+              <ProgressBar value={skillScore} tone={healthTone} />
+              <div style={{ color: "var(--text-muted)", fontSize: 12 }}>70% Sonar health + 30% security</div>
+            </Card>
+          </header>
 
-          <div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 14px", borderRadius: 999, border: `1px solid ${accent}40`, background: `${accent}12`, fontSize: 11, fontWeight: 700, letterSpacing: "0.8px", color: accent, textTransform: "uppercase" as const, width: "fit-content", marginBottom: 10 }}>Developer Skills</div>
-            <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 26, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: "0 0 4px" }}>Developer Contribution Dashboard</h1>
-            <p style={{ fontSize: 13.5, color: "var(--text-muted)", margin: 0, lineHeight: 1.6 }}>Skill scores based only on your own GitHub contribution scope.</p>
-          </div>
+          {loading && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>{[1, 2, 3, 4].map(i => <div key={i} className="sk sp-card" style={{ height: 110 }} />)}</div>}
+          {!loading && !summary?.repos.length && <EmptyState text="Analyze a repository to populate SonarQube metrics." />}
 
-          {!loadingSummary && summary && (
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "16px 20px", background: `${notice.tone}0F`, border: `1px solid ${notice.tone}35`, borderRadius: 14 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 10, background: `${notice.tone}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: notice.tone }}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          {detail && <>
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="1. Reliability" title="Bugs & Reliability" description="Bug count, severity distribution, and affected files." right={<Badge tone={severityTone(bugSeverity.critical ? "CRITICAL" : "MINOR")}>{totalBugs} bugs</Badge>} />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 20 }}>
+                <Metric label="Reliability Rating" value={fmt(detail.reliability?.rating ?? current?.reliability_rating)} />
+                <Metric label="Total Bugs" value={fmt(totalBugs)} tone={totalBugs ? danger : success} />
+                <Metric label="Critical Bugs" value={bugSeverity.critical} tone={bugSeverity.critical ? danger : success} />
+                <Metric label="Major Bugs" value={bugSeverity.major} tone={bugSeverity.major ? warning : success} />
+                <Metric label="Minor Bugs" value={bugSeverity.minor} />
               </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>{notice.title}</div>
-                <div style={{ fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.6 }}>{notice.body}</div>
-                {!hasGithubIdentity && <button className="skl-btn-primary" style={{ marginTop: 12 }} onClick={connectGithub}>Connect GitHub</button>}
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, .8fr) minmax(0, 1.2fr)", gap: 20, marginBottom: 20 }}>
+                <Card style={{ padding: 18, boxShadow: "none" }}><Donut items={[{ label: "Critical", value: bugSeverity.critical, tone: danger }, { label: "Major", value: bugSeverity.major, tone: warning }, { label: "Minor", value: bugSeverity.minor, tone: success }]} /></Card>
+                <Card style={{ padding: 18, boxShadow: "none" }}><div style={{ display: "grid", gap: 13 }}>{[["Critical", bugSeverity.critical, danger], ["Major", bugSeverity.major, warning], ["Minor", bugSeverity.minor, success]].map(([label, value, tone]) => <div key={label as string}><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 }}><span>{label}</span><strong>{value}</strong></div><ProgressBar value={value as number} max={Math.max(visibleReliabilityIssues.length, 1)} tone={tone as string} /></div>)}</div></Card>
               </div>
-            </div>
-          )}
+              {visibleReliabilityIssues.length ? <Table headers={["Severity", "File", "Line", "Message"]}>{visibleReliabilityIssues.slice(0, 10).map((i, idx) => <Row key={idx} onClick={() => setExpandedIssue(expandedIssue === i ? null : i)}><Cell><Badge tone={severityTone(i.severity)}>{i.severity}</Badge></Cell><Cell>{i.file || "n/a"}</Cell><Cell>{fmt(i.line)}</Cell><Cell>{i.message}</Cell></Row>)}</Table> : <EmptyState text="No reliability bugs returned." />}
+              {expandedIssue && <Card style={{ padding: 16, marginTop: 14, boxShadow: "none", background: "var(--bg-input)" }}><strong>{expandedIssue.file || "n/a"}</strong><div style={{ color: "var(--text-muted)", marginTop: 6 }}>Line {fmt(expandedIssue.line)}</div><code style={{ display: "block", marginTop: 10, color: "var(--text-secondary)" }}>{expandedIssue.message}</code></Card>}
+            </Card>
 
-          <div className="dim-card">
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
-              <div>
-                <label className="skl-label">Overall Contribution Score</label>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{hasGithubIdentity ? "Aggregated only from repositories where SkillPulse analyzed your contributions" : "Connect GitHub to analyze repositories from your own contributions"}</div>
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="2. Maintainability" title="Code Smells & Technical Debt" description="Maintainability rating, smell distribution, and files with the most issues." />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginBottom: 20 }}>
+                <Metric label="Maintainability Rating" value={fmt(detail.maintainability?.rating ?? current?.maintainability_rating)} />
+                <Metric label="Code Smells" value={fmt(detail.maintainability?.code_smells ?? current?.code_smells)} />
+                <Metric label="Technical Debt" value={minutesFmt(detail.maintainability?.technical_debt_minutes ?? current?.technical_debt_minutes)} />
+                <Metric label="Debt Ratio" value={pct(detail.maintainability?.debt_ratio)} />
               </div>
-              <div style={{ textAlign: "right" }}>
-                {loadingSummary ? <div className="sk" style={{ width: 80, height: 40 }} /> : (
-                  <>
-                    <div style={{ fontSize: 42, fontWeight: 800, color: "var(--text-primary)", lineHeight: 1, letterSpacing: "-2px" }}>{overall.toFixed(1)}</div>
-                    <div style={{ marginTop: 4, display: "flex", justifyContent: "flex-end" }}>{summary && <DeltaBadge delta={summary.delta} large />}</div>
-                  </>
-                )}
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, .8fr) minmax(0, 1.2fr)", gap: 20, marginBottom: 20 }}>
+                <Card style={{ padding: 18, boxShadow: "none" }}><Donut items={[{ label: "Critical", value: smellSeverity.critical, tone: danger }, { label: "Major", value: smellSeverity.major, tone: warning }, { label: "Minor", value: smellSeverity.minor, tone: success }]} /></Card>
+                <Card style={{ padding: 18, boxShadow: "none" }}><div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 10 }}>Estimated Fix Time: {minutesFmt(detail.maintainability?.technical_debt_minutes)}</div><ProgressBar value={Math.min(detail.maintainability?.technical_debt_minutes || 0, 600)} max={600} tone={warning} /></Card>
               </div>
-            </div>
-            {loadingSummary ? (
-              <div style={{ display: "flex", gap: 24 }}>
-                {[1,2,3,4].map(i => (<div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}><div className="sk" style={{ width: 80, height: 80, borderRadius: "50%" }} /><div className="sk" style={{ width: 80, height: 14 }} /></div>))}
-              </div>
-            ) : (
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                {DIMENSIONS.map(dim => { const val = scores?.[dim.key] ?? 0; const delta = deltas?.[dim.key] ?? 0; return (
-                  <div key={dim.key} style={{ flex: 1, minWidth: 140, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-                    <ScoreRing value={val} size={80} />
-                    <div style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 4 }}>{dim.label}</div>
-                      <DeltaBadge delta={delta} />
-                    </div>
-                  </div>
-                ); })}
-              </div>
-            )}
-          </div>
+              <Table headers={[{ label: "File", width: "64%" }, { label: "Smells", align: "right", width: "18%" }, { label: "Debt", align: "right", width: "18%" }]}>{topFilesByIssues(maintainabilityIssues).map(([file, count]) => <Row key={file}><Cell>{file}</Cell><Cell align="right">{count}</Cell><Cell>{minutesFmt(count * 8)}</Cell></Row>)}</Table>
+            </Card>
 
-          <div className="dim-card" style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13.5, color: "var(--text-secondary)", fontWeight: 500, whiteSpace: "nowrap" }}>View your contribution analysis for:</span>
-            {loadingSummary ? <div className="sk" style={{ width: 220, height: 36, borderRadius: 10 }} /> : (
-              <select className="skl-select" value={selectedId ?? ""} onChange={e => setSelectedId(e.target.value ? Number(e.target.value) : null)}>
-                <option value="">Select a repository…</option>
-                {summary?.repos.map(r => (<option key={r.analysis_id} value={r.analysis_id}>{r.repo_name} ({r.branch}) - {r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "latest"}</option>))}
-              </select>
-            )}
-            {!selectedId && !loadingSummary && <span style={{ fontSize: 12, color: "var(--text-faint)", width: "100%" }}>Select a repository to view metrics and AI guidance for the files touched by your commits.</span>}
-          </div>
-
-          {selectedId && activeContext && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-              {[
-                { label: "GitHub Identity", value: activeContext.has_github_identity ? activeContext.github_login : "Not connected", color: "var(--text-primary)" },
-                { label: "Repository Access", value: activeContext.is_private ? "Private repository" : "Public repository", color: "var(--text-primary)" },
-                { label: "Contribution Scope", value: activeContext.user_contributed ? `${activeContext.commit_count_sample || 1}+ commits found` : activeContext.has_github_identity ? "Not available" : "Connect GitHub to check", color: activeContext.user_contributed ? "#34d399" : "var(--text-primary)" },
-              ].map(({ label, value, color }) => (
-                <div key={label} className="dim-card" style={{ padding: 16 }}>
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 6, fontWeight: 700 }}>{label}</div>
-                  <div style={{ fontSize: 14, color, fontWeight: 700 }}>{value}</div>
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="3. Test Coverage" title="Coverage" description="Coverage is imported from an uploaded or repository coverage.xml report." />
+              {coverageAvailable ? <>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 14, marginBottom: 18 }}>
+                  <Metric label="Line Coverage" value={pct(detail.coverage?.line_coverage)} />
+                  <Metric label="Branch Coverage" value={pct(detail.coverage?.branch_coverage)} />
+                  <Metric label="Uncovered Lines" value={fmt(detail.coverage?.uncovered_lines)} />
                 </div>
-              ))}
-            </div>
-          )}
+                <Card style={{ padding: "22px 24px", boxShadow: "none", marginBottom: coverageSource || lowCoverage.length ? 18 : 0 }}><div style={{ fontSize: 32, fontWeight: 900, marginBottom: 12 }}>{pct(coverageValue)}</div><ProgressBar value={coverageValue} tone={scoreColor(coverageValue)} /></Card>
+                {coverageSource && <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: lowCoverage.length ? 14 : 0 }}>Coverage source: {coverageSource === "uploaded" ? "uploaded coverage.xml" : coverageSource === "repository" ? "coverage.xml found in repository" : coverageSource}</div>}
+                {lowCoverage.length > 0 && <Table headers={[{ label: "File", width: "78%" }, { label: "Coverage", align: "right", width: "22%" }]}>{lowCoverage.map(f => <Row key={f.file || "file"}><Cell>{f.file}</Cell><Cell align="right"><Badge tone={scoreColor(f.coverage)}>{pct(f.coverage)}</Badge></Cell></Row>)}</Table>}
+                {lowCoverage[0] && (lowCoverage[0].coverage || 0) < 60 && <div style={{ marginTop: 14, color: warning, fontWeight: 800 }}>⚠ {lowCoverage[0].file} has low coverage ({pct(lowCoverage[0].coverage)})</div>}
+              </> : <Card style={{ padding: 18, boxShadow: "none", background: "var(--bg-input)", borderStyle: "dashed" }}>
+                <div style={{ fontSize: 24, fontWeight: 900, marginBottom: 8 }}>Coverage unavailable</div>
+                <div style={{ color: "var(--text-muted)", lineHeight: 1.6 }}>{coverageUnavailableMessage}</div>
+                <div style={{ marginTop: 10 }}><Badge tone={warning}>{coverageReason}</Badge></div>
+              </Card>}
+            </Card>
 
-          {selectedId && (
-            <>
-              {loadingDetail ? (
-                <>{[1,2,3,4].map(i => (<div key={i} className="dim-card"><div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}><div className="sk" style={{ width: 80, height: 80, borderRadius: "50%" }} /><div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}><div className="sk" style={{ height: 18, width: "40%" }} /><div className="sk" style={{ height: 13, width: "60%" }} /><div className="sk" style={{ height: 28, width: "22%", borderRadius: 20 }} /></div></div></div>))}</>
-              ) : detail ? (
-                DIMENSIONS.map(dim => {
-                  const score = dim.getScore(detail); const delta = deltas?.[dim.key] ?? 0;
-                  const metrics = dim.getMetrics(detail); const insights = dim.getInsights(detail);
-                  return (
-                    <div key={dim.key} className="dim-card">
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-                        <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flex: 1 }}>
-                          <div style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, background: `${accent}18`, display: "flex", alignItems: "center", justifyContent: "center", color: accent }}>{dim.icon}</div>
-                          <div>
-                            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)", marginBottom: 3 }}>{dim.label}</div>
-                            <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>{dim.desc}</div>
-                            <div style={{ marginTop: 8 }}><DeltaBadge delta={delta} /></div>
-                          </div>
-                        </div>
-                        <ScoreRing value={score} size={72} />
-                      </div>
-                      <div style={{ marginTop: 20 }}>
-                        <label className="skl-label">Contribution Signals</label>
-                        <div className="metrics-grid">{metrics.map((m, i) => (<MetricBar key={i} label={m.label} value={m.value} sub={m.sub} adjustedValue={(m as any).adjustedValue} confidence={(m as any).confidence} />))}</div>
-                      </div>
-                      {(dim.key === "code_quality" || dim.key === "maintainability") && (
-                        <div className="legend-bar">
-                          {[{ color: "#10b981", label: "Static (rule-based) score" }, { color: "rgba(248,113,113,0.55)", label: "AI penalty zone" }].map(({ color, label }) => (
-                            <div key={label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                              <div style={{ width: 24, height: 5, borderRadius: 3, background: color }} />
-                              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}</span>
-                            </div>
-                          ))}
-                          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                            <div style={{ display: "flex", gap: 2 }}>{[true, true, true, false, false].map((f, i) => (<div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: f ? "#34d399" : "var(--border-hover)", border: f ? "none" : "1px solid var(--border-hover)" }} />))}</div>
-                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>AI confidence (1–5 dots)</span>
-                          </div>
-                        </div>
-                      )}
-                      {dim.key === "architecture" && (
-                        <div className="legend-bar">
-                          {[
-                            { color: "#818cf8", label: "AI semantic review (LLM)" },
-                            { color: "#34d399", label: "Hybrid (AI + AST/radon)" },
-                            { color: "#fbbf24", label: "Tool-based (import graph)" },
-                          ].map(({ color, label }) => (
-                            <div key={label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                              <div style={{ width: 24, height: 5, borderRadius: 3, background: color }} />
-                              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}</span>
-                            </div>
-                          ))}
-                          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                            <div style={{ display: "flex", gap: 2 }}>{[true, true, true, false, false].map((f, i) => (<div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: f ? "#34d399" : "var(--border-hover)", border: f ? "none" : "1px solid var(--border-hover)" }} />))}</div>
-                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>AI confidence on hybrid/semantic metrics</span>
-                          </div>
-                        </div>
-                      )}
-                      {insights.length > 0 ? <InsightBox lines={insights} /> : (
-                        <div style={{ marginTop: 14, padding: "12px 16px", background: "var(--bg-input)", borderRadius: 10, fontSize: 12, color: "var(--text-faint)" }}>AI guidance is not available for this dimension yet.</div>
-                      )}
-                    </div>
-                  );
-                })
-              ) : null}
-            </>
-          )}
-
-          {!selectedId && !loadingSummary && summary && summary.repos.length === 0 && (
-            <div style={{ textAlign: "center", padding: "60px 20px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 16 }}>
-              <div style={{ width: 60, height: 60, borderRadius: 16, background: `${accent}15`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="4. Duplication" title="Duplicated Code" description="Duplicated lines, blocks, and files." />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 14, marginBottom: 18 }}>
+                <Metric label="Duplicated Lines" value={fmt(detail.duplication?.duplicated_lines)} />
+                <Metric label="Duplicated Blocks" value={fmt(detail.duplication?.duplicated_blocks)} />
+                <Metric label="Duplicated Files" value={fmt(detail.duplication?.duplicated_files)} />
               </div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-secondary)", marginBottom: 6 }}>No contribution analyses yet</div>
-              <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Connect GitHub and analyze a repository where your account has commits.</div>
-            </div>
-          )}
+              <Card style={{ padding: "22px 24px", boxShadow: "none", marginBottom: duplicatedFiles.length ? 18 : 0 }}><div style={{ fontSize: 28, fontWeight: 900, marginBottom: 12 }}>{pct(detail.duplication?.percentage ?? current?.duplication_percentage)}</div><ProgressBar value={detail.duplication?.percentage ?? current?.duplication_percentage} tone={(detail.duplication?.percentage || 0) > 10 ? danger : warning} /></Card>
+              {duplicatedFiles.length > 0 && <Table headers={[{ label: "File", width: "58%" }, { label: "Duplication %", align: "right", width: "21%" }, { label: "Duplicated Lines", align: "right", width: "21%" }]}>{duplicatedFiles.map(f => <Row key={f.file || "file"}><Cell>{f.file}</Cell><Cell align="right">{pct(f.duplication)}</Cell><Cell align="right">{fmt(f.duplicated_lines)}</Cell></Row>)}</Table>}
+            </Card>
 
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="5. Complexity" title="Code Complexity" description="Cyclomatic and cognitive complexity across files and functions." />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: showComplexityTables ? 18 : 0 }}>
+                <Metric label="Cyclomatic Complexity" value={fmt(detail.complexity?.cyclomatic_complexity)} />
+                <Metric label="Cognitive Complexity" value={fmt(detail.complexity?.cognitive_complexity ?? current?.cognitive_complexity)} />
+              </div>
+              {showComplexityTables && <div style={{ display: "grid", gridTemplateColumns: complexityGridColumns, gap: 18 }}>
+                {complexFiles.length > 0 && <Table headers={[{ label: "File", width: "46%" }, { label: "Cyclomatic Complexity", align: "right", width: "22%" }, { label: "Cognitive Complexity", align: "right", width: "22%" }, { label: "Functions", align: "right", width: "10%" }]}>{complexFiles.map(f => <Row key={f.file || "file"}><Cell>{f.file}</Cell><Cell align="right">{fmt(f.complexity)}</Cell><Cell align="right">{fmt(f.cognitive_complexity)}</Cell><Cell align="right">{fmt(f.functions)}</Cell></Row>)}</Table>}
+                {complexFunctions.length > 0 && <Table headers={[{ label: "Function", width: "72%" }, { label: "Complexity", align: "right", width: "28%" }]}>{complexFunctions.map(fn => <Row key={`${fn.file}-${fn.function}`}><Cell>{fn.function}()<div style={{ fontSize: 11, color: "var(--text-muted)" }}>{fn.file}</div></Cell><Cell align="right">{fmt(fn.complexity)}</Cell></Row>)}</Table>}
+              </div>}
+            </Card>
+
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="6. Project Size" title="Repository Size" description="High-level size metrics collected from SonarQube." />
+              <Table headers={[{ label: "Metric", width: "70%" }, { label: "Value", align: "right", width: "30%" }]}>{[
+                ["Lines of Code", detail.project_size?.lines_of_code],
+                ["Files", detail.project_size?.files],
+                ["Functions", detail.project_size?.functions],
+                ["Classes", detail.project_size?.classes],
+                ["Statements", detail.project_size?.statements],
+              ].map(([label, value]) => <Row key={label as string}><Cell>{label}</Cell><Cell align="right">{fmt(value as number | null | undefined)}</Cell></Row>)}</Table>
+            </Card>
+
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="7. Issues Explorer" title="Search Issues" description="Filter SonarQube BUG and CODE_SMELL issues by type or file." right={<Badge>{filteredIssues.length} shown</Badge>} />
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+                {[["ALL", "All"], ["BUG", "Bugs"], ["CODE_SMELL", "Code Smells"], ["RELIABILITY", "Reliability"]].map(([key, label]) => <button key={key} className={`filter-btn ${filter === key ? "active" : ""}`} onClick={() => setFilter(key as typeof filter)}>{label}</button>)}
+                <input className="sp-search" placeholder="🔍 Search file..." value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginLeft: "auto", minWidth: 240 }} />
+              </div>
+              {filteredIssues.length ? <Table headers={[{ label: "Type", width: "18%" }, { label: "Severity", width: "18%" }, { label: "File", width: "50%" }, { label: "Line", align: "right", width: "14%" }]}>{filteredIssues.slice(0, 50).map((i, idx) => <Row key={idx} onClick={() => setSelectedIssue(i)}><Cell><Badge tone={i.type === "BUG" ? danger : accent}>{issueTypeLabel(i.type)}</Badge></Cell><Cell><Badge tone={severityTone(i.severity)}>{i.severity}</Badge></Cell><Cell>{i.file || "n/a"}</Cell><Cell align="right">{fmt(i.line)}</Cell></Row>)}</Table> : <EmptyState text="No issues match the current filters." />}
+            </Card>
+
+            <Card style={{ padding: "24px 28px" }}>
+              <SectionTitle kicker="8. Analysis Summary" title="Repository Summary" description="Important quality signals and recommended next actions." />
+              <div style={{ display: "grid", gap: 9, fontSize: 14, marginBottom: 18 }}>
+                <div>Overall Score {fmt(skillScore)} - {skillScoreLevel}</div>
+                <div>✅ Maintainability Rating {fmt(detail.maintainability?.rating ?? current?.maintainability_rating)}</div>
+                <div>{bugSeverity.critical || bugSeverity.major ? "⚠" : "✅"} Reliability Rating {fmt(detail.reliability?.rating ?? current?.reliability_rating)}</div>
+                <div>{!coverageAvailable ? `ℹ Coverage unavailable: ${coverageReason}` : (coverageValue || 0) < 80 ? "⚠ Coverage below target" : "✅ Coverage looks healthy"}</div>
+                <div>{(detail.duplication?.percentage || 0) > 5 ? "⚠ Duplication higher than recommended" : "✅ Duplication is under control"}</div>
+              </div>
+              <div className="sp-label" style={{ marginBottom: 10 }}>Recommendations</div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text-secondary)", lineHeight: 1.8 }}>{recommendations.map(item => <li key={item}>{item}</li>)}</ul>
+            </Card>
+          </>}
         </div>
       </div>
+
+      {selectedIssue && <div onClick={() => setSelectedIssue(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 200, display: "flex", justifyContent: "flex-end" }}>
+        <aside onClick={(e) => e.stopPropagation()} style={{ width: "min(420px, 92vw)", height: "100%", background: "var(--bg-base)", borderLeft: "1px solid var(--border)", padding: 24, boxShadow: "var(--shadow-card)", overflowY: "auto" }}>
+          <button onClick={() => setSelectedIssue(null)} style={{ float: "right", border: "1px solid var(--border)", background: "var(--bg-input)", color: "var(--text-primary)", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Close</button>
+          <div className="sp-label">Issue</div>
+          <h2 style={{ fontFamily: "'Syne',sans-serif", margin: "8px 0 16px" }}>{selectedIssue.message}</h2>
+          <div style={{ display: "grid", gap: 14, color: "var(--text-secondary)", fontSize: 14 }}>
+            <div><strong style={{ color: "var(--text-primary)" }}>Type:</strong><br />{issueTypeLabel(selectedIssue.type)}</div>
+            <div><strong style={{ color: "var(--text-primary)" }}>Severity:</strong><br />{selectedIssue.severity}</div>
+            <div><strong style={{ color: "var(--text-primary)" }}>File:</strong><br />{selectedIssue.file || "n/a"}</div>
+            <div><strong style={{ color: "var(--text-primary)" }}>Line:</strong><br />{fmt(selectedIssue.line)}</div>
+            <div><strong style={{ color: "var(--text-primary)" }}>Estimated Fix:</strong><br />Review the affected code, split complex logic into smaller functions, and add tests before rerunning analysis.</div>
+          </div>
+        </aside>
+      </div>}
     </DashboardLayout>
   );
 }

@@ -855,7 +855,7 @@ export default function ManagerProfile() {
                   <section className="mp-card">
                     <div className="mp-card-top"><span>Team Health</span><Sparkles size={18} /></div>
                     <strong>{Math.round(overview.team_health || 0)}%</strong>
-                    <small>Average team score</small>
+                    <small>Average Sonar health</small>
                   </section>
                 </div>
               </section>

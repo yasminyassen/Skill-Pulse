@@ -6,9 +6,10 @@ from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.models import AnalysisRun, RecruiterCandidate, Repository, RepositoryAnalysis, SkillScore, User
+from app.db.models import AnalysisRun, RecruiterCandidate, Repository, RepositoryAnalysis, User
 from app.services.analysis_orchestrator import background_analysis_task
 from app.services.github_client import get_branch_head_sha, verify_repo_access
+from app.services.sonarqube_score_service import build_sonar_repo_summary
 
 logger = logging.getLogger(__name__)
 
@@ -106,16 +107,9 @@ async def schedule_recruiter_repo_analysis(
     if not needs_reanalysis and existing_analysis:
         existing_score = None
         if existing_analysis.last_run_id:
-            score_row = (
-                db.query(SkillScore)
-                .filter(
-                    SkillScore.analysis_run_id == existing_analysis.last_run_id,
-                    SkillScore.user_id == current_user.id,
-                )
-                .first()
-            )
-            if score_row:
-                existing_score = score_row.overall_score
+            existing_run = db.query(AnalysisRun).filter(AnalysisRun.id == existing_analysis.last_run_id).first()
+            if existing_run:
+                existing_score = build_sonar_repo_summary(existing_run).get("sonar_health_score")
 
         return {
             "scheduled": False,
@@ -130,7 +124,7 @@ async def schedule_recruiter_repo_analysis(
             "latest_commit_sha": existing_analysis.latest_commit_sha,
             "analyzed_at": existing_analysis.analyzed_at,
             "analysis_version": existing_analysis.analysis_version,
-            "overall_score": existing_score,
+            "sonar_health_score": existing_score,
         }
 
     run = AnalysisRun(
@@ -212,5 +206,5 @@ async def schedule_recruiter_repo_analysis(
         "latest_commit_sha": head_sha,
         "analyzed_at": None,
         "analysis_version": analysis_version,
-        "overall_score": None,
+        "sonar_health_score": None,
     }

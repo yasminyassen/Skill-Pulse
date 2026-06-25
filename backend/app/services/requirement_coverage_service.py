@@ -53,6 +53,7 @@ def get_latest_successful_analysis(db: Session, repository_id: int) -> AnalysisR
         db.query(AnalysisRun)
         .filter(
             AnalysisRun.repository_id == repository_id,
+            AnalysisRun.analysis_scope == "repository",
             AnalysisRun.status == "completed",
         )
         .order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc())
@@ -63,7 +64,10 @@ def get_latest_successful_analysis(db: Session, repository_id: int) -> AnalysisR
 def ensure_repository_ready_for_requirements(db: Session, repository_id: int) -> AnalysisRun:
     latest = (
         db.query(AnalysisRun)
-        .filter(AnalysisRun.repository_id == repository_id)
+        .filter(
+            AnalysisRun.repository_id == repository_id,
+            AnalysisRun.analysis_scope == "repository",
+        )
         .order_by(AnalysisRun.triggered_at.desc())
         .first()
     )

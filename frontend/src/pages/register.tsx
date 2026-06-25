@@ -24,7 +24,7 @@ function useAuthTheme() {
 }
 
 const Register: React.FC = () => {
-  const { theme, toggle, isLight } = useAuthTheme();
+  const { toggle, isLight } = useAuthTheme();
 
   const [form, setForm] = useState({ username: '', full_name: '', work_email: '', role: '', specialization: '', password: '', confirm_password: '' });
   const [focused, setFocused] = useState<string | null>(null);

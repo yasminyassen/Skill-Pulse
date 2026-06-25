@@ -1,513 +1,483 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import type { ReactNode } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/auth";
 import DashboardLayout from "./DashboardLayout";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 interface AnalysisResult {
-  analysis_run_id: number;
-  repo: string;
-  branch: string;
+  analysis_run_id?: number;
+  repo?: string;
+  branch?: string;
   status: string;
-  scores: {
-    code_quality: number;
-    maintainability: number;
-    architecture: number;
-    security_score: number;
-    problem_solving: number;
-    overall: number;
+  completed_at?: string | null;
+  error_reason?: string;
+  message?: string;
+}
+
+interface SonarIssue {
+  type: "BUG" | "CODE_SMELL" | string;
+  severity: string;
+  file: string | null;
+  line: number | null;
+  message: string;
+}
+
+interface SonarDashboard {
+  repository: {
+    name: string;
+    full_name: string;
+    branch: string;
+    analysis_date: string | null;
   };
-  security_findings_count: number;
-  ai_insights: Record<string, any>;
-  completed_at: string | null;
+  overall: {
+    skill_score: number | null;
+    skill_score_level: string;
+    sonar_health_score: number | null;
+    sonar_state: string;
+    quality_gate: {
+      status?: string;
+      conditions?: Array<{
+        metricKey?: string;
+        comparator?: string;
+        errorThreshold?: string;
+        actualValue?: string;
+        status?: string;
+      }>;
+    };
+  };
+  reliability: {
+    rating: string | null;
+    total_bugs: number;
+    issues: SonarIssue[];
+  };
+  maintainability: {
+    rating: string | null;
+    code_smells: number;
+    technical_debt_minutes: number;
+    debt_ratio: number;
+    issues: SonarIssue[];
+  };
+  coverage: {
+    coverage: number;
+    line_coverage: number;
+    branch_coverage: number;
+    uncovered_lines: number;
+  };
+  duplication: {
+    percentage: number;
+    duplicated_lines: number;
+    duplicated_blocks: number;
+    duplicated_files: number;
+  };
+  complexity: {
+    cyclomatic_complexity: number;
+    cognitive_complexity: number;
+  };
+  project_size: {
+    lines_of_code: number;
+    files: number;
+    functions: number;
+    classes: number;
+  };
+  issues_explorer: SonarIssue[];
+  analysis_summary: {
+    source: string;
+    project_key: string | null;
+    metrics_count: number;
+    issues_count: number;
+  };
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const scoreColor = (s: number) => {
-  if (s >= 80) return "#34d399";
-  if (s >= 60) return "#fbbf24";
-  if (s >= 40) return "#fb923c";
-  return "#f87171";
-};
-
-const scoreGradient = (s: number) => {
-  if (s >= 80) return "linear-gradient(135deg,#34d399,#059669)";
-  if (s >= 60) return "linear-gradient(135deg,#fbbf24,#d97706)";
-  if (s >= 40) return "linear-gradient(135deg,#fb923c,#ea580c)";
-  return "linear-gradient(135deg,#f87171,#dc2626)";
-};
-
-const scoreLabel = (s: number) => {
-  if (s >= 85) return "Excellent";
-  if (s >= 70) return "Good";
-  if (s >= 50) return "Average";
-  if (s >= 30) return "Poor";
-  return "Critical";
-};
-
-const clamp = (v: number) => Math.max(0, Math.min(100, Math.round(v)));
-
-// ─── Score Ring ───────────────────────────────────────────────────────────────
-
-function ScoreRing({ value, size = 120, stroke = 6, label, delay = 0 }: {
-  value: number; size?: number; stroke?: number; label?: string; delay?: number;
-}) {
-  const [animated, setAnimated] = useState(0);
-  const color = scoreColor(value);
-  const r = (size - stroke * 2) / 2;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (animated / 100) * circ;
-
-  useEffect(() => {
-    const t = setTimeout(() => setAnimated(clamp(value)), 100 + delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-
-  return (
-    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
-      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
-        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border)" strokeWidth={stroke} />
-        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round"
-          strokeDasharray={circ} strokeDashoffset={offset}
-          style={{ transition: `stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1) ${delay}ms` }}
-        />
-      </svg>
-      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ fontSize: size * 0.22, fontWeight: 900, color, lineHeight: 1, fontFamily: "'Syne',sans-serif" }}>{clamp(value)}</span>
-        {label && (
-          <span style={{ fontSize: size * 0.09, color: "var(--text-muted)", marginTop: 3, letterSpacing: "0.5px", textTransform: "uppercase" }}>{label}</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Score Bar ────────────────────────────────────────────────────────────────
-
-function ScoreBar({ label, value, delay = 0, icon }: {
-  label: string; value: number; delay?: number; icon?: React.ReactNode;
-}) {
-  const [width, setWidth] = useState(0);
-  const color = scoreColor(value);
-
-  useEffect(() => {
-    const t = setTimeout(() => setWidth(clamp(value)), 200 + delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {icon && (
-            <div style={{ width: 28, height: 28, borderRadius: "8px", background: `${color}18`, border: `1px solid ${color}30`, display: "flex", alignItems: "center", justifyContent: "center", color }}>
-              {icon}
-            </div>
-          )}
-          <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-secondary)" }}>{label}</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", color, padding: "2px 7px", borderRadius: "999px", background: `${color}15`, border: `1px solid ${color}30` }}>
-            {scoreLabel(value)}
-          </span>
-          <span style={{ fontSize: "18px", fontWeight: 800, color, fontFamily: "'Syne',sans-serif", minWidth: 32, textAlign: "right" }}>
-            {clamp(value)}
-          </span>
-        </div>
-      </div>
-      <div style={{ height: "8px", borderRadius: "999px", background: "var(--border)", overflow: "hidden" }}>
-        <div style={{ height: "100%", borderRadius: "999px", background: scoreGradient(value), width: `${width}%`, transition: `width 1s cubic-bezier(.4,0,.2,1) ${delay}ms`, boxShadow: `0 0 12px ${color}50` }} />
-      </div>
-    </div>
-  );
-}
-
-// ─── Insight Card ─────────────────────────────────────────────────────────────
-
-function InsightCard({ title, content, accent = "#6366f1", icon, delay = 0 }: {
-  title: string; content: string | string[]; accent?: string; icon: React.ReactNode; delay?: number;
-}) {
-  const items = Array.isArray(content) ? content : [content];
-  return (
-    <div className="insight-card" style={{ padding: "20px 22px", borderRadius: "16px", background: `${accent}08`, border: `1px solid ${accent}20`, animationDelay: `${delay}ms` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
-        <div style={{ width: 32, height: 32, borderRadius: "9px", background: `${accent}18`, border: `1px solid ${accent}30`, display: "flex", alignItems: "center", justifyContent: "center", color: accent }}>
-          {icon}
-        </div>
-        <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", letterSpacing: "0.2px" }}>{title}</span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        {items.map((item, i) => (
-          <div key={i} style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
-            <div style={{ width: 5, height: 5, borderRadius: "50%", background: accent, flexShrink: 0, marginTop: 6 }} />
-            <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0, lineHeight: 1.7 }}>{item}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Stat Pill ────────────────────────────────────────────────────────────────
-
-function StatPill({ label, value, color = "var(--text-secondary)" }: {
-  label: string; value: string | number; color?: string;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "14px 20px", borderRadius: "12px", background: "var(--bg-card-hover)", border: "1px solid var(--border)", gap: "4px", minWidth: 90 }}>
-      <span style={{ fontSize: "20px", fontWeight: 800, color, fontFamily: "'Syne',sans-serif" }}>{value}</span>
-      <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</span>
-    </div>
-  );
-}
-
-// ─── Icons ────────────────────────────────────────────────────────────────────
 
 const Icons = {
-  code:      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
-  wrench:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>,
-  blueprint: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>,
-  brain:     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9.5 2a2.5 2.5 0 0 1 5 0v.5"/><path d="M2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10H2z"/><path d="M12 12V6.5"/></svg>,
-  shield:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
-  star:      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
-  warning:   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
-  check:     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>,
-  lightbulb: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="9" y1="18" x2="15" y2="18"/><line x1="10" y1="22" x2="14" y2="22"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>,
-  chart:     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  back: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6" /></svg>,
+  pulse: <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>,
+  alert: <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>,
+  gate: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 21V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14" /><path d="M9 21v-8h6v8" /><path d="M8 9h.01M12 9h.01M16 9h.01" /></svg>,
+  bug: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="8" height="14" x="8" y="6" rx="4" /><path d="m19 7-3 2M5 7l3 2M19 19l-3-2M5 19l3-2M20 13h-4M4 13h4M10 4l1 2M14 4l-1 2" /></svg>,
+  wrench: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></svg>,
+  coverage: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M2 12h20" /><circle cx="12" cy="12" r="8" /></svg>,
+  copy: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="8" height="8" x="8" y="8" /><path d="M4 4h8v4M12 16v4h8v-8h-4" /></svg>,
+  complexity: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="3" /><circle cx="18" cy="6" r="3" /><circle cx="12" cy="18" r="3" /><path d="M8.5 7.5 11 15M15.5 7.5 13 15" /></svg>,
+  size: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 7h16M4 12h16M4 17h10" /></svg>,
+  list: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>,
 };
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+const formatNumber = (value: number | null | undefined) =>
+  value === null || value === undefined ? "n/a" : new Intl.NumberFormat().format(value);
+
+const formatPercent = (value: number | null | undefined) =>
+  value === null || value === undefined ? "n/a" : `${Number(value).toFixed(1)}%`;
+
+const formatMinutes = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return "n/a";
+  if (value < 60) return `${formatNumber(value)} min`;
+  return `${Math.round(value / 60)} h`;
+};
+
+const formatRating = (value: string | null | undefined) => {
+  if (!value) return "n/a";
+  const ratings: Record<string, string> = { "1": "A", "2": "B", "3": "C", "4": "D", "5": "E" };
+  const normalized = String(Number(value));
+  return ratings[normalized] ? `${ratings[normalized]} (${value})` : value;
+};
+
+const formatDate = (value: string | null | undefined) => {
+  if (!value) return "n/a";
+  return new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+
+function StatPill({ label, value, color = "var(--text-secondary)" }: { label: string; value: string | number; color?: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "14px 18px", borderRadius: 8, background: "var(--bg-card-hover)", border: "1px solid var(--border)", gap: 4, minWidth: 96 }}>
+      <span style={{ fontSize: 20, fontWeight: 800, color, fontFamily: "'Syne',sans-serif" }}>{value}</span>
+      <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0 }}>{label}</span>
+    </div>
+  );
+}
+
+function Section({ title, icon, children, delay = 0 }: { title: string; icon: ReactNode; children: ReactNode; delay?: number }) {
+  return (
+    <section className="fade-up ad-section" style={{ animationDelay: `${delay}ms` }}>
+      <h2 className="ad-section-title">
+        <span style={{ color: "#6366f1" }}>{icon}</span>
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function MetricTile({ label, value, tone = "var(--text-secondary)" }: { label: string; value: string | number; tone?: string }) {
+  return (
+    <div style={{ padding: "14px 16px", borderRadius: 8, background: "var(--bg-card-hover)", border: "1px solid var(--border)", minHeight: 78 }}>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: tone, fontFamily: "'Syne',sans-serif" }}>{value}</div>
+    </div>
+  );
+}
+
+function MetricGrid({ items }: { items: Array<{ label: string; value: string | number; tone?: string }> }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+      {items.map((item) => (
+        <MetricTile key={item.label} label={item.label} value={item.value} tone={item.tone} />
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div style={{ textAlign: "center", padding: "56px 28px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 12 }}>
+      <div style={{ width: 64, height: 64, borderRadius: 16, background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px", color: "#818cf8" }}>
+        {Icons.alert}
+      </div>
+      <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: 22, fontWeight: 800, color: "var(--text-primary)", margin: "0 0 10px" }}>{title}</h2>
+      <p style={{ fontSize: 14, color: "var(--text-muted)", margin: "0 0 24px", lineHeight: 1.7 }}>{detail}</p>
+    </div>
+  );
+}
+
+function IssuesExplorer({ issues }: { issues: SonarIssue[] }) {
+  if (!issues.length) {
+    return <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 13 }}>No BUG or CODE_SMELL issues were returned by SonarQube.</p>;
+  }
+
+  return (
+    <div className="ad-table-wrap">
+      <table className="ad-table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Severity</th>
+            <th>File</th>
+            <th className="ad-cell-right">Line</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {issues.map((issue, index) => (
+            <tr key={`${issue.type}-${issue.file}-${issue.line}-${index}`}>
+              <td><span className={`ad-issue-chip ${issue.type === "BUG" ? "bug" : "smell"}`}>{issue.type}</span></td>
+              <td><span className="ad-severity-chip">{issue.severity}</span></td>
+              <td className="ad-file-cell">{issue.file || "n/a"}</td>
+              <td className="ad-cell-right">{issue.line || "n/a"}</td>
+              <td className="ad-message-cell">{issue.message}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export default function AnalysisDetail() {
   const { analysisId } = useParams<{ analysisId: string }>();
   const navigate = useNavigate();
   const role = localStorage.getItem("role") || "developer";
-
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [polling, setPolling] = useState(false);
-  const [securityVisible, setSecurityVisible] = useState(true);
-
   const dashboardPath = `/dashboard/${role}/analysis`;
 
-  useEffect(() => {
-    if (role === "recruiter") {
-      api.get("/recruiter/profile-dashboard")
-        .then((res) => {
-          const u = res.data?.user;
-          if (u && u.security_score_visible !== undefined) setSecurityVisible(u.security_score_visible);
-        })
-        .catch(() => {});
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [sonar, setSonar] = useState<SonarDashboard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [sonarLoading, setSonarLoading] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [polling, setPolling] = useState(false);
+  const [sonarError, setSonarError] = useState("");
+
+  const fetchSonarDashboard = async () => {
+    if (!analysisId) return;
+    setSonarLoading(true);
+    setSonarError("");
+    try {
+      const res = await api.get(`/analysis/${analysisId}/sonar-dashboard`);
+      setSonar(res.data);
+    } catch (err: any) {
+      setSonar(null);
+      setSonarError(err?.response?.data?.detail || "SonarQube dashboard data is not available for this run.");
+    } finally {
+      setSonarLoading(false);
     }
-  }, [role]);
+  };
 
   useEffect(() => {
-    if (!analysisId) { setNotFound(true); setLoading(false); return; }
+    if (!analysisId) {
+      setNotFound(true);
+      setLoading(false);
+      return;
+    }
+
     const fetchResult = async () => {
       try {
         const res = await api.get(`/analysis/${analysisId}`);
-        const data = res.data;
-        if (data.status === "pending" && !data.analysis_run_id) { setNotFound(true); setLoading(false); return; }
-        setResult(data); setLoading(false);
+        const data: AnalysisResult = res.data;
+        if (data.status === "pending" && !data.analysis_run_id) {
+          setNotFound(true);
+          setLoading(false);
+          return;
+        }
+        setResult(data);
         setPolling(data.status === "running" || data.status === "pending");
+        setLoading(false);
+        if (data.status === "completed") {
+          await fetchSonarDashboard();
+        }
       } catch (err: any) {
-        if (err.response?.status === 401) { localStorage.clear(); window.location.href = "/login"; return; }
-        setNotFound(true); setLoading(false);
+        if (err.response?.status === 401) {
+          localStorage.clear();
+          window.location.href = "/login";
+          return;
+        }
+        setNotFound(true);
+        setLoading(false);
       }
     };
+
     fetchResult();
   }, [analysisId]);
 
   useEffect(() => {
     if (!polling || !analysisId) return;
-    const iv = setInterval(async () => {
+    const iv = window.setInterval(async () => {
       try {
         const res = await api.get(`/analysis/${analysisId}`);
-        setResult(res.data);
-        if (res.data.status === "completed" || res.data.status === "failed") {
-          setPolling(false); clearInterval(iv);
+        const data: AnalysisResult = res.data;
+        setResult(data);
+        if (data.status === "completed" || data.status === "failed") {
+          setPolling(false);
+          window.clearInterval(iv);
+          if (data.status === "completed") {
+            await fetchSonarDashboard();
+          }
         }
-      } catch { clearInterval(iv); }
+      } catch {
+        window.clearInterval(iv);
+      }
     }, 3000);
-    return () => clearInterval(iv);
+    return () => window.clearInterval(iv);
   }, [polling, analysisId]);
 
-  const repoName = result?.repo?.split("/").pop() ?? result?.repo ?? "Repository";
-  const repoOrg  = result?.repo?.split("/")[0] ?? "";
-  const insights = result?.ai_insights ?? {};
-
-  const getInsightArr = (key: string): string[] => {
-    const val = insights[key];
-    if (!val) return [];
-    if (Array.isArray(val)) return val.map(String);
-    if (typeof val === "string") return val.split(/\n|•|\-/).map(s => s.trim()).filter(Boolean);
-    return [String(val)];
-  };
-
-  const strengths    = getInsightArr("strengths")    || getInsightArr("strong_points");
-  const improvements = getInsightArr("improvements") || getInsightArr("weaknesses") || getInsightArr("areas_for_improvement");
-  const summary      = typeof insights.summary === "string" ? insights.summary : null;
-  const recommendations = getInsightArr("recommendations") || getInsightArr("suggestions");
-
-  const knownKeys = new Set(["summary","strengths","strong_points","improvements","weaknesses","areas_for_improvement","recommendations","suggestions"]);
-  const extraInsights = Object.entries(insights).filter(([k]) => !knownKeys.has(k));
+  const repoName = sonar?.repository.name ?? result?.repo?.split("/").pop() ?? result?.repo ?? "Repository";
+  const repoFullName = sonar?.repository.full_name ?? result?.repo ?? "Repository";
+  const branch = sonar?.repository.branch ?? result?.branch ?? "main";
+  const skillScore = sonar?.overall.skill_score ?? null;
+  const skillScoreLevel = sonar?.overall.skill_score_level ?? "Unavailable";
 
   return (
     <DashboardLayout>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
-
-        @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-        @keyframes shimmer { 0%{background-position:100% 50%} 100%{background-position:0% 50%} }
-        @keyframes fadeUp  { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes pulse   { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.8)} }
-        @keyframes glow    { 0%,100%{box-shadow:0 0 20px rgba(99,102,241,0.15)} 50%{box-shadow:0 0 40px rgba(99,102,241,0.35)} }
-
-        .sk {
-          background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
-          background-size: 400% 100%;
-          animation: shimmer 1.5s ease-in-out infinite;
-        }
-        .fade-up   { opacity: 0; animation: fadeUp 0.55s cubic-bezier(.22,1,.36,1) forwards; }
-        .insight-card { opacity: 0; animation: fadeUp 0.55s cubic-bezier(.22,1,.36,1) forwards; }
-        .pulse     { animation: pulse 1.4s ease-in-out infinite; }
-        .glow      { animation: glow 2.5s ease-in-out infinite; }
-
+        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes glow { 0%,100%{box-shadow:0 0 20px rgba(99,102,241,0.15)} 50%{box-shadow:0 0 40px rgba(99,102,241,0.35)} }
+        .fade-up { opacity: 0; animation: fadeUp 0.55s cubic-bezier(.22,1,.36,1) forwards; }
+        .glow { animation: glow 2.5s ease-in-out infinite; }
         .back-btn:hover { background: var(--bg-card-hover) !important; color: var(--text-primary) !important; }
-        .tag-btn:hover  { background: rgba(99,102,241,0.15) !important; }
-        .score-card     { transition: transform 0.2s, border-color 0.2s; }
-        .score-card:hover { transform: translateY(-2px); border-color: var(--border-hover) !important; }
-
-        .ad-section {
-          padding: 26px 28px; border-radius: 22px;
-          background: var(--bg-card); border: 1px solid var(--border);
-          transition: background 0.3s ease, border-color 0.3s ease;
-        }
-        .ad-section-title {
-          font-family: "'Syne',sans-serif"; font-size: 15px; font-weight: 800;
-          color: var(--text-primary); margin: 0 0 20px;
-          display: flex; align-items: center; gap: 8px;
+        .ad-section { padding: 24px 26px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); }
+        .ad-table-wrap { overflow-x: auto; border: 1px solid rgba(148,163,184,.14); border-radius: 16px; background: rgba(255,255,255,.018); }
+        .ad-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 720px; }
+        .ad-table th { text-align: left; padding: 14px 16px; color: rgba(148,163,184,.82); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .72px; background: rgba(255,255,255,.035); border-bottom: 1px solid rgba(148,163,184,.13); }
+        .ad-table td { padding: 15px 16px; color: var(--text-secondary); font-size: 13.5px; line-height: 1.45; vertical-align: top; border-top: 1px solid rgba(148,163,184,.09); }
+        .ad-table tbody tr:first-child td { border-top: none; }
+        .ad-table tbody tr:hover td { background: rgba(99,102,241,.08); color: var(--text-primary); }
+        .ad-cell-right { text-align: right !important; white-space: nowrap; }
+        .ad-file-cell { max-width: 260px; overflow-wrap: anywhere; color: var(--text-muted) !important; }
+        .ad-message-cell { min-width: 280px; }
+        .ad-issue-chip, .ad-severity-chip { display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 900; white-space: nowrap; }
+        .ad-issue-chip.bug { color: #f87171; background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.23); }
+        .ad-issue-chip.smell { color: #818cf8; background: rgba(99,102,241,.13); border: 1px solid rgba(99,102,241,.24); }
+        .ad-severity-chip { color: #fbbf24; background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.22); }
+        .ad-section-title { font-family: 'Syne',sans-serif; font-size: 15px; font-weight: 800; color: var(--text-primary); margin: 0 0 18px; display: flex; align-items: center; gap: 8px; }
+        @media (max-width: 720px) {
+          .hero-wrap { flex-direction: column; align-items: flex-start !important; }
+          .hero-stats { width: 100%; align-items: stretch !important; }
         }
       `}</style>
 
-      <div style={{
-        minHeight: "100vh",
-        padding: "32px 40px 80px",
-        fontFamily: "'DM Sans', sans-serif",
-        color: "var(--text-primary)",
-        background: "var(--bg-gradient)",
-        maxWidth: 900,
-        transition: "background 0.3s ease",
-      }}>
-
-        {/* ── Back ── */}
-        <div style={{ display: "flex", alignItems: "center", gap: "14px", marginBottom: "32px" }}>
-          <button className="back-btn" onClick={() => navigate(dashboardPath)} style={{ width: 38, height: 38, borderRadius: "11px", border: "1px solid var(--border)", background: "var(--bg-card)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "all 0.15s" }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+      <div style={{ minHeight: "100vh", padding: "32px 20px 56px", fontFamily: "'DM Sans', sans-serif", color: "var(--text-primary)", background: "var(--bg-gradient)", maxWidth: 980, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 28 }}>
+          <button className="back-btn" onClick={() => navigate(dashboardPath)} style={{ width: 38, height: 38, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-card)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "all 0.15s" }}>
+            {Icons.back}
           </button>
           <div>
-            <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: "21px", fontWeight: 800, color: "var(--text-primary)", margin: 0, letterSpacing: "-0.4px" }}>
-              {loading ? "Loading…" : notFound ? "Not Found" : repoName}
+            <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>
+              {loading ? "Loading..." : notFound ? "Not Found" : repoName}
             </h1>
-            {result && (
-              <p style={{ fontSize: "11.5px", color: "var(--text-muted)", margin: "2px 0 0" }}>
-                {result.repo} · {result.branch}
+            {!notFound && (
+              <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "2px 0 0" }}>
+                {repoFullName} / {branch}
               </p>
             )}
           </div>
         </div>
 
-        {/* ── Loading ── */}
         {loading && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            <div className="sk" style={{ height: 160, borderRadius: 20 }} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              <div className="sk" style={{ height: 260, borderRadius: 20 }} />
-              <div className="sk" style={{ height: 260, borderRadius: 20 }} />
-            </div>
-            <div className="sk" style={{ height: 200, borderRadius: 20 }} />
+          <div style={{ display: "grid", gap: 14 }}>
+            {[0, 1, 2].map((item) => (
+              <div key={item} style={{ height: 118, borderRadius: 12, background: "var(--bg-card)", border: "1px solid var(--border)", opacity: 0.7 }} />
+            ))}
           </div>
         )}
 
-        {/* ── Not found ── */}
         {!loading && notFound && (
-          <div style={{ textAlign: "center", padding: "72px 32px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 24 }}>
-            <div style={{ width: 72, height: 72, borderRadius: 20, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.2)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", color: "#f87171" }}>
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            </div>
-            <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: "22px", fontWeight: 800, color: "var(--text-primary)", margin: "0 0 10px" }}>Analysis Not Found</h2>
-            <p style={{ fontSize: "14px", color: "var(--text-muted)", margin: "0 0 28px", maxWidth: 360, marginLeft: "auto", marginRight: "auto", lineHeight: 1.7 }}>
-              This analysis doesn't exist or you don't have permission to view it.
-            </p>
-            <button onClick={() => navigate(dashboardPath)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: "#6366f1", color: "white", fontSize: "13.5px", fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>
-              Back to Analyses
-            </button>
-          </div>
+          <EmptyState title="Analysis Not Found" detail="This analysis does not exist or you do not have permission to view it." />
         )}
 
-        {/* ── Running ── */}
         {!loading && !notFound && result && (result.status === "running" || result.status === "pending") && (
-          <div style={{ textAlign: "center", padding: "72px 32px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 24 }}>
-            <div className="glow" style={{ width: 72, height: 72, borderRadius: 20, background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", color: "#818cf8" }}>
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ animation: "spin 2s linear infinite" }}>
-                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-              </svg>
+          <div style={{ textAlign: "center", padding: "64px 28px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 12 }}>
+            <div className="glow" style={{ width: 72, height: 72, borderRadius: 16, background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", color: "#818cf8" }}>
+              <span style={{ animation: "spin 2s linear infinite", display: "inline-flex" }}>{Icons.pulse}</span>
             </div>
-            <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: "22px", fontWeight: 800, color: "var(--text-primary)", margin: "0 0 10px" }}>Analysis in Progress</h2>
-            <p style={{ fontSize: "14px", color: "var(--text-muted)", margin: "0 0 6px", lineHeight: 1.7 }}>
-              <strong style={{ color: "var(--text-secondary)" }}>{repoName}</strong> is being analyzed right now.
-            </p>
-            <p style={{ fontSize: "13px", color: "var(--text-faint)", margin: "0 0 28px" }}>This page updates automatically.</p>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "var(--text-muted)", fontSize: "12px" }}>
-              <span className="pulse" style={{ width: 6, height: 6, borderRadius: "50%", background: "#6366f1", display: "inline-block" }} />
-              Polling for updates…
-            </div>
+            <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: 22, fontWeight: 800, color: "var(--text-primary)", margin: "0 0 10px" }}>Analysis in Progress</h2>
+            <p style={{ fontSize: 14, color: "var(--text-muted)", margin: 0, lineHeight: 1.7 }}>SonarQube data will appear here when the run completes.</p>
           </div>
         )}
 
-        {/* ── Failed ── */}
         {!loading && !notFound && result?.status === "failed" && (
-          <div style={{ textAlign: "center", padding: "72px 32px", background: "rgba(248,113,113,0.04)", border: "1px solid rgba(248,113,113,0.15)", borderRadius: 24 }}>
-            <div style={{ width: 72, height: 72, borderRadius: 20, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.2)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", color: "#f87171" }}>
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-            </div>
-            <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: "22px", fontWeight: 800, color: "var(--text-primary)", margin: "0 0 10px" }}>Analysis Failed</h2>
-            <p style={{ fontSize: "14px", color: "var(--text-muted)", margin: "0 0 28px", lineHeight: 1.7 }}>
-              Something went wrong analyzing <strong style={{ color: "var(--text-secondary)" }}>{repoName}</strong>.
-            </p>
-            <button onClick={() => navigate(dashboardPath)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: "#6366f1", color: "white", fontSize: "13.5px", fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>
-              Try Again
-            </button>
+          <EmptyState title="Analysis Failed" detail={result.message || "Something went wrong while analyzing this repository."} />
+        )}
+
+        {!loading && !notFound && result?.status === "completed" && sonarLoading && (
+          <div style={{ textAlign: "center", padding: "56px 28px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 12, color: "var(--text-muted)" }}>
+            Loading SonarQube dashboard...
           </div>
         )}
 
-        {/* ── Completed ── */}
-        {!loading && !notFound && result?.status === "completed" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+        {!loading && !notFound && result?.status === "completed" && !sonarLoading && sonarError && (
+          <EmptyState title="SonarQube Data Unavailable" detail={sonarError} />
+        )}
 
-            {/* ── Hero ── */}
-            <div className="fade-up" style={{ padding: "28px 32px", borderRadius: 22, background: "var(--bg-card)", border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 32, animationDelay: "0ms", position: "relative", overflow: "hidden" }}>
-              <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", width: 160, height: 160, borderRadius: "50%", background: `radial-gradient(circle, ${scoreColor(result.scores.overall)}18, transparent 70%)`, pointerEvents: "none" }} />
-
-              <ScoreRing value={result.scores.overall} size={110} stroke={7} label="Overall" />
-
+        {!loading && !notFound && result?.status === "completed" && sonar && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            <div className="fade-up hero-wrap" style={{ padding: "26px 28px", borderRadius: 12, background: "var(--bg-card)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 24, animationDelay: "0ms" }}>
               <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                  <div style={{ padding: "3px 10px", borderRadius: 999, background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", fontSize: "10px", fontWeight: 700, letterSpacing: "0.7px", color: "#818cf8", textTransform: "uppercase" }}>
-                    {repoOrg}
-                  </div>
-                  <div style={{ padding: "3px 10px", borderRadius: 999, background: `${scoreColor(result.scores.overall)}12`, border: `1px solid ${scoreColor(result.scores.overall)}30`, fontSize: "10px", fontWeight: 700, color: scoreColor(result.scores.overall), textTransform: "uppercase" }}>
-                    {scoreLabel(result.scores.overall)}
-                  </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999, background: "rgba(99,102,241,0.12)", color: "#818cf8", fontSize: 11, fontWeight: 800, textTransform: "uppercase" }}>{skillScoreLevel}</span>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 800 }}>Skill Score Engine</span>
                 </div>
-
-                <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: "20px", fontWeight: 800, color: "var(--text-primary)", margin: "0 0 6px" }}>
-                  {repoName}
-                </h2>
-
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 18px", fontSize: "12px", color: "var(--text-muted)", marginBottom: 16 }}>
-                  <span>Branch: <strong style={{ color: "var(--text-secondary)" }}>{result.branch}</strong></span>
-                  <span>Security findings: <strong style={{ color: result.security_findings_count > 0 ? "#f87171" : "#34d399" }}>{result.security_findings_count}</strong></span>
-                  {result.completed_at && (
-                    <span>Completed: <strong style={{ color: "var(--text-secondary)" }}>
-                      {new Date(result.completed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-                    </strong></span>
-                  )}
+                <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: 22, fontWeight: 800, color: "var(--text-primary)", margin: "0 0 8px" }}>{sonar.repository.name}</h2>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 18px", fontSize: 12, color: "var(--text-muted)" }}>
+                  <span>Repository: <strong style={{ color: "var(--text-secondary)" }}>{sonar.repository.full_name}</strong></span>
+                  <span>Branch: <strong style={{ color: "var(--text-secondary)" }}>{sonar.repository.branch}</strong></span>
+                  <span>Analyzed: <strong style={{ color: "var(--text-secondary)" }}>{formatDate(sonar.repository.analysis_date)}</strong></span>
                 </div>
-
-                <button className="tag-btn" onClick={() => navigate(`/dashboard/developer/analysis?highlight=${result.analysis_run_id}`)} style={{ padding: "8px 16px", borderRadius: 9, border: "1px solid rgba(99,102,241,0.3)", background: "rgba(99,102,241,0.08)", color: "#818cf8", fontSize: "12.5px", fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", display: "inline-flex", alignItems: "center", gap: 6, transition: "background 0.15s" }}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                  View in Analysis Dashboard
-                </button>
               </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
-                <StatPill label="Run ID"   value={`#${result.analysis_run_id}`} color="var(--text-secondary)" />
-                <StatPill label="Security" value={result.security_findings_count === 0 ? "Clean" : `${result.security_findings_count} issues`} color={result.security_findings_count === 0 ? "#34d399" : "#f87171"} />
+              <div className="hero-stats" style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <StatPill label="Overall Score" value={skillScore ?? "n/a"} color={skillScore === null ? "#94a3b8" : (skillScore >= 80 ? "#34d399" : skillScore >= 60 ? "#fbbf24" : "#f87171")} />
+                <StatPill label="Score Level" value={skillScoreLevel} />
+                <StatPill label="Issues" value={formatNumber(sonar.analysis_summary.issues_count)} />
               </div>
             </div>
 
-            {/* ── Score Breakdown ── */}
-            <div className="fade-up ad-section" style={{ animationDelay: "80ms" }}>
-              <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: "15px", fontWeight: 800, color: "var(--text-primary)", margin: "0 0 20px", display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ color: "#6366f1" }}>{Icons.chart}</span>
-                Score Breakdown
-              </h2>
+            <Section title="Skill Score Engine" icon={Icons.gate} delay={80}>
+              <MetricGrid items={[
+                { label: "Overall Score", value: skillScore ?? "n/a" },
+                { label: "Score Level", value: skillScoreLevel },
+                { label: "Sonar Health Score", value: sonar.overall.sonar_health_score ?? "n/a" },
+              ]} />
+            </Section>
 
-              {/* Mini ring row */}
-              <div style={{ display: "flex", gap: 16, justifyContent: "space-around", marginBottom: 28, flexWrap: "wrap" }}>
-                {[
-                  { label: "Code",         value: result.scores.code_quality },
-                  { label: "Architecture", value: result.scores.architecture },
-                  { label: "Problem\nSolving", value: result.scores.problem_solving },
-                  { label: "Maintain.",    value: result.scores.maintainability },
-                  ...(securityVisible ? [{ label: "Security", value: result.scores.security_score }] : []),
-                ].map((item, i) => (
-                  <div key={item.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-                    <ScoreRing value={item.value} size={68} stroke={5} delay={i * 100} />
-                    <span style={{ fontSize: "10px", color: "var(--text-muted)", textAlign: "center", whiteSpace: "pre-line", textTransform: "uppercase", letterSpacing: "0.4px" }}>{item.label}</span>
-                  </div>
-                ))}
-              </div>
+            <Section title="Reliability" icon={Icons.bug} delay={120}>
+              <MetricGrid items={[
+                { label: "Reliability Rating", value: formatRating(sonar.reliability.rating) },
+                { label: "Bugs", value: formatNumber(sonar.reliability.total_bugs), tone: sonar.reliability.total_bugs > 0 ? "#f87171" : "#34d399" },
+                { label: "Bug Issues", value: formatNumber(sonar.reliability.issues.length) },
+              ]} />
+            </Section>
 
-              {/* Detailed bars */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 16, borderTop: "1px solid var(--border)", paddingTop: 20 }}>
-                <ScoreBar label="Code Quality"    value={result.scores.code_quality}    delay={0}   icon={Icons.code}      />
-                <ScoreBar label="Architecture"    value={result.scores.architecture}    delay={60}  icon={Icons.blueprint} />
-                <ScoreBar label="Problem Solving" value={result.scores.problem_solving} delay={120} icon={Icons.brain}     />
-                <ScoreBar label="Maintainability" value={result.scores.maintainability} delay={180} icon={Icons.wrench}    />
-                {securityVisible && (
-                  <ScoreBar label="Security" value={result.scores.security_score} delay={240} icon={Icons.shield} />
-                )}
-              </div>
+            <Section title="Maintainability" icon={Icons.wrench} delay={160}>
+              <MetricGrid items={[
+                { label: "Maintainability Rating", value: formatRating(sonar.maintainability.rating) },
+                { label: "Code Smells", value: formatNumber(sonar.maintainability.code_smells) },
+                { label: "Technical Debt", value: formatMinutes(sonar.maintainability.technical_debt_minutes) },
+                { label: "Debt Ratio", value: formatPercent(sonar.maintainability.debt_ratio) },
+              ]} />
+            </Section>
 
-              {/* Security hidden notice */}
-              {!securityVisible && (
-                <div style={{ marginTop: 16, padding: "10px 14px", borderRadius: 10, background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.18)", fontSize: "12px", color: "rgba(251,191,36,0.7)", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                  Security score is hidden by your evaluation settings
-                </div>
-              )}
-            </div>
+            <Section title="Coverage" icon={Icons.coverage} delay={200}>
+              <MetricGrid items={[
+                { label: "Coverage", value: formatPercent(sonar.coverage.coverage) },
+                { label: "Line Coverage", value: formatPercent(sonar.coverage.line_coverage) },
+                { label: "Branch Coverage", value: formatPercent(sonar.coverage.branch_coverage) },
+                { label: "Uncovered Lines", value: formatNumber(sonar.coverage.uncovered_lines) },
+              ]} />
+            </Section>
 
-            {/* ── AI Insights ── */}
-            {(summary || strengths.length > 0 || improvements.length > 0 || recommendations.length > 0) && (
-              <div className="fade-up ad-section" style={{ animationDelay: "160ms" }}>
-                <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: "15px", fontWeight: 800, color: "var(--text-primary)", margin: "0 0 20px", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: "#818cf8" }}>{Icons.lightbulb}</span>
-                  AI Insights
-                </h2>
+            <Section title="Duplication" icon={Icons.copy} delay={240}>
+              <MetricGrid items={[
+                { label: "Duplications", value: formatPercent(sonar.duplication.percentage) },
+                { label: "Duplicated Lines", value: formatNumber(sonar.duplication.duplicated_lines) },
+                { label: "Duplicated Blocks", value: formatNumber(sonar.duplication.duplicated_blocks) },
+                { label: "Duplicated Files", value: formatNumber(sonar.duplication.duplicated_files) },
+              ]} />
+            </Section>
 
-                {summary && (
-                  <div style={{ padding: "14px 16px", borderRadius: 12, background: "var(--bg-card-hover)", border: "1px solid var(--border)", marginBottom: 16, fontSize: "13.5px", color: "var(--text-secondary)", lineHeight: 1.7 }}>
-                    {summary}
-                  </div>
-                )}
+            <Section title="Complexity" icon={Icons.complexity} delay={280}>
+              <MetricGrid items={[
+                { label: "Cyclomatic Complexity", value: formatNumber(sonar.complexity.cyclomatic_complexity) },
+                { label: "Cognitive Complexity", value: formatNumber(sonar.complexity.cognitive_complexity) },
+              ]} />
+            </Section>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                  {strengths.length > 0 && (
-                    <InsightCard title="Strengths" content={strengths} accent="#34d399" icon={Icons.check} delay={0} />
-                  )}
-                  {improvements.length > 0 && (
-                    <InsightCard title="Areas for Improvement" content={improvements} accent="#f87171" icon={Icons.warning} delay={80} />
-                  )}
-                  {recommendations.length > 0 && (
-                    <InsightCard title="Recommendations" content={recommendations} accent="#6366f1" icon={Icons.lightbulb} delay={160} />
-                  )}
-                  {extraInsights.map(([key, val], i) => {
-                    const items = Array.isArray(val) ? val.map(String) : typeof val === "string" ? [val] : [];
-                    if (!items.length) return null;
-                    return (
-                      <InsightCard key={key} title={key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} content={items} accent="#fbbf24" icon={Icons.star} delay={240 + i * 80} />
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            <Section title="Project Size" icon={Icons.size} delay={320}>
+              <MetricGrid items={[
+                { label: "Lines Of Code", value: formatNumber(sonar.project_size.lines_of_code) },
+                { label: "Files", value: formatNumber(sonar.project_size.files) },
+              ]} />
+            </Section>
 
+            <Section title="Issues Explorer" icon={Icons.list} delay={360}>
+              <IssuesExplorer issues={sonar.issues_explorer} />
+            </Section>
+
+            <Section title="Analysis Summary" icon={Icons.gate} delay={400}>
+              <MetricGrid items={[
+                { label: "Source", value: sonar.analysis_summary.source },
+                { label: "Project Key", value: sonar.analysis_summary.project_key || "n/a" },
+                { label: "Metrics", value: formatNumber(sonar.analysis_summary.metrics_count) },
+                { label: "Issues", value: formatNumber(sonar.analysis_summary.issues_count) },
+              ]} />
+            </Section>
           </div>
         )}
       </div>

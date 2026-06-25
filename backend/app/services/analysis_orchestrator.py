@@ -12,24 +12,30 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm.attributes import flag_modified
 from app.db.database import SessionLocal
-from app.db.models import AnalysisRun, Repository, RepositoryAnalysis, SecurityFinding, CodeMetrics, SkillScore, User, UserRole
+from app.db.models import (
+    AnalysisRun,
+    CodeMetrics,
+    ContributorAnalysisSummary,
+    Repository,
+    RepositoryAnalysis,
+    RepositoryContributor,
+    SecurityFinding,
+    SkillScore,
+    SonarAnalysisSummary,
+    SonarFileMeasure,
+    SonarIssue,
+    User,
+    UserRole,
+)
 from app.services.security.pipeline import run_security_analysis
 from app.services.github_client import (
     read_local_repo_files,
     refresh_github_access_token_for_user,
     fetch_authenticated_github_user,
+    fetch_repository_commit_contributions,
 )
 from app.services.code_intelligence import analyze_python_files
-from app.services.llm_client import (
-    analyze_problem_solving,
-    analyze_skill_scores,
-    analyze_architecture_metrics,
-    LLMError,
-)
-from app.services.architecture_scoring import (
-    compute_static_architecture_metrics,
-    aggregate_architecture_score,
-)
+from app.services.llm_client import LLMError, analyze_skill_gaps_with_llm
 from app.services.metrics import build_unified_schema
 from app.services.learning_recommendations import build_learning_recommendations
 from app.api.manager_dashboard import (
@@ -45,7 +51,8 @@ from ai_services.insights.ai_insights import generate_insights
 from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
 from app.core.auth_utils import decrypt_github_token
 from app.services.security_service import compute_security_score_breakdown, group_findings_by_severity_and_file
-from app.services.code_analysis_service import apply_adjustment, compute_overall_score
+from app.services.sonarqube_service import run_sonar_analysis
+from app.services.sonarqube_score_service import compute_skill_score_engine, compute_sonar_health_score
 
 
 logging.basicConfig(level=logging.INFO)
@@ -139,6 +146,471 @@ class FindingModel(BaseModel):
     line_number: int
     cwe: str
     owasp_category: str
+
+
+def _normalize_repo_path(path: str) -> str:
+    return str(path or "").replace("\\", "/").lstrip("/").strip()
+
+
+def _existing_python_contribution_files(repo_path: str, touched_files: list[str] | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    repo_root = os.path.abspath(repo_path)
+
+    for path in touched_files or []:
+        normalized = _normalize_repo_path(path)
+        if not normalized.endswith(".py"):
+            continue
+        absolute = os.path.abspath(os.path.join(repo_path, normalized))
+        try:
+            if os.path.commonpath([repo_root, absolute]) != repo_root:
+                continue
+        except ValueError:
+            continue
+        if not os.path.isfile(absolute):
+            continue
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+
+    return sorted(result)
+
+
+def _normalise_identity(value: object) -> str | None:
+    if value is None:
+        return None
+    normalised = str(value).strip().lower()
+    return normalised or None
+
+
+def _commit_matches_developer(commit_record: dict, developer: User) -> bool:
+    login = _normalise_identity(commit_record.get("login"))
+    github_id = _normalise_identity(commit_record.get("github_id"))
+    emails = {
+        _normalise_identity(email)
+        for email in (commit_record.get("emails") or [])
+    }
+    emails.discard(None)
+
+    developer_github_id = _normalise_identity(developer.github_id)
+    developer_username = _normalise_identity(developer.username)
+    developer_email = _normalise_identity(developer.work_email)
+
+    return (
+        bool(developer_github_id and github_id == developer_github_id)
+        or bool(developer_username and login == developer_username)
+        or bool(developer_email and developer_email in emails)
+    )
+
+
+def _build_manager_contributor_scopes(
+    developers: list[User],
+    commit_records: list[dict],
+) -> list[dict]:
+    contributor_scopes: list[dict] = []
+
+    for developer in developers:
+        touched_files: set[str] = set()
+        matched_login: str | None = None
+        matched_email: str | None = None
+
+        for record in commit_records:
+            if not _commit_matches_developer(record, developer):
+                continue
+
+            if not matched_login and record.get("login"):
+                matched_login = str(record["login"])
+            if not matched_email and record.get("emails"):
+                matched_email = str(record["emails"][0])
+
+            for file_path in record.get("touched_files") or []:
+                if file_path:
+                    touched_files.add(str(file_path).replace("\\", "/"))
+
+        python_touched_files = sorted(path for path in touched_files if path.endswith(".py"))
+        if not python_touched_files:
+            continue
+
+        contributor_scopes.append({
+            "user_id": developer.id,
+            "contributor_login": matched_login or developer.username or matched_email,
+            "touched_files": sorted(touched_files),
+            "python_touched_files": python_touched_files,
+        })
+
+    return contributor_scopes
+
+
+def _link_repository_contributors(
+    db: Session,
+    repo_id: int,
+    contributor_scopes: list[dict],
+) -> None:
+    for contributor in contributor_scopes:
+        user_id = contributor.get("user_id")
+        if not user_id:
+            continue
+        link_exists = (
+            db.query(RepositoryContributor)
+            .filter(
+                RepositoryContributor.repository_id == repo_id,
+                RepositoryContributor.user_id == user_id,
+            )
+            .first()
+        )
+        if not link_exists:
+            db.add(RepositoryContributor(
+                repository_id=repo_id,
+                user_id=user_id,
+            ))
+
+
+def _float_or_none(value) -> float | None:
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_project_measures(sonar_payload: dict | None) -> dict:
+    if not isinstance(sonar_payload, dict):
+        return {}
+    measures = ((sonar_payload.get("measures") or {}).get("component") or {}).get("measures") or []
+    return {
+        item.get("metric"): item.get("value")
+        for item in measures
+        if isinstance(item, dict) and item.get("metric")
+    }
+
+
+def _extract_quality_gate(sonar_payload: dict | None) -> str | None:
+    if not isinstance(sonar_payload, dict):
+        return None
+    status = ((sonar_payload.get("quality_gate") or {}).get("projectStatus") or {}).get("status")
+    return str(status).upper() if status else None
+
+
+def _extract_file_path_from_component_or_issue(value) -> str | None:
+    if value is None:
+        return None
+    path = str(value).replace("\\", "/").strip()
+    if ":" in path:
+        path = path.rsplit(":", 1)[-1]
+    path = path.lstrip("/")
+    return path or None
+
+
+def _measure_map(items: list[dict] | None) -> dict:
+    return {
+        item.get("metric"): item.get("value")
+        for item in items or []
+        if isinstance(item, dict) and item.get("metric")
+    }
+
+
+def _sonar_skill_gap_inputs(
+    sonar_payload: dict | None,
+    security_findings: list[dict],
+) -> tuple[dict, list[dict], list[dict], list[dict]]:
+    if not isinstance(sonar_payload, dict) or sonar_payload.get("error"):
+        return {}, [], [], []
+
+    project_measures = _extract_project_measures(sonar_payload)
+    metric_keys = (
+        "coverage",
+        "bugs",
+        "code_smells",
+        "duplicated_lines_density",
+        "complexity",
+        "cognitive_complexity",
+        "reliability_rating",
+        "sqale_rating",
+        "sqale_index",
+    )
+    sonar_metrics = {key: project_measures.get(key) for key in metric_keys}
+
+    file_rows = []
+    for component in (sonar_payload.get("file_measures") or {}).get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        measures = _measure_map(component.get("measures") or [])
+        file_path = (
+            _extract_file_path_from_component_or_issue(component.get("path"))
+            or _extract_file_path_from_component_or_issue(component.get("name"))
+            or _extract_file_path_from_component_or_issue(component.get("key"))
+        )
+        row = {
+            "file_path": file_path,
+            "coverage": _float_or_none(measures.get("coverage")),
+            "complexity": _float_or_none(measures.get("complexity")),
+            "cognitive_complexity": _float_or_none(measures.get("cognitive_complexity")),
+            "duplication": _float_or_none(measures.get("duplicated_lines_density")),
+            "uncovered_lines": _float_or_none(measures.get("uncovered_lines")),
+        }
+        if file_path and any(value is not None for key, value in row.items() if key != "file_path"):
+            file_rows.append(row)
+
+    def _risk(row: dict) -> float:
+        coverage_risk = 100.0 - float(row["coverage"]) if row.get("coverage") is not None else 0.0
+        complexity_risk = float(row.get("complexity") or 0.0)
+        cognitive_risk = float(row.get("cognitive_complexity") or 0.0)
+        duplication_risk = float(row.get("duplication") or 0.0) * 2
+        return coverage_risk + complexity_risk + cognitive_risk + duplication_risk
+
+    sonar_file_metrics = sorted(file_rows, key=_risk, reverse=True)[:20]
+
+    sonar_issues = []
+    for issue in (sonar_payload.get("issues") or {}).get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        issue_type = str(issue.get("type") or "").upper()
+        if issue_type not in {"BUG", "CODE_SMELL"}:
+            continue
+        text_range = issue.get("textRange") or {}
+        sonar_issues.append({
+            "type": issue_type,
+            "severity": issue.get("severity"),
+            "rule": issue.get("rule"),
+            "file_path": _extract_file_path_from_component_or_issue(issue.get("component")),
+            "line": issue.get("line") or text_range.get("startLine"),
+            "message": issue.get("message"),
+        })
+
+    security_rows = [
+        {
+            "severity": finding.get("severity"),
+            "cwe": finding.get("cwe"),
+            "rule": finding.get("rule"),
+            "file_path": finding.get("file_path"),
+            "description": finding.get("description"),
+            "owasp_category": finding.get("owasp_category"),
+        }
+        for finding in security_findings
+        if isinstance(finding, dict)
+    ]
+    return sonar_metrics, sonar_file_metrics, sonar_issues[:50], security_rows[:50]
+
+
+def _persist_sonar_results(
+    db: Session,
+    run: AnalysisRun,
+    user_id: int | None,
+    sonar_result: dict,
+    sonar_health_score: float | None,
+) -> None:
+    sonar_payload = sonar_result.get("sonar") if isinstance(sonar_result, dict) else None
+    if not isinstance(sonar_payload, dict) or sonar_payload.get("error"):
+        return
+
+    db.query(SonarIssue).filter(SonarIssue.analysis_run_id == run.id).delete(synchronize_session=False)
+    db.query(SonarFileMeasure).filter(SonarFileMeasure.analysis_run_id == run.id).delete(synchronize_session=False)
+    db.query(SonarAnalysisSummary).filter(SonarAnalysisSummary.analysis_run_id == run.id).delete(synchronize_session=False)
+
+    project_measures = _extract_project_measures(sonar_payload)
+    db.add(SonarAnalysisSummary(
+        analysis_run_id=run.id,
+        user_id=user_id,
+        project_key=sonar_result.get("project_key"),
+        quality_gate=_extract_quality_gate(sonar_payload),
+        sonar_health_score=sonar_health_score,
+        measures=project_measures,
+        coverage=sonar_payload.get("coverage"),
+        scanner=sonar_payload.get("scanner"),
+        ce_task=sonar_payload.get("ce_task"),
+        raw_payload=sonar_payload,
+    ))
+
+    for component in (sonar_payload.get("file_measures") or {}).get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        file_path = (
+            _extract_file_path_from_component_or_issue(component.get("path"))
+            or _extract_file_path_from_component_or_issue(component.get("name"))
+            or _extract_file_path_from_component_or_issue(component.get("key"))
+        )
+        if not file_path:
+            continue
+        measures = _measure_map(component.get("measures") or [])
+        db.add(SonarFileMeasure(
+            analysis_run_id=run.id,
+            user_id=user_id,
+            file_path=file_path,
+            measures=measures,
+            coverage=_float_or_none(measures.get("coverage")),
+            duplicated_lines=_float_or_none(measures.get("duplicated_lines")),
+            duplicated_lines_density=_float_or_none(measures.get("duplicated_lines_density")),
+            ncloc=_float_or_none(measures.get("ncloc")),
+            complexity=_float_or_none(measures.get("complexity")),
+            cognitive_complexity=_float_or_none(measures.get("cognitive_complexity")),
+            functions=_float_or_none(measures.get("functions")),
+            classes=_float_or_none(measures.get("classes")),
+            statements=_float_or_none(measures.get("statements")),
+        ))
+
+    for issue in (sonar_payload.get("issues") or {}).get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if str(issue.get("status") or "").upper() == "CLOSED":
+            continue
+        text_range = issue.get("textRange") or {}
+        db.add(SonarIssue(
+            analysis_run_id=run.id,
+            user_id=user_id,
+            issue_key=issue.get("key"),
+            file_path=_extract_file_path_from_component_or_issue(issue.get("component")),
+            line=issue.get("line") or text_range.get("startLine"),
+            type=issue.get("type"),
+            severity=issue.get("severity"),
+            rule=issue.get("rule"),
+            message=issue.get("message"),
+            status=issue.get("status"),
+            raw_issue=issue,
+        ))
+
+
+def _persist_contributor_sonar_detail_rows(
+    db: Session,
+    run: AnalysisRun,
+    user_id: int,
+    sonar_result: dict,
+) -> None:
+    sonar_payload = sonar_result.get("sonar") if isinstance(sonar_result, dict) else None
+    if not isinstance(sonar_payload, dict) or sonar_payload.get("error"):
+        return
+
+    db.query(SonarIssue).filter(
+        SonarIssue.analysis_run_id == run.id,
+        SonarIssue.user_id == user_id,
+    ).delete(synchronize_session=False)
+    db.query(SonarFileMeasure).filter(
+        SonarFileMeasure.analysis_run_id == run.id,
+        SonarFileMeasure.user_id == user_id,
+    ).delete(synchronize_session=False)
+
+    for component in (sonar_payload.get("file_measures") or {}).get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        file_path = (
+            _extract_file_path_from_component_or_issue(component.get("path"))
+            or _extract_file_path_from_component_or_issue(component.get("name"))
+            or _extract_file_path_from_component_or_issue(component.get("key"))
+        )
+        if not file_path:
+            continue
+        measures = _measure_map(component.get("measures") or [])
+        db.add(SonarFileMeasure(
+            analysis_run_id=run.id,
+            user_id=user_id,
+            file_path=file_path,
+            measures=measures,
+            coverage=_float_or_none(measures.get("coverage")),
+            duplicated_lines=_float_or_none(measures.get("duplicated_lines")),
+            duplicated_lines_density=_float_or_none(measures.get("duplicated_lines_density")),
+            ncloc=_float_or_none(measures.get("ncloc")),
+            complexity=_float_or_none(measures.get("complexity")),
+            cognitive_complexity=_float_or_none(measures.get("cognitive_complexity")),
+            functions=_float_or_none(measures.get("functions")),
+            classes=_float_or_none(measures.get("classes")),
+            statements=_float_or_none(measures.get("statements")),
+        ))
+
+    for issue in (sonar_payload.get("issues") or {}).get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if str(issue.get("status") or "").upper() == "CLOSED":
+            continue
+        text_range = issue.get("textRange") or {}
+        db.add(SonarIssue(
+            analysis_run_id=run.id,
+            user_id=user_id,
+            issue_key=issue.get("key"),
+            file_path=_extract_file_path_from_component_or_issue(issue.get("component")),
+            line=issue.get("line") or text_range.get("startLine"),
+            type=issue.get("type"),
+            severity=issue.get("severity"),
+            rule=issue.get("rule"),
+            message=issue.get("message"),
+            status=issue.get("status"),
+            raw_issue=issue,
+        ))
+
+
+def _issue_count_from_payload(sonar_payload: dict | None, issue_type: str) -> int:
+    if not isinstance(sonar_payload, dict):
+        return 0
+    count = 0
+    for issue in (sonar_payload.get("issues") or {}).get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if str(issue.get("status") or "").upper() == "CLOSED":
+            continue
+        if str(issue.get("type") or "").upper() == issue_type.upper():
+            count += 1
+    return count
+
+
+def _int_metric_or_issue_count(project_measures: dict, sonar_payload: dict | None, metric: str, issue_type: str) -> int | None:
+    value = _float_or_none(project_measures.get(metric))
+    if value is not None:
+        return int(value)
+    count = _issue_count_from_payload(sonar_payload, issue_type)
+    return count if count else None
+
+
+def _persist_contributor_analysis_summary(
+    db: Session,
+    run: AnalysisRun,
+    user_id: int,
+    sonar_result: dict,
+    sonar_health_score: float | None,
+    security_score: float | None,
+    skill_score: float | None,
+    contributor_login: str | None,
+    touched_files: list[str] | None,
+    included_files: list[str] | None,
+) -> None:
+    sonar_payload = sonar_result.get("sonar") if isinstance(sonar_result, dict) else None
+    if not isinstance(sonar_payload, dict) or sonar_payload.get("error"):
+        return
+
+    project_measures = _extract_project_measures(sonar_payload)
+    row = (
+        db.query(ContributorAnalysisSummary)
+        .filter(
+            ContributorAnalysisSummary.analysis_run_id == run.id,
+            ContributorAnalysisSummary.user_id == user_id,
+        )
+        .first()
+    )
+    if row is None:
+        row = ContributorAnalysisSummary(
+            analysis_run_id=run.id,
+            repository_id=run.repository_id,
+            user_id=user_id,
+        )
+        db.add(row)
+
+    row.repository_id = run.repository_id
+    row.contributor_login = contributor_login
+    row.files_count = len(included_files or touched_files or [])
+    row.touched_files = touched_files or included_files or []
+    row.skill_score = skill_score
+    row.sonar_health_score = sonar_health_score
+    row.security_score = security_score
+    row.coverage = _float_or_none(project_measures.get("coverage"))
+    row.bugs = _int_metric_or_issue_count(project_measures, sonar_payload, "bugs", "BUG")
+    row.code_smells = _int_metric_or_issue_count(project_measures, sonar_payload, "code_smells", "CODE_SMELL")
+    row.duplicated_lines = _float_or_none(project_measures.get("duplicated_lines"))
+    row.duplicated_lines_density = _float_or_none(project_measures.get("duplicated_lines_density"))
+    row.complexity = _float_or_none(project_measures.get("complexity"))
+    row.cognitive_complexity = _float_or_none(project_measures.get("cognitive_complexity"))
+    row.ncloc = _float_or_none(project_measures.get("ncloc"))
+    row.quality_gate = _extract_quality_gate(sonar_payload)
+    row.measures = project_measures
+    row.raw_payload = sonar_payload
+    row.updated_at = datetime.now(timezone.utc)
 
 
 def _prepare_repo_checkout(
@@ -248,9 +720,10 @@ async def _background_analysis_task_async(
     manager_contributors: list[dict] | None = None,
     finalize_run: bool = True,
     generate_ai_insights: bool | None = None,
+    coverage_report_path: str | None = None,
 ):
     is_recruiter_scoring_mode = user_role == "recruiter"
-    if user_role == "manager":
+    if user_role == "manager" and analysis_scope == "team_contributions":
         return await _background_manager_team_analysis_task_async(
             run_id=run_id,
             repo_id=repo_id,
@@ -283,7 +756,9 @@ async def _background_analysis_task_async(
 
         clone_path = ""
         repo_context: tempfile.TemporaryDirectory | None = None
-        architecture_metrics_result: dict = {}
+        sonar_result: dict = {}
+        sonar_health_score: float | None = None
+        included_sonar_files: list[str] | None = None
         try:
             logger.info("[run=%s] Git checkout started branch=%s private=%s", run_id, branch, is_private)
             clone_path, repo_context = _prepare_repo_checkout(
@@ -296,9 +771,63 @@ async def _background_analysis_task_async(
             )
             logger.info("[run=%s] Git checkout finished", run_id)
 
-            python_files = read_local_repo_files(clone_path)
-            touched_set = {p.replace("\\", "/") for p in (touched_files or [])}
             if analysis_scope == "contribution":
+                included_sonar_files = _existing_python_contribution_files(clone_path, touched_files)
+                if not included_sonar_files:
+                    raise Exception("No existing Python contribution files were found for this repository branch.")
+                logger.info(
+                    "[run=%s] Contribution Sonar file scope resolved count=%d",
+                    run_id,
+                    len(included_sonar_files),
+                )
+
+            run_sonar_for_scope = finalize_run or analysis_scope == "contribution"
+            if run_sonar_for_scope:
+                try:
+                    logger.info(
+                        "[run=%s] SonarQube analysis started scope=%s finalize_run=%s",
+                        run_id,
+                        analysis_scope,
+                        finalize_run,
+                    )
+                    sonar_result = run_sonar_analysis(
+                        repo_path=clone_path,
+                        full_name=full_name,
+                        branch=branch,
+                        coverage_report_path=coverage_report_path,
+                        included_files=included_sonar_files,
+                    )
+                    sonar_health_score = compute_sonar_health_score(sonar_result.get("sonar"))
+                    if analysis_scope == "contribution":
+                        _persist_contributor_sonar_detail_rows(
+                            db,
+                            run,
+                            current_user_id,
+                            sonar_result,
+                        )
+                    else:
+                        _persist_sonar_results(
+                            db,
+                            run,
+                            current_user_id,
+                            sonar_result,
+                            sonar_health_score,
+                        )
+                    logger.info("[run=%s] SonarQube analysis finished", run_id)
+                except Exception as exc:
+                    logger.exception("[run=%s] SonarQube analysis failed: %s", run_id, exc)
+                    sonar_result = {
+                        "source": "sonarqube",
+                        "project_key": None,
+                        "sonar": {
+                            "error": str(exc),
+                        },
+                    }
+                    sonar_health_score = None
+
+            python_files = read_local_repo_files(clone_path)
+            if analysis_scope == "contribution":
+                touched_set = set(included_sonar_files or [])
                 python_files = [
                     f for f in python_files
                     if f.get("path", "").replace("\\", "/") in touched_set
@@ -330,276 +859,17 @@ async def _background_analysis_task_async(
                 pipeline_result.get("failed_tools", []),
             )
 
-            llm_problem_solving_score = 0.0
             llm_result = {}
-            llm_skill_scores = {}
-            llm_adjustment_guidance = {}
-            try:
-                logger.info(
-                    "[run=%s] LLM problem solving started files=%d chars_approx=%d",
-                    run_id,
-                    len(python_files),
-                    llm_payload_chars,
-                )
-                llm_result = analyze_problem_solving(python_files, run.commit_sha)
-                logger.info("[run=%s] LLM problem solving finished", run_id)
-                logger.debug("[run=%s] Raw LLM problem solving result: %s", run_id, llm_result)
-                if llm_result.get("_llm_valid"):
-                    component_scores = [
-                        float((llm_result.get(key) or {}).get("score", 0.0) or 0.0)
-                        for key in ("algorithms", "data_structures", "balanced_complexity", "edge_cases")
-                    ]
-                    logger.info("[run=%s] LLM problem solving component_scores=%s", run_id, component_scores)
-                    if component_scores:
-                        avg_score = sum(component_scores) / len(component_scores)
-                        llm_problem_solving_score = avg_score / 100.0
-                        logger.info(
-                            "[run=%s] llm_problem_solving_score set to: %.3f",
-                            run_id,
-                            llm_problem_solving_score,
-                        )
-                else:
-                    logger.warning(
-                        "[run=%s] LLM problem solving returned no valid batch; using rule-based fallback",
-                        run_id,
-                    )
-            except LLMError as exc:
-                logger.exception("[run=%s] LLM problem solving failed: %s", run_id, exc)
-            except Exception as exc:
-                logger.exception("[run=%s] Unexpected error in LLM problem solving: %s", run_id, exc)
 
-            logger.info("[run=%s] Static code analysis started", run_id)
-            analysis_result = analyze_python_files(
-                python_files,
-                problem_solving_score=llm_problem_solving_score,
-            )
+            logger.info("[run=%s] Repository metrics extraction started", run_id)
+            analysis_result = analyze_python_files(python_files)
             logger.info(
-                "[run=%s] Scores after analyze_python_files: %s",
+                "[run=%s] Repository metrics extraction finished files=%d",
                 run_id,
-                analysis_result.get("scores", {}),
+                len(analysis_result.get("files", [])),
             )
             code_intelligence_result = analysis_result
-            final_scores = analysis_result.get("scores", {})
-
-            aggregate = code_intelligence_result.get("aggregate_metrics", {})
-            file_reports = code_intelligence_result.get("files", [])
-            architecture_metrics_result = {}
-
-            try:
-                logger.info("[run=%s] Architecture scoring started", run_id)
-                static_arch = compute_static_architecture_metrics(
-                    file_reports,
-                    aggregate,
-                    clone_path or None,
-                    python_files,
-                )
-                static_evidence = {
-                    "signals": static_arch.get("signals", {}),
-                    "structural_indices": {
-                        metric_key: (index_entry or {}).get("structural_index")
-                        for metric_key, index_entry in (
-                            static_arch.get("structural_indices") or {}
-                        ).items()
-                    },
-                    "circular_imports": (static_arch.get("circular_imports_signal") or {}).get(
-                        "details", {}
-                    ),
-                }
-                llm_arch = {}
-                try:
-                    llm_arch = analyze_architecture_metrics(
-                        python_files,
-                        static_evidence,
-                        run.commit_sha,
-                    )
-                except LLMError as exc:
-                    logger.warning("[run=%s] Architecture LLM metrics failed: %s", run_id, exc)
-                except Exception as exc:
-                    logger.exception("[run=%s] Unexpected architecture LLM error: %s", run_id, exc)
-
-                architecture_metrics_result = aggregate_architecture_score(static_arch, llm_arch)
-                final_scores["architecture"] = architecture_metrics_result["overall"]
-                final_scores["overall_score"] = compute_overall_score(final_scores)
-                code_intelligence_result["architecture_metrics"] = architecture_metrics_result
-                logger.info(
-                    "[run=%s] Architecture scoring finished overall=%.2f",
-                    run_id,
-                    architecture_metrics_result["overall"],
-                )
-            except Exception as exc:
-                logger.exception("[run=%s] Architecture scoring failed: %s", run_id, exc)
-
-            base_scores = dict(final_scores)
-            logger.info("[run=%s] Base scores before LLM calibration: %s", run_id, base_scores)
-            base_overall = float(base_scores.get("overall_score") or compute_overall_score(base_scores))
-
-            def _collect_adjustment_evidence(skill: str, metrics: dict) -> list[str]:
-                entries: list[str] = []
-
-                def _add(label: str, value, decimals: int | None = None) -> None:
-                    if value is None:
-                        return
-                    if isinstance(value, float):
-                        entries.append(f"{label}={value:.{decimals or 2}f}")
-                    else:
-                        entries.append(f"{label}={value}")
-
-                if skill == "code_quality":
-                    _add("avg_duplication_score", metrics.get("avg_duplication_score"))
-                    _add("style_violations", metrics.get("style_violations"))
-                    _add("unused_variables", metrics.get("unused_variables"))
-                    _add("avg_cyclomatic_complexity", metrics.get("avg_cyclomatic_complexity"))
-                    _add("avg_type_annotation_coverage", metrics.get("avg_type_annotation_coverage"))
-                    _add("magic_numbers", metrics.get("magic_numbers"))
-                    _add("dead_code_symbols", metrics.get("dead_code_symbols"))
-                elif skill == "maintainability":
-                    _add("avg_docstring_coverage", metrics.get("avg_docstring_coverage"))
-                    _add("avg_comment_ratio", metrics.get("avg_comment_ratio"))
-                    _add("long_functions", metrics.get("long_functions"))
-                    _add("too_many_params", metrics.get("too_many_params"))
-                    _add("avg_maintainability_index", metrics.get("avg_maintainability_index"))
-                    _add("avg_official_maintainability_index", metrics.get("avg_official_maintainability_index"))
-                    _add("avg_halstead_volume", metrics.get("avg_halstead_volume"))
-                    _add("mutable_globals", metrics.get("mutable_globals"))
-                    _add("broad_exceptions", metrics.get("broad_exceptions"))
-                    _add("swallowed_exceptions", metrics.get("swallowed_exceptions"))
-                elif skill == "architecture":
-                    arch = code_intelligence_result.get("architecture_metrics", {})
-                    for metric_key, metric_entry in (arch.get("metrics") or {}).items():
-                        if isinstance(metric_entry, dict):
-                            _add(metric_key, metric_entry.get("score"))
-
-                return entries
-
-            try:
-                logger.info(
-                    "[run=%s] LLM skill calibration started files=%d chars_approx=%d",
-                    run_id,
-                    len(python_files),
-                    llm_payload_chars,
-                )
-                llm_skill_scores = analyze_skill_scores(
-                    python_files,
-                    base_scores=final_scores,
-                    aggregate_metrics=code_intelligence_result.get("aggregate_metrics", {}),
-                    commit_sha=run.commit_sha,
-                )
-                logger.info("[run=%s] LLM skill calibration finished", run_id)
-                if not llm_skill_scores:
-                    logger.warning("[run=%s] LLM skill calibration returned no scores", run_id)
-                if llm_skill_scores:
-                    for skill in ("code_quality", "maintainability"):
-                        base = float(final_scores.get(skill, 0.0) or 0.0)
-                        entry = llm_skill_scores.get(skill, {})
-                        adjustment = float(entry.get("adjustment", 0.0) or 0.0)
-                        confidence = float(entry.get("confidence", 0.0) or 0.0)
-
-                        logger.info("[run=%s] LLM %s before base=%.2f", run_id, skill, base)
-                        logger.info(
-                            "[run=%s] LLM %s adjustment=%.2f confidence=%.2f",
-                            run_id,
-                            skill,
-                            adjustment,
-                            confidence,
-                        )
-
-                        if confidence < 0.4:
-                            logger.info(
-                                "[run=%s] LLM %s adjustment ignored due to low confidence %.2f",
-                                run_id,
-                                skill,
-                                confidence,
-                            )
-                            adjustment = 0.0
-
-                        adjustment = max(-20.0, min(20.0, adjustment))
-                        new_score = apply_adjustment(base, adjustment, confidence)
-                        logger.info("[run=%s] LLM %s after new_score=%.2f", run_id, skill, new_score)
-                        final_scores[skill] = max(0.0, min(100.0, new_score))
-
-                    final_scores["overall_score"] = compute_overall_score(final_scores)
-                    logger.info("[run=%s] Final scores after LLM calibration: %s", run_id, final_scores)
-            except LLMError as exc:
-                logger.exception("[run=%s] LLM skill score calibration failed: %s", run_id, exc)
-            except Exception as exc:
-                logger.exception(
-                    "[run=%s] Unexpected error during LLM skill score calibration: %s",
-                    run_id,
-                    exc,
-                )
-
-            final_overall = float(final_scores.get("overall_score") or compute_overall_score(final_scores))
-            overall_delta = round(final_overall - base_overall, 2)
-
-            if llm_skill_scores:
-                metrics = code_intelligence_result.get("aggregate_metrics", {})
-                for skill in ("code_quality", "maintainability"):
-                    entry = llm_skill_scores.get(skill, {})
-                    confidence = float(entry.get("confidence", 0.0) or 0.0)
-                    reason = entry.get("reason", "")
-                    requested_adjustment = float(entry.get("adjustment", 0.0) or 0.0)
-                    base = float(base_scores.get(skill, 0.0) or 0.0)
-                    final = float(final_scores.get(skill, 0.0) or 0.0)
-                    applied_delta = round(final - base, 2)
-                    overall_impact = round(applied_delta / 4.0, 2)
-                    evidence = _collect_adjustment_evidence(skill, metrics)
-
-                    llm_adjustment_guidance[skill] = {
-                        "requested_adjustment": round(requested_adjustment, 2),
-                        "applied_delta": applied_delta,
-                        "confidence": round(max(0.0, min(1.0, confidence)), 3),
-                        "reason": reason,
-                        "evidence": evidence,
-                        "overall_impact": overall_impact,
-                        "overall_delta": overall_delta,
-                        "ignored": confidence < 0.4,
-                    }
-
-            if architecture_metrics_result:
-                arch_metrics = architecture_metrics_result.get("metrics", {})
-                llm_reasons = [
-                    f"{key}: {entry.get('reason')}"
-                    for key, entry in arch_metrics.items()
-                    if isinstance(entry, dict) and entry.get("reason") and entry.get("method") == "LLM"
-                ]
-                llm_adjustment_guidance["architecture"] = {
-                    "requested_adjustment": 0.0,
-                    "applied_delta": round(
-                        float(final_scores.get("architecture", 0.0)) - float(base_scores.get("architecture", 0.0)),
-                        2,
-                    ),
-                    "confidence": round(
-                        sum(
-                            float((arch_metrics.get(k) or {}).get("confidence", 0.0) or 0.0)
-                            for k in ("layer_count_srp", "repository_pattern", "dependency_injection",
-                                      "open_closed_readiness", "swappable_components", "god_class_function")
-                        ) / 6.0,
-                        3,
-                    ),
-                    "reason": " | ".join(llm_reasons[:3]) if llm_reasons else "Architecture scored via dedicated metric pipeline.",
-                    "evidence": _collect_adjustment_evidence(
-                        "architecture",
-                        code_intelligence_result.get("aggregate_metrics", {}),
-                    ),
-                    "overall_impact": 0.0,
-                    "overall_delta": overall_delta,
-                    "ignored": False,
-                }
-
-            if (final_scores.get("problem_solving") or 0.0) <= 0.0:
-                calibrated = float((llm_skill_scores.get("problem_solving") or {}).get("score", 0.0) or 0.0)
-                if calibrated > 0.0:
-                    final_scores["problem_solving"] = calibrated if calibrated > 1.0 else calibrated * 100.0
-                    final_scores["overall_score"] = compute_overall_score(final_scores)
-
-            code_intelligence_result.setdefault("llm", {})
-            code_intelligence_result["llm"]["skill_scores"] = llm_skill_scores
-            code_intelligence_result["llm"]["problem_solving"] = llm_result
-            code_intelligence_result["debug"] = {
-                "base_scores": base_scores,
-                "llm_adjustments": llm_skill_scores,
-                "final_scores": final_scores,
-            }
+            final_scores = {}
 
             try:
                 unified = build_unified_schema(code_intelligence_result, llm_result, run.commit_sha)
@@ -668,6 +938,23 @@ async def _background_analysis_task_async(
             total_loc = code_intelligence_result.get("aggregate_metrics", {}).get("loc", 1000)
         security_score_breakdown = compute_security_score_breakdown(findings, int(total_loc or 0))
         security_score = security_score_breakdown["overall"]
+        overall_score = compute_skill_score_engine(
+            sonar_health_score=sonar_health_score,
+            security_score=security_score,
+        )
+        if analysis_scope == "contribution":
+            _persist_contributor_analysis_summary(
+                db=db,
+                run=run,
+                user_id=current_user_id,
+                sonar_result=sonar_result,
+                sonar_health_score=sonar_health_score,
+                security_score=security_score,
+                skill_score=overall_score,
+                contributor_login=contributor_login,
+                touched_files=touched_files,
+                included_files=included_sonar_files,
+            )
 
         logger.info(
             "[run=%s] Final scores before DB save role=%s scope=%s scores=%s security_score=%.2f",
@@ -680,12 +967,13 @@ async def _background_analysis_task_async(
         db.add(SkillScore(
             analysis_run_id=run.id,
             user_id=current_user_id,
-            code_quality_score=final_scores.get("code_quality", 0.0),
-            maintainability_score=final_scores.get("maintainability", 0.0),
-            architecture_score=final_scores.get("architecture", 0.0),
+            code_quality_score=None,
+            maintainability_score=None,
+            architecture_score=None,
             security_awareness_score=security_score,
-            problem_solving_score=final_scores.get("problem_solving", 0.0),
-            overall_score=final_scores.get("overall_score", 0.0),
+            problem_solving_score=None,
+            overall_score=overall_score,
+            sonar_health_score=sonar_health_score,
         ))
         db.commit()
         logger.info("[run=%s] SkillScore DB save successful", run_id)
@@ -694,20 +982,37 @@ async def _background_analysis_task_async(
             ai_insights = {
                 "score_only": True,
                 "failed_tools": failed_tools,
-                "llm_skill_scores": llm_skill_scores,
-                "llm_adjustment_guidance": llm_adjustment_guidance,
-                "architecture_metrics": architecture_metrics_result,
             }
         else:
             ai_insights = {
-                "llm_problem_solving": llm_result,
-                "llm_skill_scores": llm_skill_scores,
-                "llm_adjustment_guidance": llm_adjustment_guidance,
-                "architecture_metrics": architecture_metrics_result,
                 "failed_tools": failed_tools,
             }
 
+        if sonar_result:
+            ai_insights["source"] = "sonarqube"
+            ai_insights["project_key"] = sonar_result.get("project_key")
+            ai_insights["sonar"] = sonar_result.get("sonar", {})
+
         if not skip_insights:
+            sonar_metrics = {}
+            sonar_issues = []
+            security_gap_findings = []
+            try:
+                sonar_payload = sonar_result.get("sonar") if isinstance(sonar_result, dict) else None
+                sonar_metrics, sonar_file_metrics, sonar_issues, security_gap_findings = _sonar_skill_gap_inputs(
+                    sonar_payload,
+                    findings,
+                )
+                ai_insights["llm_skill_gaps"] = analyze_skill_gaps_with_llm(
+                    sonar_metrics=sonar_metrics,
+                    sonar_file_metrics=sonar_file_metrics,
+                    sonar_issues=sonar_issues,
+                    security_findings=security_gap_findings,
+                )
+            except Exception:
+                logger.exception("[run=%s] LLM skill gap analysis failed", run_id)
+                ai_insights["llm_skill_gaps"] = {"skill_gaps": []}
+
             logger.info("[run=%s] Developer insight generation started", run_id)
             try:
                 score_row = (
@@ -721,11 +1026,21 @@ async def _background_analysis_task_async(
                 metric_rows = db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id == run.id).all()
                 findings_rows = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).all()
                 if score_row:
+                    llm_skill_gaps = ai_insights.get("llm_skill_gaps") if isinstance(ai_insights, dict) else {}
+                    detected_skill_gaps = []
+                    if isinstance(llm_skill_gaps, dict) and isinstance(llm_skill_gaps.get("skill_gaps"), list):
+                        detected_skill_gaps = [
+                            gap for gap in llm_skill_gaps.get("skill_gaps") or []
+                            if isinstance(gap, dict)
+                        ]
                     ai_insights["learning_recommendations"] = build_learning_recommendations(
                         run,
                         score_row,
                         metric_rows,
                         findings_rows,
+                        sonar_metrics=sonar_metrics,
+                        sonar_issues=sonar_issues,
+                        detected_skill_gaps=detected_skill_gaps,
                     )
             except Exception:
                 logger.exception("[run=%s] Learning recommendations generation failed", run_id)
@@ -765,49 +1080,10 @@ async def _background_analysis_task_async(
                 )
                 if isinstance(guidance, dict):
                     ai_insights.update(guidance)
+                ai_insights.pop("skills_insights", None)
             except Exception:
                 logger.exception("[run=%s] AI insights generation failed", run_id)
 
-            skills_insights = ai_insights.get("skills_insights") or {}
-            if not isinstance(skills_insights, dict):
-                skills_insights = {}
-            for skill in ("code_quality", "maintainability", "architecture"):
-                entry = llm_adjustment_guidance.get(skill, {})
-                if not entry:
-                    continue
-                lines = []
-
-                confidence = entry.get("confidence", 0.0) or 0.0
-                delta = entry.get("applied_delta", 0.0)
-
-                # AI Adjustment Section
-                lines.append("AI Adjustment:")
-                if entry.get("ignored"):
-                    lines.append(f"- Ignored due to low confidence ({confidence:.2f})")
-                else:
-                    direction = "increased" if delta > 0 else "decreased"
-                    lines.append(f"- Score {direction} by {abs(delta):.2f}")
-                    lines.append(f"- Confidence: {confidence:.0%}")
-
-                if entry.get("reason"):
-                    lines.append(f"- Reason: {entry.get('reason')}")
-
-                # Static Analysis Section
-                base = base_scores.get(skill, 0.0)
-
-                lines.append("")
-                lines.append("Static Analysis Summary:")
-                lines.append(f"- Base score: {base:.1f}")
-
-                evidence = entry.get("evidence") or []
-                if evidence:
-                    for e in evidence:
-                        lines.append(f"- {e}")
-                existing = skills_insights.get(skill) or []
-                if not isinstance(existing, list):
-                    existing = []
-                skills_insights[skill] = lines + existing
-            ai_insights["skills_insights"] = skills_insights
             logger.info("[run=%s] Developer insight generation finished", run_id)
         else:
             logger.info(
@@ -846,6 +1122,7 @@ async def _background_analysis_task_async(
     except LLMError as exc:
         error_text = str(exc)
         logger.exception("[run=%s] LLM error in background task", run_id)
+        db.rollback()
 
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
         if run and finalize_run:
@@ -875,6 +1152,7 @@ async def _background_analysis_task_async(
     except Exception as exc:
         error_text = str(exc)
         logger.exception("[run=%s] Background task error", run_id)
+        db.rollback()
 
         run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
         error_reason = "unknown"
@@ -1003,8 +1281,8 @@ async def _background_manager_team_analysis_task_async(
             }
 
         score_count = (
-            db.query(SkillScore)
-            .filter(SkillScore.analysis_run_id == run_id)
+            db.query(ContributorAnalysisSummary)
+            .filter(ContributorAnalysisSummary.analysis_run_id == run_id)
             .count()
         )
         run.completed_at = datetime.now(timezone.utc)
@@ -1013,12 +1291,12 @@ async def _background_manager_team_analysis_task_async(
         if run.status == "completed":
             manager_user = db.query(User).filter(User.id == manager_user_id).first()
             repo_score_rows = (
-                db.query(SkillScore, AnalysisRun, Repository, User)
-                .join(AnalysisRun, SkillScore.analysis_run_id == AnalysisRun.id)
+                db.query(ContributorAnalysisSummary, AnalysisRun, Repository, User)
+                .join(AnalysisRun, ContributorAnalysisSummary.analysis_run_id == AnalysisRun.id)
                 .join(Repository, AnalysisRun.repository_id == Repository.id)
-                .join(User, SkillScore.user_id == User.id)
+                .join(User, ContributorAnalysisSummary.user_id == User.id)
                 .filter(
-                    SkillScore.analysis_run_id == run_id,
+                    ContributorAnalysisSummary.analysis_run_id == run_id,
                     User.role == UserRole.developer,
                 )
                 .all()
@@ -1127,6 +1405,195 @@ async def _background_manager_team_analysis_task_async(
         }
     finally:
         db.close()
+
+
+async def _run_manager_contributor_analysis_after_repository(
+    repository_run_id: int,
+    repo_id: int,
+    repo_url: str,
+    repo_name: str,
+    branch: str,
+    full_name: str,
+    token: str | None,
+    is_private: bool,
+    manager_user_id: int,
+):
+    db = SessionLocal()
+    try:
+        repository_run = (
+            db.query(AnalysisRun)
+            .filter(
+                AnalysisRun.id == repository_run_id,
+                AnalysisRun.user_id == manager_user_id,
+                AnalysisRun.analysis_scope == "repository",
+            )
+            .first()
+        )
+        if not repository_run or repository_run.status != "completed":
+            logger.info(
+                "[run=%s] Skipping manager contributor analysis because repository run is not completed",
+                repository_run_id,
+            )
+            return
+
+        existing_team_run = (
+            db.query(AnalysisRun)
+            .filter(
+                AnalysisRun.repository_id == repo_id,
+                AnalysisRun.user_id == manager_user_id,
+                AnalysisRun.branch == branch,
+                AnalysisRun.commit_sha == repository_run.commit_sha,
+                AnalysisRun.analysis_scope == "team_contributions",
+                AnalysisRun.status.in_(["running", "completed"]),
+            )
+            .order_by(AnalysisRun.triggered_at.desc())
+            .first()
+        )
+        if existing_team_run:
+            logger.info(
+                "[run=%s] Skipping manager contributor analysis because team run %s already exists with status=%s",
+                repository_run_id,
+                existing_team_run.id,
+                existing_team_run.status,
+            )
+            return
+
+        registered_developers = (
+            db.query(User)
+            .filter(User.role == UserRole.developer)
+            .all()
+        )
+    finally:
+        db.close()
+
+    try:
+        commit_records = await fetch_repository_commit_contributions(
+            token,
+            full_name,
+            branch,
+        )
+    except Exception:
+        logger.exception(
+            "[run=%s] Manager contributor discovery failed; repository analysis remains completed",
+            repository_run_id,
+        )
+        return
+
+    manager_contributors = _build_manager_contributor_scopes(
+        registered_developers,
+        commit_records,
+    )
+    if not manager_contributors:
+        logger.info(
+            "[run=%s] Manager contributor analysis skipped: no registered developers with Python contributions",
+            repository_run_id,
+        )
+        return
+
+    db = SessionLocal()
+    try:
+        _link_repository_contributors(db, repo_id, manager_contributors)
+        team_run = AnalysisRun(
+            repository_id=repo_id,
+            user_id=manager_user_id,
+            branch=branch,
+            commit_sha=(
+                db.query(AnalysisRun.commit_sha)
+                .filter(AnalysisRun.id == repository_run_id)
+                .scalar()
+            ),
+            analysis_scope="team_contributions",
+            contributor_login=None,
+            status="running",
+            triggered_at=datetime.now(timezone.utc),
+        )
+        db.add(team_run)
+        db.commit()
+        db.refresh(team_run)
+        team_run_id = team_run.id
+    finally:
+        db.close()
+
+    try:
+        await _background_manager_team_analysis_task_async(
+            run_id=team_run_id,
+            repo_id=repo_id,
+            repo_url=repo_url,
+            repo_name=repo_name,
+            branch=branch,
+            full_name=full_name,
+            token=token,
+            is_private=is_private,
+            manager_user_id=manager_user_id,
+            manager_contributors=manager_contributors,
+        )
+    except Exception:
+        logger.exception(
+            "[run=%s] Manager contributor analysis failed; repository run remains completed",
+            repository_run_id,
+        )
+        db = SessionLocal()
+        try:
+            team_run = db.query(AnalysisRun).filter(AnalysisRun.id == team_run_id).first()
+            if team_run and team_run.status != "completed":
+                team_run.status = "failed"
+                team_run.completed_at = datetime.now(timezone.utc)
+                db.commit()
+        finally:
+            db.close()
+
+
+async def _background_manager_repository_analysis_task_async(
+    run_id: int,
+    repo_id: int,
+    repo_url: str,
+    repo_name: str,
+    branch: str,
+    full_name: str,
+    token: str | None,
+    is_private: bool,
+    manager_user_id: int,
+    coverage_report_path: str | None = None,
+):
+    result = await _background_analysis_task_async(
+        run_id=run_id,
+        repo_id=repo_id,
+        repo_url=repo_url,
+        repo_name=repo_name,
+        branch=branch,
+        full_name=full_name,
+        token=token,
+        is_private=is_private,
+        current_user_id=manager_user_id,
+        user_role="manager",
+        analysis_scope="repository",
+        contributor_login=None,
+        touched_files=[],
+        finalize_run=True,
+        coverage_report_path=coverage_report_path,
+    )
+
+    if (result or {}).get("status") == "completed":
+        await _run_manager_contributor_analysis_after_repository(
+            repository_run_id=run_id,
+            repo_id=repo_id,
+            repo_url=repo_url,
+            repo_name=repo_name,
+            branch=branch,
+            full_name=full_name,
+            token=token,
+            is_private=is_private,
+            manager_user_id=manager_user_id,
+        )
+    return result
+
+
+def background_manager_repository_analysis_task(*args, **kwargs):
+    return asyncio.run(_background_manager_repository_analysis_task_async(*args, **kwargs))
+
+
+def background_manager_contributor_analysis_task(*args, **kwargs):
+    return asyncio.run(_run_manager_contributor_analysis_after_repository(*args, **kwargs))
 
 
 def run_background_analysis_task(*args, **kwargs):

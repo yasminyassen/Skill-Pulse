@@ -23,6 +23,9 @@ from app.db.models import (
     RefreshToken,
     SecurityFinding,
     SkillScore,
+    SonarAnalysisSummary,
+    SonarFileMeasure,
+    SonarIssue,
     TechnicalTask,
     User,
     UserStory,
@@ -40,6 +43,7 @@ from app.schemas.profile_schemas import (
     ProfileUpdateRequest,
     SetPasswordRequest,
 )
+from app.services.sonarqube_score_service import build_sonar_repo_summary
 
 
 router = APIRouter(prefix="/manager/profile", tags=["manager-profile"])
@@ -105,8 +109,10 @@ def _query_manager_score_rows(db: Session, manager_id: int) -> list[ScoreRow]:
 
 def _developer_average_scores(rows: list[ScoreRow]) -> dict[int, float]:
     grouped: dict[int, list[float]] = defaultdict(list)
-    for score, _, _, user in rows:
-        grouped[user.id].append(_safe_float(score.overall_score))
+    for _, run, _, user in rows:
+        sonar_score = build_sonar_repo_summary(run).get("sonar_health_score")
+        if sonar_score is not None:
+            grouped[user.id].append(float(sonar_score))
     return {user_id: _avg(scores) for user_id, scores in grouped.items()}
 
 
@@ -374,6 +380,9 @@ def _do_delete_account(
         )
         db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(SonarIssue).filter(SonarIssue.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(SonarFileMeasure).filter(SonarFileMeasure.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(SonarAnalysisSummary).filter(SonarAnalysisSummary.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(SkillScore).filter(SkillScore.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(AnalysisRun).filter(AnalysisRun.id.in_(run_ids)).delete(synchronize_session=False)
 

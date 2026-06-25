@@ -622,7 +622,7 @@ def _hash_windows(lines: list[str], window_size: int = 5) -> list[str]:
     return hashes
 
 
-def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) -> dict:
+def analyze_python_files(files: list[dict]) -> dict:
     file_reports: list[dict] = []
     all_hashes: Counter[str] = Counter()
     file_hashes: dict[str, list[str]] = {}
@@ -903,6 +903,13 @@ def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) 
             "test_function_ratio": test_function_ratio,
             "duplication_score": duplication_score,
             "function_count": len(functions),
+            "function_complexities": [
+                {
+                    "function": function["name"],
+                    "complexity": function["cyclomatic"],
+                }
+                for function in functions
+            ],
             "class_count": len(classes),
             "type_annotation_coverage": type_annotation_coverage,
             "function_type_coverage": function_type_coverage,
@@ -953,12 +960,10 @@ def analyze_python_files(files: list[dict], problem_solving_score: float = 0.0) 
         sum(r["metrics"].get("official_maintainability_index", 0.0) for r in file_reports) / len(file_reports)
         if file_reports else 0.0
     )
-    scores = _compute_scores(file_reports, problem_solving_score, aggregate)
-
     return {
         "files": file_reports,
         "aggregate_metrics": aggregate,
-        "scores": scores,
+        "scores": {},
     }
 
 

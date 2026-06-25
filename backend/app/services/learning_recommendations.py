@@ -1,397 +1,590 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
+import time
 from datetime import datetime, timezone
+from typing import Any
 
-from app.db.models import AnalysisRun, CodeMetrics, SecurityFinding, SkillScore
-from app.services.code_analysis_service import safe_float, safe_int
-from app.services.llm_client import rank_learning_resources, LLMError
-from ai_services.learning.resource_store import retrieve_resources
+from ai_services.rag.learning_rag import get_last_retriever, retrieve_learning_resources
+from app.services.llm_client import (
+    LLMError,
+    _extract_json_payload,
+    _max_retries,
+    _ollama_config,
+    _openrouter_config,
+    _post_with_retry,
+)
 
 logger = logging.getLogger(__name__)
 
-PRIORITY_THRESHOLDS = {
-    "high": 82,
-    "medium": 88,
-}
-
-ISSUE_TO_DOMAINS = {
-    "long functions": ["refactoring", "clean code"],
-    "high complexity": ["refactoring", "complexity management"],
-    "duplicate logic": ["refactoring", "code quality"],
-    "deep nesting": ["readability", "maintainability"],
-    "too many parameters": ["api design", "maintainability"],
-    "missing docstrings": ["documentation", "readability"],
-    "low test coverage": ["testing", "tdd"],
-    "high coupling": ["architecture", "modularity"],
-    "weak authentication": ["authentication security"],
-    "broken access control": ["access control security"],
-    "injection": ["secure coding", "input validation"],
-    "security vulnerabilities": ["secure coding"],
-}
-
-DIFFICULTY_LEVELS = {
-    "Beginner": 0,
-    "Intermediate": 1,
-    "Advanced": 2,
-}
+PRIORITIES = {"High", "Medium", "Low"}
 
 
-def _priority_for_score(score: float) -> str:
-    if score < PRIORITY_THRESHOLDS["high"]:
-        return "High"
-    if score < PRIORITY_THRESHOLDS["medium"]:
-        return "Medium"
-    return "Low"
+def _short_text(value: object, max_len: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    return text[:max_len].rstrip()
 
 
-def _difficulty_for_gap(gap: float) -> str:
-    if gap >= 20:
-        return "Advanced"
-    if gap >= 10:
-        return "Intermediate"
-    return "Beginner"
+def _as_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
-def _difficulty_match(target: str, resource_level: str) -> float:
-    t = DIFFICULTY_LEVELS.get(target, 1)
-    r = DIFFICULTY_LEVELS.get(resource_level, 1)
-    diff = abs(t - r)
-    if diff == 0:
-        return 1.0
-    if diff == 1:
-        return 0.6
-    return 0.2
+def _model_dict(row: object, fields: list[str]) -> dict[str, Any]:
+    return {field: getattr(row, field, None) for field in fields}
 
 
-def _aggregate_metrics(rows: list[CodeMetrics]) -> dict:
-    total_files = len(rows)
-    totals = {
-        "total_loc": 0,
-        "style_violations": 0,
-        "missing_docstrings": 0,
-        "long_functions": 0,
-        "deep_nesting": 0,
-        "too_many_params": 0,
-        "unused_variables": 0,
-        "import_coupling_total": 0,
-        "test_files": 0,
-    }
-    cyclomatic_values: list[float] = []
-    duplication_values: list[float] = []
-    docstring_values: list[float] = []
-    test_ratio_values: list[float] = []
-    nesting_values: list[float] = []
-    function_size_values: list[float] = []
-    comment_ratio_values: list[float] = []
-
-    for row in rows:
-        raw = row.raw_metrics if isinstance(row.raw_metrics, dict) else {}
-        totals["total_loc"] += safe_int(row.lines_of_code, 0)
-
-        cyclomatic_values.append(safe_float(row.cyclomatic_complexity, safe_float(raw.get("cyclomatic_complexity"), 0.0)))
-        duplication_values.append(safe_float(row.duplication_score, safe_float(raw.get("duplication_score"), 0.0)))
-
-        if raw.get("docstring_coverage") is not None:
-            docstring_values.append(safe_float(raw.get("docstring_coverage"), 0.0))
-        if raw.get("test_function_ratio") is not None:
-            test_ratio_values.append(safe_float(raw.get("test_function_ratio"), 0.0))
-        if raw.get("avg_nesting_depth") is not None:
-            nesting_values.append(safe_float(raw.get("avg_nesting_depth"), 0.0))
-        if raw.get("avg_function_size") is not None:
-            function_size_values.append(safe_float(raw.get("avg_function_size"), 0.0))
-        if raw.get("comment_ratio") is not None:
-            comment_ratio_values.append(safe_float(raw.get("comment_ratio"), 0.0))
-
-        totals["style_violations"] += safe_int(raw.get("style_violations"), 0)
-        totals["missing_docstrings"] += safe_int(raw.get("missing_docstrings"), 0)
-        totals["long_functions"] += safe_int(raw.get("long_functions"), 0)
-        totals["deep_nesting"] += safe_int(raw.get("deep_nesting"), 0)
-        totals["too_many_params"] += safe_int(raw.get("too_many_params"), 0)
-        totals["unused_variables"] += safe_int(raw.get("unused_variables"), 0)
-        totals["import_coupling_total"] += safe_int(raw.get("import_coupling"), 0)
-
-        if bool(raw.get("is_test_file")):
-            totals["test_files"] += 1
-
-    def _avg(values: list[float]) -> float:
-        return round(sum(values) / len(values), 4) if values else 0.0
-
-    totals.update({
-        "total_files": total_files,
-        "avg_cyclomatic_complexity": _avg(cyclomatic_values),
-        "avg_duplication_score": _avg(duplication_values),
-        "avg_docstring_coverage": _avg(docstring_values),
-        "avg_test_function_ratio": _avg(test_ratio_values),
-        "avg_nesting_depth": _avg(nesting_values),
-        "avg_function_size": _avg(function_size_values),
-        "avg_comment_ratio": _avg(comment_ratio_values),
-    })
-    return totals
+def _repo_name(run: object) -> str:
+    repo = getattr(run, "repository", None)
+    return (
+        getattr(repo, "full_name", None)
+        or getattr(repo, "name", None)
+        or f"repository:{getattr(run, 'repository_id', 'unknown')}"
+    )
 
 
-def _extract_issues(metrics: dict, findings: list[SecurityFinding]) -> list[str]:
-    issues: list[str] = []
-
-    if metrics.get("long_functions", 0) > 0:
-        issues.append("long functions")
-    if metrics.get("avg_cyclomatic_complexity", 0.0) >= 10:
-        issues.append("high complexity")
-    if metrics.get("avg_duplication_score", 0.0) >= 0.12:
-        issues.append("duplicate logic")
-    if metrics.get("avg_nesting_depth", 0.0) >= 4.0 or metrics.get("deep_nesting", 0) > 0:
-        issues.append("deep nesting")
-    if metrics.get("too_many_params", 0) > 0:
-        issues.append("too many parameters")
-    if metrics.get("missing_docstrings", 0) > 0 or metrics.get("avg_docstring_coverage", 1.0) < 0.6:
-        issues.append("missing docstrings")
-
-    total_files = max(1, metrics.get("total_files", 0))
-    coupling_per_file = metrics.get("import_coupling_total", 0) / total_files
-    if coupling_per_file >= 8:
-        issues.append("high coupling")
-
-    if metrics.get("test_files", 0) == 0 or metrics.get("avg_test_function_ratio", 0.0) < 0.1:
-        issues.append("low test coverage")
-
-    if findings:
-        issues.append("security vulnerabilities")
-        for finding in findings:
-            category = (finding.owasp_category or "").lower()
-            if "authentication" in category:
-                issues.append("weak authentication")
-            if "access control" in category:
-                issues.append("broken access control")
-            if "injection" in category:
-                issues.append("injection")
-
-    return list(dict.fromkeys(issues))
-
-
-def _map_domains(issues: list[str]) -> list[str]:
-    domains: list[str] = []
-    for issue in issues:
-        for domain in ISSUE_TO_DOMAINS.get(issue, []):
-            domains.append(domain)
-    return list(dict.fromkeys(domains))
-
-
-def _build_query(issues: list[str], domains: list[str]) -> str:
-    parts = issues + domains
-    return " ".join(dict.fromkeys([p for p in parts if p]))
-
-
-def _score_resource(hit: dict, target_difficulty: str) -> dict:
-    resource = hit.get("resource") or {}
-    similarity = max(0.0, min(1.0, float(hit.get("score", 0.0))))
-    rating = safe_float(resource.get("rating"), 0.0)
-    popularity = max(0.0, min(1.0, rating / 5.0))
-    difficulty_match = _difficulty_match(target_difficulty, resource.get("difficulty", "Intermediate"))
-
-    final_score = (0.5 * similarity) + (0.3 * popularity) + (0.2 * difficulty_match)
+def _normalise_resource_for_prompt(resource: dict[str, Any]) -> dict[str, Any]:
     return {
-        "resource": resource,
-        "similarity": round(similarity, 4),
-        "popularity": round(popularity, 4),
-        "difficulty_match": round(difficulty_match, 4),
-        "final_score": round(final_score, 4),
+        "id": resource.get("id"),
+        "title": resource.get("title"),
+        "type": resource.get("type"),
+        "provider": resource.get("provider"),
+        "url": resource.get("url"),
+        "topics": resource.get("topics") if isinstance(resource.get("topics"), list) else [],
+        "difficulty": resource.get("difficulty"),
+        "estimated_effort": resource.get("estimated_effort"),
+        "content": resource.get("content"),
+        "score": round(_as_float(resource.get("score")), 6),
     }
 
 
-def _estimate_gain(gap: float) -> int:
-    if gap >= 20:
-        return 10
-    if gap >= 10:
-        return 6
-    return 3
-
-
-def build_learning_recommendations(
-    run: AnalysisRun,
-    score_row: SkillScore,
-    metric_rows: list[CodeMetrics],
-    findings: list[SecurityFinding],
-) -> dict:
-    metrics = _aggregate_metrics(metric_rows)
-    issues = _extract_issues(metrics, findings)
-    domains = _map_domains(issues)
-    query = _build_query(issues, domains)
-
-    scores = {
-        "code_quality": safe_float(score_row.code_quality_score, 0.0),
-        "maintainability": safe_float(score_row.maintainability_score, 0.0),
-        "architecture": safe_float(score_row.architecture_score, 0.0),
-        "problem_solving": safe_float(score_row.problem_solving_score, 0.0),
-        "security_score": safe_float(score_row.security_awareness_score, 0.0),
-        "overall": safe_float(score_row.overall_score, 0.0),
+def _resource_response(resource: dict[str, Any], reason: str = "") -> dict[str, str]:
+    return {
+        "title": _short_text(resource.get("title"), 160),
+        "type": _short_text(resource.get("type"), 60),
+        "provider": _short_text(resource.get("provider"), 80),
+        "url": _short_text(resource.get("url"), 300),
+        "reason": _short_text(reason or "Retrieved as relevant to the analysis evidence.", 180),
     }
 
-    skill_gaps = []
-    for label, score in (
-        ("Code Quality", scores["code_quality"]),
-        ("Maintainability", scores["maintainability"]),
-        ("Architecture", scores["architecture"]),
-        ("Problem Solving", scores["problem_solving"]),
-        ("Security", scores["security_score"]),
-    ):
-        gap = max(0.0, 100.0 - score)
-        skill_gaps.append({
-            "domain": label,
-            "score": round(score, 2),
-            "gap": round(gap, 2),
-            "priority": _priority_for_score(score),
-            "target_difficulty": _difficulty_for_gap(gap),
-            "estimated_gain": _estimate_gain(gap),
+
+def _sonar_issue_dict(issue: object) -> dict[str, Any]:
+    if isinstance(issue, dict):
+        return {
+            "type": issue.get("type"),
+            "severity": issue.get("severity"),
+            "rule": issue.get("rule"),
+            "file_path": issue.get("file_path"),
+            "line": issue.get("line"),
+            "message": issue.get("message"),
+        }
+    return _model_dict(issue, ["type", "severity", "rule", "file_path", "line", "message"])
+
+
+def _security_finding_dict(finding: object) -> dict[str, Any]:
+    if isinstance(finding, dict):
+        return {
+            "tool": finding.get("tool"),
+            "rule": finding.get("rule"),
+            "cwe": finding.get("cwe"),
+            "file_path": finding.get("file_path"),
+            "severity": finding.get("severity"),
+            "description": finding.get("description"),
+            "line_number": finding.get("line_number"),
+            "owasp_category": finding.get("owasp_category"),
+        }
+    return _model_dict(
+        finding,
+        ["tool", "rule", "cwe", "file_path", "severity", "description", "line_number", "owasp_category"],
+    )
+
+
+def _metric_summary(metric_rows: list[object]) -> dict[str, Any]:
+    rows = metric_rows if isinstance(metric_rows, list) else []
+
+    def avg(values: list[float]) -> float | None:
+        return round(sum(values) / len(values), 3) if values else None
+
+    complexity = []
+    duplication = []
+    maintainability = []
+    loc = 0
+    files = []
+    for row in rows:
+        raw = getattr(row, "raw_metrics", None)
+        raw = raw if isinstance(raw, dict) else {}
+        loc += int(getattr(row, "lines_of_code", None) or raw.get("loc") or 0)
+        complexity.append(_as_float(getattr(row, "cyclomatic_complexity", None), None))  # type: ignore[arg-type]
+        duplication.append(_as_float(getattr(row, "duplication_score", None), None))  # type: ignore[arg-type]
+        maintainability.append(_as_float(getattr(row, "maintainability_index", None), None))  # type: ignore[arg-type]
+        files.append({
+            "file_path": getattr(row, "file_path", None),
+            "cyclomatic_complexity": getattr(row, "cyclomatic_complexity", None),
+            "duplication_score": getattr(row, "duplication_score", None),
+            "maintainability_index": getattr(row, "maintainability_index", None),
+            "raw_metrics": {
+                key: raw.get(key)
+                for key in (
+                    "cognitive_complexity",
+                    "test_ratio",
+                    "docstring_coverage",
+                    "style_violations",
+                    "missing_docstrings",
+                    "function_size_avg",
+                )
+                if key in raw
+            },
         })
 
-    target_gap = max((g["gap"] for g in skill_gaps), default=0.0)
-    target_difficulty = _difficulty_for_gap(target_gap)
+    return {
+        "file_count": len(rows),
+        "lines_of_code": loc,
+        "avg_cyclomatic_complexity": avg([value for value in complexity if value is not None]),
+        "avg_duplication_score": avg([value for value in duplication if value is not None]),
+        "avg_maintainability_index": avg([value for value in maintainability if value is not None]),
+        "highest_risk_files": sorted(
+            files,
+            key=lambda item: (
+                _as_float(item.get("cyclomatic_complexity")),
+                _as_float(item.get("duplication_score")),
+            ),
+            reverse=True,
+        )[:10],
+    }
 
-    hits: list[dict] = []
-    if query:
-        try:
-            hits = retrieve_resources(query, top_k=10)
-        except FileNotFoundError as exc:
-            logger.warning("Learning resource index missing: %s", exc)
-    scored = [_score_resource(hit, target_difficulty) for hit in hits]
-    scored.sort(key=lambda x: x["final_score"], reverse=True)
 
-    deduped = []
-    seen = set()
-    for entry in scored:
-        resource = entry["resource"]
-        rid = resource.get("id")
-        if not rid or rid in seen:
-            continue
-        seen.add(rid)
-        deduped.append(entry)
+def _extract_skill_gaps(run: object, detected_skill_gaps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if isinstance(detected_skill_gaps, list):
+        return [gap for gap in detected_skill_gaps if isinstance(gap, dict)]
 
-    fallback_ranked = [
-        {
-            "id": r["resource"].get("id"),
-            "explanation": "Ranked by semantic relevance, quality, and fit.",
-            "expected_gain": _estimate_gain(target_gap),
+    ai_insights = getattr(run, "ai_insights", None)
+    if isinstance(ai_insights, dict):
+        llm_skill_gaps = ai_insights.get("llm_skill_gaps")
+        if isinstance(llm_skill_gaps, dict) and isinstance(llm_skill_gaps.get("skill_gaps"), list):
+            return [gap for gap in llm_skill_gaps["skill_gaps"] if isinstance(gap, dict)]
+    return []
+
+
+def _extract_sonar_metrics(run: object, sonar_metrics: dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(sonar_metrics, dict) and sonar_metrics:
+        return sonar_metrics
+
+    summary = getattr(run, "sonar_summary", None)
+    if summary is not None:
+        measures = getattr(summary, "measures", None)
+        measures = measures if isinstance(measures, dict) else {}
+        return {
+            "quality_gate": getattr(summary, "quality_gate", None),
+            "sonar_health_score": getattr(summary, "sonar_health_score", None),
+            **measures,
         }
-        for r in deduped
+
+    ai_insights = getattr(run, "ai_insights", None)
+    if isinstance(ai_insights, dict):
+        sonar = ai_insights.get("sonar")
+        if isinstance(sonar, dict):
+            component = (sonar.get("measures") or {}).get("component") or {}
+            measures = component.get("measures") if isinstance(component, dict) else []
+            if isinstance(measures, list):
+                return {
+                    item.get("metric"): item.get("value")
+                    for item in measures
+                    if isinstance(item, dict) and item.get("metric")
+                }
+    return {}
+
+
+def _extract_sonar_issues(run: object, sonar_issues: list[object] | None) -> list[dict[str, Any]]:
+    if isinstance(sonar_issues, list):
+        return [_sonar_issue_dict(issue) for issue in sonar_issues]
+
+    relationship_rows = getattr(run, "sonar_issues", None)
+    if isinstance(relationship_rows, list):
+        return [_sonar_issue_dict(issue) for issue in relationship_rows]
+    return []
+
+
+def _build_search_query(
+    sonar_metrics: dict[str, Any],
+    sonar_issues: list[dict[str, Any]],
+    security_findings: list[dict[str, Any]],
+    skill_gaps: list[dict[str, Any]],
+    static_metrics: dict[str, Any],
+) -> str:
+    terms: list[str] = [
+        "actionable developer learning recommendations",
+        "SonarQube clean code practices",
     ]
 
-    ranked_output = None
-    try:
-        ranked_output = rank_learning_resources({
-            "analysis": {
-                "scores": scores,
-                "issues": issues,
-                "skill_gaps": skill_gaps,
+    for gap in skill_gaps[:8]:
+        terms.append(_short_text(gap.get("skill"), 80))
+        terms.append(_short_text(gap.get("reason"), 160))
+        for metric in gap.get("related_metrics") or []:
+            terms.append(_short_text(metric, 80))
+
+    coverage = _as_float(sonar_metrics.get("coverage"), -1)
+    duplication = _as_float(sonar_metrics.get("duplicated_lines_density"), -1)
+    cognitive = _as_float(sonar_metrics.get("cognitive_complexity"), -1)
+    code_smells = _as_float(sonar_metrics.get("code_smells"), 0)
+    bugs = _as_float(sonar_metrics.get("bugs"), 0)
+    vulnerabilities = _as_float(sonar_metrics.get("vulnerabilities"), 0)
+
+    if 0 <= coverage < 80:
+        terms.append("Python unit testing test coverage coverage.py pytest")
+    if duplication > 3 or _as_float(static_metrics.get("avg_duplication_score")) > 3:
+        terms.append("duplication reduction refactoring clean code")
+    if cognitive > 15 or _as_float(static_metrics.get("avg_cyclomatic_complexity")) > 10:
+        terms.append("cognitive complexity code refactoring maintainability")
+    if code_smells > 0:
+        terms.append("clean code maintainability SonarQube code smells")
+    if bugs > 0:
+        terms.append("unit testing reliability regression tests")
+    if vulnerabilities > 0 or security_findings:
+        terms.append("secure coding OWASP Top 10 input validation secrets management SQL injection prevention")
+
+    for issue in sonar_issues[:20]:
+        terms.extend([
+            _short_text(issue.get("type"), 40),
+            _short_text(issue.get("severity"), 40),
+            _short_text(issue.get("rule"), 80),
+            _short_text(issue.get("message"), 180),
+        ])
+
+    for finding in security_findings[:20]:
+        terms.extend([
+            _short_text(finding.get("severity"), 40),
+            _short_text(finding.get("cwe"), 40),
+            _short_text(finding.get("owasp_category"), 80),
+            _short_text(finding.get("description"), 180),
+        ])
+
+    return " ".join(term for term in terms if term).strip()
+
+
+def _call_learning_recommendations_once(payload: dict[str, Any], ai_mode: str) -> dict[str, Any]:
+    if ai_mode == "ollama":
+        url, model = _ollama_config()
+        body = {
+            "model": model,
+            "task": "learning_recommendations",
+            "payload": payload,
+            "response_format": "json",
+            "instructions": (
+                "Return only valid JSON with key recommendations. Use only resources from payload.retrieved_resources. "
+                "Do not invent URLs."
+            ),
+        }
+        jr = _post_with_retry(f"{url.rstrip('/')}/llm", body, max_retries=2)
+        return jr if isinstance(jr, dict) else {}
+
+    url, key, model = _openrouter_config()
+    body = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Return only strict JSON. No markdown. Do not invent resource URLs. "
+                    "Recommended resources must come only from the provided retrieved_resources list."
+                ),
             },
-            "resources": [
-                {
-                    "id": e["resource"].get("id"),
-                    "title": e["resource"].get("title"),
-                    "type": e["resource"].get("type"),
-                    "difficulty": e["resource"].get("difficulty"),
-                    "topics": e["resource"].get("topics"),
-                    "tags": e["resource"].get("tags"),
-                    "score": e["final_score"],
-                }
-                for e in deduped
-            ],
-        })
-    except LLMError as exc:
-        logger.warning("Learning LLM ranking failed: %s", exc)
+            {
+                "role": "user",
+                "content": (
+                    "Generate actionable developer learning recommendations from the provided analysis evidence.\n\n"
+                    "Use this exact JSON shape:\n"
+                    "{\n"
+                    "  \"recommendations\": [\n"
+                    "    {\n"
+                    "      \"skill\": \"string\",\n"
+                    "      \"why_needed\": \"string\",\n"
+                    "      \"priority\": \"High|Medium|Low\",\n"
+                    "      \"learning_objectives\": [\"string\"],\n"
+                    "      \"estimated_effort\": \"string\",\n"
+                    "      \"expected_improvement\": \"string\",\n"
+                    "      \"resources\": [\n"
+                    "        {\"id\": \"resource id from retrieved_resources\", \"reason\": \"why this resource fits\"}\n"
+                    "      ]\n"
+                    "    }\n"
+                    "  ]\n"
+                    "}\n\n"
+                    "Rules:\n"
+                    "- Base recommendations on sonar_metrics, sonar_issues, security_findings, detected_skill_gaps, and retrieved_resources.\n"
+                    "- Do not include dashboard summary metrics or skill gap cards.\n"
+                    "- Do not invent resource IDs, titles, providers, or URLs.\n"
+                    "- If retrieved_resources is empty, still produce recommendations but use empty resources arrays.\n"
+                    "- Prefer 2 to 5 recommendations.\n\n"
+                    f"Input:\n{json.dumps(payload, ensure_ascii=False)}"
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "max_tokens": 3000,
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    jr = _post_with_retry(f"{url.rstrip('/')}/chat/completions", body, headers=headers, max_retries=2)
+    return _extract_json_payload((jr.get("choices") or [{}])[0].get("message", {}).get("content", "")) if isinstance(jr, dict) else {}
 
-    ranked_list = ranked_output.get("ranked") if isinstance(ranked_output, dict) else None
-    if not isinstance(ranked_list, list):
-        ranked_list = fallback_ranked
 
-    ranked_index = {item.get("id"): item for item in ranked_list if isinstance(item, dict)}
-    deduped_index = {entry["resource"].get("id"): entry for entry in deduped}
+def _normalise_recommendations(resp: dict[str, Any], retrieved_resources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(resp, dict) or not isinstance(resp.get("recommendations"), list):
+        return []
 
-    recommendations = []
-    for ranked in ranked_list:
-        rid = ranked.get("id") if isinstance(ranked, dict) else None
-        entry = deduped_index.get(rid)
-        if not entry:
+    by_id = {str(resource.get("id")): resource for resource in retrieved_resources if resource.get("id")}
+    by_url = {str(resource.get("url")): resource for resource in retrieved_resources if resource.get("url")}
+    recommendations: list[dict[str, Any]] = []
+
+    for item in resp["recommendations"]:
+        if not isinstance(item, dict):
             continue
-        resource = entry["resource"]
+        skill = _short_text(item.get("skill"), 100)
+        why_needed = _short_text(item.get("why_needed"), 300)
+        if not skill or not why_needed:
+            continue
+
+        objectives = item.get("learning_objectives")
+        if not isinstance(objectives, list):
+            objectives = []
+        objectives = [_short_text(objective, 180) for objective in objectives if _short_text(objective, 180)][:5]
+
+        resources = []
+        for raw_resource in item.get("resources") or []:
+            if not isinstance(raw_resource, dict):
+                continue
+            resource = by_id.get(str(raw_resource.get("id"))) or by_url.get(str(raw_resource.get("url")))
+            if not resource:
+                continue
+            resources.append(_resource_response(resource, str(raw_resource.get("reason") or "")))
+
+        priority = str(item.get("priority") or "").strip().title()
         recommendations.append({
-            "id": rid,
-            "title": resource.get("title"),
-            "provider": resource.get("provider"),
-            "type": resource.get("type"),
-            "difficulty": resource.get("difficulty"),
-            "topics": resource.get("topics"),
-            "duration": resource.get("duration"),
-            "rating": resource.get("rating"),
-            "url": resource.get("url"),
-            "tags": resource.get("tags"),
-            "relevance": entry["similarity"],
-            "final_score": entry["final_score"],
-            "expected_gain": ranked.get("expected_gain", _estimate_gain(target_gap)),
-            "explanation": ranked.get("explanation", ""),
+            "skill": skill,
+            "why_needed": why_needed,
+            "priority": priority if priority in PRIORITIES else "Medium",
+            "learning_objectives": objectives or [f"Apply {skill} practices to the highest-risk findings in this analysis."],
+            "estimated_effort": _short_text(item.get("estimated_effort"), 80) or "2-4 hours",
+            "expected_improvement": _short_text(item.get("expected_improvement"), 240) or "Reduce recurring findings and improve code review readiness.",
+            "resources": resources[:3],
+        })
+
+    return recommendations[:5]
+
+
+def _fallback_recommendations(
+    retrieved_resources: list[dict[str, Any]],
+    skill_gaps: list[dict[str, Any]],
+    sonar_metrics: dict[str, Any],
+    security_findings: list[dict[str, Any]],
+    sonar_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    resource_pool = retrieved_resources[:5]
+
+    def matching_resources(skill: str) -> list[dict[str, str]]:
+        skill_tokens = set(re.findall(r"[a-z0-9]+", skill.lower()))
+        matched = []
+        for resource in resource_pool:
+            topics = " ".join(resource.get("topics") or [])
+            haystack = f"{resource.get('title')} {topics} {resource.get('content')}".lower()
+            if not skill_tokens or any(token in haystack for token in skill_tokens):
+                matched.append(_resource_response(resource, f"Retrieved for {skill} based on the analysis evidence."))
+        return (matched or [_resource_response(resource, "Retrieved as one of the most relevant resources.") for resource in resource_pool])[:3]
+
+    recommendations: list[dict[str, Any]] = []
+    for gap in skill_gaps[:4]:
+        skill = _short_text(gap.get("skill"), 100) or "Clean Code"
+        recommendations.append({
+            "skill": skill,
+            "why_needed": _short_text(gap.get("reason"), 260) or "Detected skill gap evidence indicates this topic needs focused practice.",
+            "priority": str(gap.get("priority") or "Medium").title() if str(gap.get("priority") or "").title() in PRIORITIES else "Medium",
+            "learning_objectives": [
+                f"Explain the main practices behind {skill}.",
+                "Apply the practices to the highest-risk files or findings from this analysis.",
+                "Add review checks that prevent the same issue pattern from recurring.",
+            ],
+            "estimated_effort": resource_pool[0].get("estimated_effort") if resource_pool else "2-4 hours",
+            "expected_improvement": "Reduce repeated findings and improve maintainability, reliability, or security signals in the next analysis.",
+            "resources": matching_resources(skill),
+        })
+
+    if recommendations:
+        return recommendations[:5]
+
+    if security_findings or _as_float(sonar_metrics.get("vulnerabilities")) > 0:
+        recommendations.append({
+            "skill": "Secure Coding",
+            "why_needed": "Security findings or vulnerability signals indicate a need to strengthen secure implementation habits.",
+            "priority": "High",
+            "learning_objectives": [
+                "Map findings to OWASP risk categories.",
+                "Fix validation, injection, secrets, and configuration issues using repeatable secure coding checks.",
+            ],
+            "estimated_effort": resource_pool[0].get("estimated_effort") if resource_pool else "3-5 hours",
+            "expected_improvement": "Fewer high-risk security findings and stronger prevention of recurring vulnerability patterns.",
+            "resources": matching_resources("secure coding OWASP input validation secrets SQL injection"),
+        })
+
+    coverage = _as_float(sonar_metrics.get("coverage"), -1)
+    if coverage < 80 or any(str(issue.get("type")).upper() == "BUG" for issue in sonar_issues):
+        recommendations.append({
+            "skill": "Python Unit Testing",
+            "why_needed": "Coverage, bug, or reliability signals show that more regression-focused tests would reduce change risk.",
+            "priority": "High" if coverage >= 0 and coverage < 60 else "Medium",
+            "learning_objectives": [
+                "Write focused unit tests for boundary cases and bug-prone paths.",
+                "Use coverage reports to find meaningful untested behavior.",
+            ],
+            "estimated_effort": resource_pool[0].get("estimated_effort") if resource_pool else "2-4 hours",
+            "expected_improvement": "Higher coverage and fewer regressions around changed code.",
+            "resources": matching_resources("Python unit testing coverage pytest unittest"),
         })
 
     if not recommendations:
-        for entry in deduped:
-            resource = entry["resource"]
-            recommendations.append({
-                "id": resource.get("id"),
-                "title": resource.get("title"),
-                "provider": resource.get("provider"),
-                "type": resource.get("type"),
-                "difficulty": resource.get("difficulty"),
-                "topics": resource.get("topics"),
-                "duration": resource.get("duration"),
-                "rating": resource.get("rating"),
-                "url": resource.get("url"),
-                "tags": resource.get("tags"),
-                "relevance": entry["similarity"],
-                "final_score": entry["final_score"],
-                "expected_gain": _estimate_gain(target_gap),
-                "explanation": "Ranked by semantic relevance, quality, and fit.",
-            })
+        recommendations.append({
+            "skill": "Clean Code and Maintainability",
+            "why_needed": "Sonar and static analysis evidence should be converted into concrete refactoring practice.",
+            "priority": "Medium",
+            "learning_objectives": [
+                "Prioritize code smells by risk and locality.",
+                "Refactor complex or duplicated code in small reviewed steps.",
+            ],
+            "estimated_effort": resource_pool[0].get("estimated_effort") if resource_pool else "2-4 hours",
+            "expected_improvement": "Improved maintainability and easier future reviews.",
+            "resources": matching_resources("clean code maintainability refactoring duplication cognitive complexity"),
+        })
 
-    security_focus = scores["security_score"] < PRIORITY_THRESHOLDS["high"]
-    security_resources = []
-    if security_focus:
+    return recommendations[:5]
+
+
+def _has_analysis_evidence(
+    sonar_metrics: dict[str, Any],
+    sonar_issues: list[dict[str, Any]],
+    security_findings: list[dict[str, Any]],
+    skill_gaps: list[dict[str, Any]],
+    static_metrics: dict[str, Any],
+) -> bool:
+    if sonar_issues or security_findings or skill_gaps:
+        return True
+    if int(static_metrics.get("file_count") or 0) > 0 or int(static_metrics.get("lines_of_code") or 0) > 0:
+        return True
+    if sonar_metrics.get("sonar_summary_available") is True:
+        return True
+    if isinstance(sonar_metrics.get("sonar_file_metrics"), list) and sonar_metrics.get("sonar_file_metrics"):
+        return True
+    metric_keys = (
+        "coverage",
+        "bugs",
+        "code_smells",
+        "vulnerabilities",
+        "duplicated_lines_density",
+        "cognitive_complexity",
+        "sonar_health_score",
+        "quality_gate",
+    )
+    return any(sonar_metrics.get(key) not in (None, "", []) for key in metric_keys)
+
+
+def build_learning_recommendations(
+    run: object,
+    score_row: object,
+    metric_rows: list[object],
+    security_findings: list[object],
+    sonar_metrics: dict[str, Any] | None = None,
+    sonar_issues: list[object] | None = None,
+    detected_skill_gaps: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    sonar_metrics_payload = _extract_sonar_metrics(run, sonar_metrics)
+    sonar_issue_payload = _extract_sonar_issues(run, sonar_issues)[:50]
+    security_payload = [_security_finding_dict(finding) for finding in (security_findings or [])][:50]
+    skill_gap_payload = _extract_skill_gaps(run, detected_skill_gaps)[:20]
+    static_metrics = _metric_summary(metric_rows or [])
+
+    if not _has_analysis_evidence(
+        sonar_metrics=sonar_metrics_payload,
+        sonar_issues=sonar_issue_payload,
+        security_findings=security_payload,
+        skill_gaps=skill_gap_payload,
+        static_metrics=static_metrics,
+    ):
+        return {
+            "analysis_run_id": int(getattr(run, "id", 0) or 0),
+            "repo": _repo_name(run),
+            "branch": getattr(run, "branch", None) or "main",
+            "recommendations": [],
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "rag_metadata": {
+                "enabled": False,
+                "retrieved_count": 0,
+                "retriever": "keyword_fallback",
+            },
+        }
+
+    query = _build_search_query(
+        sonar_metrics=sonar_metrics_payload,
+        sonar_issues=sonar_issue_payload,
+        security_findings=security_payload,
+        skill_gaps=skill_gap_payload,
+        static_metrics=static_metrics,
+    )
+    retrieved = retrieve_learning_resources(query, top_k=7)
+    retriever = get_last_retriever()
+    rag_enabled = retriever == "faiss"
+
+    prompt_payload = {
+        "repo": _repo_name(run),
+        "branch": getattr(run, "branch", None) or "main",
+        "score_context": {
+            "code_quality_score": getattr(score_row, "code_quality_score", None),
+            "maintainability_score": getattr(score_row, "maintainability_score", None),
+            "security_awareness_score": getattr(score_row, "security_awareness_score", None),
+            "overall_score": getattr(score_row, "overall_score", None),
+        },
+        "sonar_metrics": sonar_metrics_payload,
+        "sonar_issues": sonar_issue_payload,
+        "security_findings": security_payload,
+        "detected_skill_gaps": skill_gap_payload,
+        "static_metrics": static_metrics,
+        "retrieved_resources": [_normalise_resource_for_prompt(resource) for resource in retrieved],
+    }
+
+    recommendations: list[dict[str, Any]] = []
+    ai_mode = (os.environ.get("AI_MODE") or "openrouter").lower()
+    for attempt in range(1, _max_retries() + 1):
         try:
-            security_hits = retrieve_resources(
-                "owasp secure coding authentication injection access control",
-                top_k=6,
-            )
-        except FileNotFoundError:
-            security_hits = []
-        for hit in security_hits:
-            resource = hit.get("resource") or {}
-            rid = resource.get("id")
-            if not rid or rid in seen:
-                continue
-            security_resources.append({
-                "id": rid,
-                "title": resource.get("title"),
-                "provider": resource.get("provider"),
-                "type": resource.get("type"),
-                "difficulty": resource.get("difficulty"),
-                "topics": resource.get("topics"),
-                "duration": resource.get("duration"),
-                "rating": resource.get("rating"),
-                "url": resource.get("url"),
-                "tags": resource.get("tags"),
-                "relevance": round(max(0.0, min(1.0, float(hit.get("score", 0.0)))), 4),
-            })
+            llm_resp = _call_learning_recommendations_once(prompt_payload, ai_mode)
+            recommendations = _normalise_recommendations(llm_resp, retrieved)
+        except Exception as exc:
+            logger.warning("learning_recommendations attempt %d failed: %s", attempt, exc)
+            recommendations = []
+
+        if recommendations:
+            break
+        if attempt < _max_retries():
+            time.sleep(2 ** (attempt - 1))
+
+    if not recommendations:
+        recommendations = _fallback_recommendations(
+            retrieved_resources=retrieved,
+            skill_gaps=skill_gap_payload,
+            sonar_metrics=sonar_metrics_payload,
+            security_findings=security_payload,
+            sonar_issues=sonar_issue_payload,
+        )
 
     return {
-        "analysis_run_id": run.id,
-        "repo": run.repository.full_name if run.repository else None,
-        "branch": run.branch,
-        "scores": scores,
-        "issues": issues,
-        "skill_gaps": skill_gaps,
-        "query": query,
+        "analysis_run_id": int(getattr(run, "id", 0) or 0),
+        "repo": _repo_name(run),
+        "branch": getattr(run, "branch", None) or "main",
         "recommendations": recommendations,
-        "security_focus": {
-            "enabled": security_focus,
-            "threshold": PRIORITY_THRESHOLDS["high"],
-            "resources": security_resources,
-        },
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "rag_metadata": {
+            "enabled": bool(rag_enabled),
+            "retrieved_count": len(retrieved),
+            "retriever": retriever if retriever in {"faiss", "keyword_fallback"} else "keyword_fallback",
+        },
     }

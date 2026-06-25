@@ -6,7 +6,7 @@ const VerifyEmail: React.FC = () => {
   const params = new URLSearchParams(window.location.search);
   const emailFromQuery = params.get("email") ?? "";
 
-  const [workEmail, setWorkEmail] = useState(emailFromQuery);
+  const [workEmail] = useState(emailFromQuery);
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

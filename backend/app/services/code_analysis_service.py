@@ -4,25 +4,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db.models import AnalysisRun, SkillScore, User
-
-
-def compute_overall_score(scores: dict) -> float:
-    code_quality = float(scores.get("code_quality", 0.0) or 0.0)
-    maintainability = float(scores.get("maintainability", 0.0) or 0.0)
-    architecture = float(scores.get("architecture", 0.0) or 0.0)
-    problem_solving = float(scores.get("problem_solving", 0.0) or 0.0)
-    if problem_solving == 0.0:
-        import logging
-        logging.warning(
-            "compute_overall_score called with problem_solving=0. Full scores dict: %s",
-            scores,
-        )
-    return round((code_quality + maintainability + architecture + problem_solving) / 4.0, 2)
-
-
-def apply_adjustment(base_score: float, adjustment: float, confidence: float) -> float:
-    weight = 0.3 * confidence
-    return base_score + (adjustment * weight)
+from app.services.sonarqube_score_service import compute_skill_score_engine
 
 
 def safe_float(value, default: float = 0.0) -> float:
@@ -74,12 +56,16 @@ def link_existing_run_to_user(db: Session, run: AnalysisRun, user_id: int) -> bo
     db.add(SkillScore(
         analysis_run_id=run.id,
         user_id=user_id,
-        code_quality_score=source_score.code_quality_score,
-        maintainability_score=source_score.maintainability_score,
-        architecture_score=source_score.architecture_score,
+        code_quality_score=None,
+        maintainability_score=None,
+        architecture_score=None,
         security_awareness_score=source_score.security_awareness_score,
-        problem_solving_score=source_score.problem_solving_score,
-        overall_score=source_score.overall_score,
+        problem_solving_score=None,
+        overall_score=source_score.overall_score or compute_skill_score_engine(
+            sonar_health_score=source_score.sonar_health_score,
+            security_score=source_score.security_awareness_score,
+        ),
+        sonar_health_score=source_score.sonar_health_score,
     ))
     db.commit()
     return True

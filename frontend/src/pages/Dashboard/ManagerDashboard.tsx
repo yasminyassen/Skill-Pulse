@@ -1,29 +1,36 @@
-import { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Activity,
   AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   BarChart3,
   Brain,
   CheckCircle2,
-  Code2,
-  Eye,
   GitBranch,
-  Minus,
-  Network,
+  Gauge,
+  Layers,
+  LineChart as LineChartIcon,
   RefreshCcw,
-  Star,
+  ShieldCheck,
+  Sparkles,
+  Target,
   TrendingUp,
-  Trophy,
   Users,
-  Wrench,
-  X,
+  ChevronDown,
+  Lock,
+  Unlock,
+  Building2,
+  CalendarClock,
+  GitCommitHorizontal,
+  BadgeCheck,
+  Bug,
+  Flame,
+  Copy,
+  Zap,
+  Award,
+  AlertCircle,
+  Star,
 } from "lucide-react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   Line,
   LineChart,
@@ -35,1713 +42,1104 @@ import {
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
 
-interface DashboardRepo {
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+interface Repo {
   id: number;
   name: string | null;
   full_name: string | null;
-  is_private: boolean;
-  last_analyzed_at: string | null;
+  is_private?: boolean;
+  last_analyzed_at?: string | null;
   analysis_count: number;
   member_count: number;
 }
 
-interface TopPerformer {
-  id: number;
-  full_name: string;
-  username: string;
-  average_score: number;
+interface RepositorySummary {
+  analysis_run_id: number | null;
+  repository_id: number | null;
+  repository_name: string | null;
+  organization: string | null;
+  branch: string | null;
+  last_analysis: string | null;
+  analyzed_on: string | null;
+  overall_repository_score: number | null;
+  repository_status: string;
 }
 
-interface Kpis {
-  team_average_score: number;
-  team_size: number;
-  top_performer: TopPerformer | null;
-  growth_rate: number;
+interface MetricCard {
+  key: string;
+  label: string;
+  value: number | string | null;
+  unit: string | null;
+  status: string | null;
+}
+
+interface ContributorHighlight {
+  id: number | null;
+  full_name: string | null;
+  username: string | null;
+  score: number | null;
+  reasoning: string | null;
+}
+
+interface TeamPerformance {
+  average_team_score: number | null;
+  average_team_security_score: number | null;
+  average_coverage: number | null;
+  average_code_smells: number | null;
+  best_contributor: ContributorHighlight | null;
+  needs_support_contributor: ContributorHighlight | null;
+  total_contributors: number;
+}
+
+interface ContributorRow {
+  id: number;
+  developer: string;
+  username: string;
+  role: string | null;
+  skill_score: number | null;
+  health_score: number | null;
+  security_score: number | null;
+  coverage: number | null;
+  bugs: number | null;
+  code_smells: number | null;
+  complexity: number | null;
+  status: string;
 }
 
 interface TrendPoint {
   period: string;
   label: string;
-  average_score: number;
-  code_quality: number;
-  problem_solving: number;
-  architecture: number;
-  maintainability: number;
+  health_score: number | null;
+  security_score: number | null;
 }
 
-interface SkillDistribution {
-  code_quality: number;
-  problem_solving: number;
-  architecture: number;
-  maintainability: number;
+interface RiskItem {
+  title: string;
+  detail: string | null;
+  file_path: string | null;
+  metric: number | string | null;
+  severity: string | null;
+  count: number | null;
 }
 
-interface TeamMember {
-  id: number;
-  full_name: string;
-  username: string;
-  email: string;
-  avatar_url: string | null;
-  specialization: string | null;
-  average_overall_score: number;
-  code_quality: number;
-  problem_solving: number;
-  architecture: number;
-  maintainability: number;
-  repository_count: number;
-  analysis_count: number;
-  overall_delta: number | null;
+interface RiskGroups {
+  high_code_smells: RiskItem[];
+  high_bug_files: RiskItem[];
+  files_for_bugs: RiskItem[];
 }
 
-interface TeamInsights {
-  actionable_recommendations?: ActionableRecommendations;
+interface Recommendations {
+  fix_first: string[];
+  prioritize_next: string[];
+  plan_when_possible: string[];
+  strengthen_further: string[];
+  actionable_recommendations: string[];
+  prioritized_team_next_moves: string[];
+  team_improvement_guidance: string[];
+  best_contributor_reasoning: string | null;
+  needs_support_reasoning: string | null;
+  architectural_concerns: string[];
+  delivery_risks: string[];
+  quality_concerns: string[];
+  team_strengths: string[];
+  recommended_priorities: string[];
 }
 
-interface ActionableRecommendations {
-  mandatory: string[];
-  highly_required: string[];
-  nice_to_have: string[];
-  enhanced: string[];
+interface Overview {
+  repositories: Repo[];
+  repository_summary: RepositorySummary;
+  repository_metrics: MetricCard[];
+  team_performance: TeamPerformance;
+  contributors: ContributorRow[];
+  trends: TrendPoint[];
+  risks: RiskGroups;
+  recommendations: Recommendations;
 }
 
-interface MemberDetail {
-  member: TeamMember;
-  timeline: TrendPoint[];
-  key_strengths: string[];
-  areas_for_improvement: string[];
-}
+// ─── Defaults ────────────────────────────────────────────────────────────────
+
+const emptyOverview: Overview = {
+  repositories: [],
+  repository_summary: {
+    analysis_run_id: null, repository_id: null, repository_name: null,
+    organization: null, branch: null, last_analysis: null, analyzed_on: null,
+    overall_repository_score: null, repository_status: "Unavailable",
+  },
+  repository_metrics: [],
+  team_performance: {
+    average_team_score: null, average_team_security_score: null,
+    average_coverage: null, average_code_smells: null,
+    best_contributor: null, needs_support_contributor: null, total_contributors: 0,
+  },
+  contributors: [],
+  trends: [],
+  risks: { high_code_smells: [], high_bug_files: [], files_for_bugs: [] },
+  recommendations: {
+    fix_first: [], prioritize_next: [], plan_when_possible: [], strengthen_further: [],
+    actionable_recommendations: [], prioritized_team_next_moves: [],
+    team_improvement_guidance: [], best_contributor_reasoning: null,
+    needs_support_reasoning: null, architectural_concerns: [], delivery_risks: [],
+    quality_concerns: [], team_strengths: [], recommended_priorities: [],
+  },
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const accent = "#8b5cf6";
 
-const emptyKpis: Kpis = {
-  team_average_score: 0,
-  team_size: 0,
-  top_performer: null,
-  growth_rate: 0,
+const accentByMetric: Record<string, string> = {
+  overall_score: "#14b8a6",
+  sonar_health_score: "#3b82f6",
+  security_score: "#22c55e",
+  coverage: "#06b6d4",
+  bugs: "#ef4444",
+  code_smells: "#f97316",
+  duplication: "#f59e0b",
+  complexity: "#ec4899",
 };
 
-const emptySkills: SkillDistribution = {
-  code_quality: 0,
-  problem_solving: 0,
-  architecture: 0,
-  maintainability: 0,
+const fmtNumber = (value: number | null | undefined, digits = 0) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return Number(value).toFixed(digits);
 };
 
-const emptyActionableRecommendations: ActionableRecommendations = {
-  mandatory: [],
-  highly_required: [],
-  nice_to_have: [],
-  enhanced: [],
+const fmtMetric = (metric?: MetricCard) => {
+  if (!metric || metric.value === null || metric.value === undefined || metric.value === "") return "—";
+  if (typeof metric.value === "number") {
+    const digits = metric.key === "coverage" || metric.key === "duplication" ? 1 : 0;
+    return `${metric.value.toFixed(digits)}${metric.unit || ""}`;
+  }
+  return `${metric.value}${metric.unit || ""}`;
 };
 
-const emptyInsights: TeamInsights = {
-  actionable_recommendations: emptyActionableRecommendations,
+const fmtPlainMetric = (value: number | string | null | undefined, unit = "", digits = 0) => {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number") return `${value.toFixed(digits)}${unit}`;
+  return `${value}${unit}`;
 };
 
-const skillMeta = [
-  { key: "code_quality", label: "Code Quality", icon: Code2, color: "#6366f1" },
-  { key: "problem_solving", label: "Problem Solving", icon: Brain, color: "#06b6d4" },
-  { key: "architecture", label: "Architecture", icon: Network, color: "#22c55e" },
-  { key: "maintainability", label: "Maintainability", icon: Wrench, color: "#f59e0b" },
-] as const;
-
-const scoreLineMeta = [
-  { key: "average_score", label: "Overall", color: accent },
-  { key: "code_quality", label: "Code Quality", color: "#6366f1" },
-  { key: "problem_solving", label: "Problem Solving", color: "#06b6d4" },
-  { key: "architecture", label: "Architecture", color: "#22c55e" },
-  { key: "maintainability", label: "Maintainability", color: "#f59e0b" },
-] as const;
-
-const trendRangeOptions = [
-  { value: "30d", label: "30D" },
-  { value: "90d", label: "90D" },
-  { value: "6m", label: "6M" },
-  { value: "12m", label: "12M" },
-  { value: "all", label: "All" },
-] as const;
-
-const recommendationSections = [
-  {
-    key: "mandatory",
-    title: "Fix First",
-    emptyTitle: "No immediate actions",
-    emptyCopy: "Nothing critical is flagged for this view.",
-    icon: AlertTriangle,
-    color: "#ef4444",
-    bg: "rgba(239,68,68,0.13)",
-  },
-  {
-    key: "highly_required",
-    title: "Prioritize Next",
-    emptyTitle: "No high-priority actions",
-    emptyCopy: "Near-term improvement items will appear here.",
-    icon: TrendingUp,
-    color: "#f59e0b",
-    bg: "rgba(245,158,11,0.14)",
-  },
-  {
-    key: "nice_to_have",
-    title: "Plan When Possible",
-    emptyTitle: "No scheduled improvements",
-    emptyCopy: "Useful but non-urgent actions will appear here.",
-    icon: CheckCircle2,
-    color: "#06b6d4",
-    bg: "rgba(6,182,212,0.13)",
-  },
-  {
-    key: "enhanced",
-    title: "Strengthen Further",
-    emptyTitle: "No polish actions",
-    emptyCopy: "Enhancement ideas will appear as the team baseline grows.",
-    icon: Star,
-    color: "#22c55e",
-    bg: "rgba(34,197,94,0.14)",
-  },
-] as const;
-
-const fmtScore = (value: number | null | undefined, digits = 0) => {
-  const n = Number(value ?? 0);
-  return Number.isFinite(n) ? n.toFixed(digits) : "0";
+const fmtDate = (value: string | null | undefined) => {
+  if (!value) return "Unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unavailable";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 
-const clampScore = (value: number) => Math.max(0, Math.min(100, Number(value) || 0));
-
-const initials = (name: string) =>
-  name
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map(part => part[0])
-    .join("")
-    .toUpperCase() || "SP";
-
-const scoreBadge = (score: number) => {
-  if (score >= 90) return { label: "Excellent", color: "#16a34a", bg: "rgba(34,197,94,0.13)" };
-  if (score >= 80) return { label: "Strong", color: "#0284c7", bg: "rgba(14,165,233,0.14)" };
-  if (score >= 70) return { label: "Steady", color: "#7c3aed", bg: "rgba(139,92,246,0.14)" };
-  return { label: "Needs Focus", color: "#ea580c", bg: "rgba(249,115,22,0.14)" };
+const scoreColor = (score: number | null | undefined) => {
+  if (score === null || score === undefined) return "#94a3b8";
+  const safe = Math.max(0, Math.min(100, score));
+  if (safe >= 90) return "#22c55e";
+  if (safe >= 75) return "#14b8a6";
+  if (safe >= 60) return "#f59e0b";
+  return "#ef4444";
 };
 
-const specializationLabel = (value: string | null) => {
-  if (!value) return "Developer";
-  const labels: Record<string, string> = {
-    backend: "Backend Developer",
-    frontend: "Frontend Developer",
-    qa: "QA Developer",
+const statusClass = (status: string | null | undefined) => {
+  const n = (status || "").toLowerCase();
+  if (n.includes("excellent")) return "excellent";
+  if (n.includes("good")) return "good";
+  if (n.includes("low")) return "good";
+  if (n.includes("fair")) return "fair";
+  if (n.includes("medium")) return "fair";
+  if (n.includes("high")) return "support";
+  if (n.includes("support") || n.includes("improvement")) return "support";
+  return "neutral";
+};
+
+// ─── Tab definitions ──────────────────────────────────────────────────────────
+
+type TabKey = "overview" | "team" | "contributors" | "trends" | "risks" | "recommendations";
+
+const TABS: { key: TabKey; label: string; icon: ReactNode }[] = [
+  { key: "overview",         label: "Repository Health",   icon: <Gauge size={15} /> },
+  { key: "team",             label: "Team Performance",    icon: <Users size={15} /> },
+  { key: "contributors",     label: "Contributors",        icon: <BarChart3 size={15} /> },
+  { key: "trends",           label: "Trends",              icon: <LineChartIcon size={15} /> },
+  { key: "risks",            label: "Risks & Insights",    icon: <AlertTriangle size={15} /> },
+  { key: "recommendations",  label: "Recommendations",     icon: <Sparkles size={15} /> },
+];
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function MetricTile({ metric }: { metric: MetricCard }) {
+  const color = accentByMetric[metric.key] || "#64748b";
+  const iconMap: Record<string, ReactNode> = {
+    overall_score: <Star size={17} />,
+    sonar_health_score: <ShieldCheck size={17} />,
+    security_score: <BadgeCheck size={17} />,
+    coverage: <GitCommitHorizontal size={17} />,
+    bugs: <Bug size={17} />,
+    code_smells: <Flame size={17} />,
+    duplication: <Copy size={17} />,
+    complexity: <Zap size={17} />,
   };
-  return labels[value] || `${value.charAt(0).toUpperCase()}${value.slice(1)} Developer`;
-};
-
-function ManagerDashboardSkeleton() {
   return (
-    <>
-      <div className="mgr-kpi-grid">
-        {[1, 2, 3, 4].map(item => <div key={item} className="mgr-card mgr-skeleton" style={{ height: 132 }} />)}
-      </div>
-      <div className="mgr-panel mgr-skeleton" style={{ height: 300 }} />
-      <div className="mgr-panel mgr-skeleton" style={{ height: 260 }} />
-    </>
-  );
-}
-
-function ProgressBar({ value, color = accent }: { value: number; color?: string }) {
-  return (
-    <div className="mgr-progress" aria-hidden="true">
-      <span style={{ width: `${clampScore(value)}%`, background: color }} />
-    </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  detail,
-  icon: Icon,
-  highlight = false,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  icon: typeof Users;
-  highlight?: boolean;
-}) {
-  return (
-    <section className={`mgr-card ${highlight ? "mgr-card-primary" : ""}`}>
-      <div className="mgr-card-top">
-        <span>{label}</span>
-        <Icon size={18} strokeWidth={2} />
-      </div>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </section>
-  );
-}
-
-function ScoreDelta({ value }: { value: number | null }) {
-  if (value === null || value === undefined) return null;
-  const rounded = Number(value.toFixed(1));
-  const isUp = rounded > 0;
-  const isDown = rounded < 0;
-  const Icon = isUp ? ArrowUpRight : isDown ? ArrowDownRight : Minus;
-  return (
-    <span className={`mgr-delta ${isUp ? "mgr-delta-up" : isDown ? "mgr-delta-down" : "mgr-delta-flat"}`}>
-      <Icon size={13} strokeWidth={2.4} />
-      {isUp ? "+" : ""}{fmtScore(rounded, 1)}
-    </span>
-  );
-}
-
-function MemberRow({
-  member,
-  onViewDetails,
-  showDetails,
-}: {
-  member: TeamMember;
-  onViewDetails: (member: TeamMember) => void;
-  showDetails: boolean;
-}) {
-  const badge = scoreBadge(member.average_overall_score);
-  return (
-    <article className="mgr-member">
-      <div className="mgr-member-main">
-        <div className="mgr-avatar">
-          {member.avatar_url ? <img src={member.avatar_url} alt="" /> : initials(member.full_name)}
-        </div>
-        <div className="mgr-member-title">
-          <strong>{member.full_name}</strong>
-          <span>{specializationLabel(member.specialization)}</span>
-        </div>
-        <div className="mgr-member-score">
-          <span style={{ color: badge.color, background: badge.bg }}>{badge.label}</span>
-          <div className="mgr-score-stack">
-            <strong>{fmtScore(member.average_overall_score)}</strong>
-            <ScoreDelta value={member.overall_delta} />
-          </div>
-          {showDetails && (
-            <button className="mgr-detail-button" type="button" onClick={() => onViewDetails(member)}>
-              <Eye size={14} strokeWidth={2} />
-              View Details
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="mgr-member-skills">
-        {skillMeta.map(skill => {
-          const value = member[skill.key];
-          return (
-            <div key={skill.key} className="mgr-mini-skill">
-              <div>
-                <span>{skill.label}</span>
-                <strong>{fmtScore(value)}</strong>
-              </div>
-              <ProgressBar value={value} color={skill.color} />
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mgr-member-foot">
-        <span>{member.repository_count} repositories</span>
-        <span>{member.analysis_count} score snapshots</span>
+    <article className="m-metric-tile">
+      <span className="m-metric-icon" style={{ background: `${color}18`, color }}>{iconMap[metric.key] || <Gauge size={17} />}</span>
+      <div>
+        <small className="m-label">{metric.label}</small>
+        <strong className="m-metric-value" style={{ color }}>{fmtMetric(metric)}</strong>
+        {metric.status && <em className={`m-status ${statusClass(metric.status)}`}>{metric.status}</em>}
       </div>
     </article>
   );
 }
 
+function SummaryItem({ label, value, icon }: { label: string; value: ReactNode; icon?: ReactNode }) {
+  return (
+    <div className="m-summary-item">
+      {icon && <span className="m-summary-icon">{icon}</span>}
+      <div>
+        <small className="m-label">{label}</small>
+        <strong className="m-summary-value">{value}</strong>
+      </div>
+    </div>
+  );
+}
+
+function ScoreRingMetric({ label, value, unit = "", description }: { label: string; value: number | null; unit?: string; description: string }) {
+  const safe = value === null ? 0 : Math.max(0, Math.min(100, Number(value)));
+  const status = value === null ? "Unavailable" : safe >= 80 ? "Excellent" : safe >= 60 ? "Fair" : "Needs Attention";
+  const color = scoreColor(value);
+
+  // SVG ring params
+  const R = 52;
+  const cx = 68;
+  const cy = 68;
+  const circumference = 2 * Math.PI * R;
+  // We draw a 270° arc (from 135° to 405°) — classic dashboard gauge sweep
+  const sweepFraction = 270 / 360;
+  const trackLen = circumference * sweepFraction;
+  const fillLen = (safe / 100) * trackLen;
+  const gapLen = circumference - trackLen;
+
+  // Rotate so arc starts at bottom-left (135°)
+  const startAngle = 135;
+
+  // Zone markers at 60 and 80
+  const toXY = (pct: number) => {
+    const angle = (startAngle + pct * 270) * (Math.PI / 180);
+    return { x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) };
+  };
+  const m60 = toXY(0.6);
+  const m80 = toXY(0.8);
+
+  return (
+    <article className="m-ring-card">
+      <span className="m-label" style={{ display: "block", marginBottom: 0 }}>{label}</span>
+      <p className="m-ring-desc">{description}</p>
+      <div className="m-ring-body">
+        <svg width="136" height="136" viewBox="0 0 136 136" aria-label={`${label}: ${safe}`}>
+          {/* track */}
+          <circle
+            cx={cx} cy={cy} r={R}
+            fill="none"
+            stroke="rgba(148,163,184,0.14)"
+            strokeWidth="12"
+            strokeLinecap="round"
+            strokeDasharray={`${trackLen} ${gapLen}`}
+            strokeDashoffset={0}
+            transform={`rotate(${startAngle} ${cx} ${cy})`}
+          />
+          {/* fill */}
+          <circle
+            cx={cx} cy={cy} r={R}
+            fill="none"
+            stroke={color}
+            strokeWidth="12"
+            strokeLinecap="round"
+            strokeDasharray={`${fillLen} ${circumference - fillLen}`}
+            strokeDashoffset={0}
+            transform={`rotate(${startAngle} ${cx} ${cy})`}
+            style={{ filter: `drop-shadow(0 0 6px ${color}88)`, transition: "stroke-dasharray 0.5s ease" }}
+          />
+          {/* zone tick at 60 */}
+          <line x1={m60.x} y1={m60.y} x2={cx + (R - 10) * Math.cos((startAngle + 0.6 * 270) * Math.PI / 180)} y2={cy + (R - 10) * Math.sin((startAngle + 0.6 * 270) * Math.PI / 180)} stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round" />
+          {/* zone tick at 80 */}
+          <line x1={m80.x} y1={m80.y} x2={cx + (R - 10) * Math.cos((startAngle + 0.8 * 270) * Math.PI / 180)} y2={cy + (R - 10) * Math.sin((startAngle + 0.8 * 270) * Math.PI / 180)} stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round" />
+          {/* center value */}
+          <text x={cx} y={cy - 6} textAnchor="middle" dominantBaseline="middle" fill={color} fontSize="22" fontWeight="800" fontFamily="'Syne', sans-serif">
+            {value === null ? "—" : safe.toFixed(1)}
+          </text>
+          <text x={cx} y={cy + 16} textAnchor="middle" dominantBaseline="middle" fill="rgba(148,163,184,0.8)" fontSize="11" fontWeight="700">
+            {unit || "/ 100"}
+          </text>
+        </svg>
+        <div className="m-ring-legend">
+          <div className="m-ring-zone m-ring-zone-red"><span />Needs Attention<em>0–60</em></div>
+          <div className="m-ring-zone m-ring-zone-amber"><span />Fair<em>60–80</em></div>
+          <div className="m-ring-zone m-ring-zone-green"><span />Excellent<em>80–100</em></div>
+        </div>
+      </div>
+      <span className={`m-score-status ${statusClass(status)}`}>{status}</span>
+    </article>
+  );
+}
+
+function CodeSmellsMetric({ value }: { value: number | null }) {
+  const n = value ?? 0;
+  const status = value === null ? "Unavailable" : n === 0 ? "Clean" : n <= 5 ? "Low" : n <= 15 ? "Moderate" : "High";
+  const smellColor = n === 0 ? "#22c55e" : n <= 5 ? "#14b8a6" : n <= 15 ? "#f59e0b" : "#ef4444";
+
+  // Segmented bar: 3 zones — Clean (0-5), Moderate (5-15), High (15-20+)
+  // Each zone is a fixed visual width; active zone gets highlighted
+  const zones = [
+    { label: "Clean",    range: "0–5",   color: "#22c55e", active: n <= 5 },
+    { label: "Moderate", range: "5–15",  color: "#f59e0b", active: n > 5 && n <= 15 },
+    { label: "High",     range: "15+",   color: "#ef4444", active: n > 15 },
+  ];
+
+  // Spark-style mini bar chart — simulated distribution
+  // 8 bars showing an illustrative code smell distribution
+  const sparkBars = [2, 5, 8, 14, n, 11, 6, 3];
+  const maxBar = Math.max(...sparkBars, 1);
+
+  return (
+    <article className="m-smells-card">
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+        <span className="m-label" style={{ marginBottom: 0 }}>Count Of Code Smells</span>
+        <strong style={{ color: smellColor, fontSize: 28, fontFamily: "'Syne', sans-serif", fontWeight: 800, lineHeight: 1 }}>
+          {value === null ? "—" : n.toFixed(0)}
+        </strong>
+      </div>
+
+      {/* Zone pills */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
+        {zones.map(zone => (
+          <div
+            key={zone.label}
+            style={{
+              flex: 1, borderRadius: 10, padding: "8px 10px",
+              background: zone.active ? `${zone.color}20` : "rgba(148,163,184,0.07)",
+              border: `1px solid ${zone.active ? `${zone.color}50` : "var(--border)"}`,
+              transition: "all 0.2s",
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 800, color: zone.active ? zone.color : "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{zone.label}</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{zone.range}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Mini bar chart */}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 52, marginBottom: 10 }}>
+        {sparkBars.map((bar, i) => {
+          const isActive = i === 4;
+          return (
+            <div
+              key={i}
+              style={{
+                flex: 1,
+                height: `${(bar / maxBar) * 100}%`,
+                borderRadius: "4px 4px 0 0",
+                background: isActive
+                  ? smellColor
+                  : `rgba(148,163,184,${isActive ? 1 : 0.2})`,
+                boxShadow: isActive ? `0 0 8px ${smellColor}66` : "none",
+                transition: "height 0.4s ease",
+              }}
+            />
+          );
+        })}
+      </div>
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
+        <span className={`m-score-status ${statusClass(status)}`}>{status} maintainability</span>
+      </div>
+    </article>
+  );
+}
+
+function HighlightCard({ title, person, icon }: { title: string; person: ContributorHighlight | null; icon: ReactNode }) {
+  return (
+    <article className="m-highlight">
+      <div className="m-highlight-head">
+        <span className="m-highlight-icon">{icon}</span>
+        <small className="m-label">{title}</small>
+      </div>
+      <strong className="m-highlight-name">{person?.full_name || "—"}</strong>
+      {person?.username && <span className="m-highlight-username">@{person.username}</span>}
+      <p className="m-highlight-reason">{person?.reasoning || "No contributor snapshot available yet."}</p>
+    </article>
+  );
+}
+
+function RiskPanel({ title, items, metricLabel, icon }: { title: string; items: RiskItem[]; metricLabel: string; icon: ReactNode }) {
+  return (
+    <div className="m-risk-list">
+      <div className="m-risk-list-head">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="m-risk-icon">{icon}</span>
+          <strong className="m-risk-title">{title}</strong>
+        </div>
+        <span className="m-risk-count">{items.length}</span>
+      </div>
+      {items.length ? items.map((item, i) => (
+        <article key={`${title}-${i}`} className="m-risk-row">
+          <div>
+            <strong>{item.title}</strong>
+            <p>{item.detail || item.file_path || "Detected in latest analysis."}</p>
+          </div>
+          <span className={`m-risk-badge ${statusClass(item.severity)}`}>
+            {metricLabel}: {item.count ?? item.metric ?? "n/a"}
+          </span>
+        </article>
+      )) : <p className="m-empty">No items in this group.</p>}
+    </div>
+  );
+}
+
+function RecommendationGroup({ title, items, tone, icon }: { title: string; items: string[]; tone: string; icon: ReactNode }) {
+  return (
+    <article className={`m-rec m-rec-${tone}`}>
+      <div className="m-rec-head">
+        <span className="m-rec-icon">{icon}</span>
+        <h3>{title}</h3>
+      </div>
+      {items.length ? items.map(item => <p key={item}>{item}</p>) : <p className="m-empty">No recommendation generated.</p>}
+    </article>
+  );
+}
+
+// ─── Repo Dropdown ────────────────────────────────────────────────────────────
+
+function RepoDropdown({ repos, selectedRepoId, loading, onChange, dropdownRef }: {
+  repos: Repo[];
+  selectedRepoId: string;
+  loading: boolean;
+  onChange: (id: string) => void;
+  dropdownRef: RefObject<HTMLDivElement | null>;
+}) {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [dropdownRef]);
+
+  const selectedRepo = repos.find(r => String(r.id) === selectedRepoId);
+  const displayName = selectedRepoId === "latest"
+    ? "Latest analyzed repository"
+    : selectedRepo?.full_name || selectedRepo?.name || `Repository ${selectedRepoId}`;
+  const isPrivate = selectedRepo?.is_private;
+
+  const choose = (id: string) => { onChange(id); setOpen(false); };
+
+  return (
+    <div ref={dropdownRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        className={`m-repo-trigger ${open ? "open" : ""}`}
+        disabled={loading}
+        onClick={() => setOpen(v => !v)}
+      >
+        <span className="m-repo-trigger-inner">
+          <span className="m-repo-trigger-icon" style={{ color: accent }}>
+            {isPrivate ? <Lock size={14} /> : <Unlock size={14} />}
+          </span>
+          <span>
+            <span className="m-repo-trigger-name">{loading ? "Loading repositories…" : displayName}</span>
+            <span className="m-repo-trigger-sub">
+              {selectedRepo?.member_count != null ? `${selectedRepo.member_count} members` : "Select a repository to analyze"}
+            </span>
+          </span>
+        </span>
+        <span className="m-repo-caret" style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}>
+          <ChevronDown size={18} />
+        </span>
+      </button>
+
+      {open && (
+        <div className="m-repo-menu">
+          <button type="button" className={`m-repo-option ${selectedRepoId === "latest" ? "selected" : ""}`} onClick={() => choose("latest")}>
+            <span>
+              <span className="m-repo-opt-name">Latest analyzed repository</span>
+              <span className="m-repo-opt-sub">Auto-select most recent</span>
+            </span>
+            {selectedRepoId === "latest" && <span style={{ color: accent, fontWeight: 900 }}>✓</span>}
+          </button>
+          {repos.map(repo => (
+            <button
+              type="button"
+              key={repo.id}
+              className={`m-repo-option ${String(repo.id) === selectedRepoId ? "selected" : ""}`}
+              onClick={() => choose(String(repo.id))}
+            >
+              <span className="m-repo-opt-lock">{repo.is_private ? <Lock size={12} /> : <Unlock size={12} />}</span>
+              <span>
+                <span className="m-repo-opt-name">{repo.full_name || repo.name || `Repository ${repo.id}`}</span>
+                <span className="m-repo-opt-sub">{repo.member_count} members · {repo.analysis_count} analyses</span>
+              </span>
+              {String(repo.id) === selectedRepoId && <span style={{ color: accent, fontWeight: 900 }}>✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export default function ManagerDashboard() {
-  const [repos, setRepos] = useState<DashboardRepo[]>([]);
-  const [selectedRepoId, setSelectedRepoId] = useState<string>("all");
-  const [selectedTrendRange, setSelectedTrendRange] = useState<string>("6m");
-  const [kpis, setKpis] = useState<Kpis>(emptyKpis);
-  const [trends, setTrends] = useState<TrendPoint[]>([]);
-  const [skills, setSkills] = useState<SkillDistribution>(emptySkills);
-  const [members, setMembers] = useState<TeamMember[]>([]);
-  const [insights, setInsights] = useState<TeamInsights>(emptyInsights);
-  const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
-  const [memberDetail, setMemberDetail] = useState<MemberDetail | null>(null);
-  const [loadingMemberDetail, setLoadingMemberDetail] = useState(false);
-  const [loadingRepos, setLoadingRepos] = useState(true);
-  const [loadingDashboard, setLoadingDashboard] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [selectedRepoId, setSelectedRepoId] = useState("latest");
+  const [trendGranularity, setTrendGranularity] = useState<"daily" | "monthly">("monthly");
+  const [data, setData] = useState<Overview>(emptyOverview);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
 
-  const selectedRepo = repos.find(repo => String(repo.id) === selectedRepoId);
-
-  const fetchRepos = async () => {
-    setLoadingRepos(true);
+  const fetchOverview = useCallback(async () => {
+    setLoading(true);
+    setError("");
     try {
-      const response = await api.get<DashboardRepo[]>("/manager/dashboard/repos");
-      setRepos(response.data);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-      if (err.response?.status === 401) {
-        localStorage.clear();
-        window.location.href = "/login";
-        return;
-      }
-      setError("Unable to load repositories.");
+      const params = selectedRepoId === "latest"
+        ? { trend_granularity: trendGranularity }
+        : { repo_id: Number(selectedRepoId), trend_granularity: trendGranularity };
+      const response = await api.get<Overview>("/manager/dashboard/overview", { params });
+      setData(response.data || emptyOverview);
+    } catch {
+      setError("Unable to load manager dashboard.");
     } finally {
-      setLoadingRepos(false);
+      setLoading(false);
     }
-  };
+  }, [selectedRepoId, trendGranularity]);
 
-  const fetchDashboard = async () => {
-    setLoadingDashboard(true);
-    setError(null);
-    const params = selectedRepoId === "all" ? {} : { repo_id: Number(selectedRepoId) };
-    const trendParams = { ...params, range: selectedTrendRange };
+  useEffect(() => { fetchOverview(); }, [fetchOverview]);
 
-    try {
-      const [kpiRes, trendRes, skillRes, memberRes, insightRes] = await Promise.all([
-        api.get<Kpis>("/manager/dashboard/kpis", { params }),
-        api.get<TrendPoint[]>("/manager/dashboard/trends", { params: trendParams }),
-        api.get<SkillDistribution>("/manager/dashboard/skills", { params }),
-        api.get<TeamMember[]>("/manager/dashboard/members", { params }),
-        api.get<TeamInsights>("/manager/dashboard/insights", { params }),
-      ]);
+  const metricsWithoutGate = data.repository_metrics.filter(m => m.key !== "quality_gate");
 
-      setKpis(kpiRes.data);
-      setTrends(trendRes.data);
-      setSkills(skillRes.data);
-      setMembers(memberRes.data);
-      setInsights(insightRes.data);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-      if (err.response?.status === 401) {
-        localStorage.clear();
-        window.location.href = "/login";
-        return;
-      }
-      setError("Unable to load team dashboard metrics.");
-    } finally {
-      setLoadingDashboard(false);
-    }
-  };
+  const trendData = data.trends.map(point => ({
+    ...point,
+    health_score: point.health_score ?? undefined,
+    security_score: point.security_score ?? undefined,
+  }));
 
-  useEffect(() => {
-    fetchRepos();
-  }, []);
-
-  useEffect(() => {
-    fetchDashboard();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRepoId, selectedTrendRange]);
-
-  useEffect(() => {
-    if (selectedRepoId !== "all" && selectedMemberId) {
-      closeMemberDetails();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRepoId]);
-
-  useEffect(() => {
-    if (!selectedMemberId) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeMemberDetails();
-    };
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMemberId]);
-
-  const trendData = useMemo(
-    () => trends.map(point => ({ ...point, label: point.label || point.period })),
-    [trends],
-  );
-
-  const skillData = useMemo(
-    () => skillMeta.map(skill => ({
-      key: skill.key,
-      name: skill.label,
-      score: Number(skills[skill.key] || 0),
-      color: skill.color,
-    })),
-    [skills],
-  );
-
-  const recommendationGroups = useMemo(() => {
-    const source = insights.actionable_recommendations ?? emptyActionableRecommendations;
-
-    return recommendationSections
-      .map(section => ({
-        ...section,
-        items: source[section.key],
-      }))
-      .filter(group => group.items.length > 0);
-  }, [insights]);
-
-  const selectedMember = useMemo(
-    () => members.find(member => member.id === selectedMemberId) || memberDetail?.member || null,
-    [memberDetail, members, selectedMemberId],
-  );
-
-  const memberTimelineData = useMemo(
-    () => (memberDetail?.timeline || []).map(point => ({ ...point, label: point.label || point.period })),
-    [memberDetail],
-  );
-
-  const refreshAll = () => {
-    fetchRepos();
-    fetchDashboard();
-  };
-
-  const openMemberDetails = async (member: TeamMember) => {
-    setSelectedMemberId(member.id);
-    setMemberDetail(null);
-    setLoadingMemberDetail(true);
-    const params = { range: selectedTrendRange };
-
-    try {
-      const response = await api.get<MemberDetail>(`/manager/dashboard/members/${member.id}/details`, { params });
-      setMemberDetail(response.data);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-      if (err.response?.status === 401) {
-        localStorage.clear();
-        window.location.href = "/login";
-        return;
-      }
-      setError("Unable to load developer details.");
-    } finally {
-      setLoadingMemberDetail(false);
-    }
-  };
-
-  const closeMemberDetails = () => {
-    setSelectedMemberId(null);
-    setMemberDetail(null);
-    setLoadingMemberDetail(false);
-  };
+  const score = data.repository_summary.overall_repository_score;
 
   return (
     <DashboardLayout>
       <style>{`
-        .mgr-page {
-          min-height: 100vh;
-          background: var(--bg-gradient);
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+
+        .m-page {
+          min-height: 100vh; padding: 32px 40px 80px;
           color: var(--text-primary);
           font-family: 'DM Sans', system-ui, sans-serif;
-          padding: 36px 40px 80px;
-        }
-        .mgr-shell {
-          max-width: 960px;
-          margin: 0 auto;
-          display: flex;
-          flex-direction: column;
-          gap: 20px;
-        }
-        .mgr-header {
-          display: flex;
-          align-items: flex-end;
-          justify-content: space-between;
-          gap: 18px;
-          flex-wrap: wrap;
-        }
-        .mgr-title h1 {
-          margin: 0 0 4px;
-          font-family: 'Syne', sans-serif;
-          font-size: 28px;
-          line-height: 1.15;
-          letter-spacing: 0;
-        }
-        .mgr-title p {
-          margin: 0;
-          color: var(--text-secondary);
-          font-size: 14px;
-        }
-        .mgr-toolbar {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          min-width: min(100%, 420px);
-        }
-        .mgr-filter {
-          flex: 1;
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          min-height: 42px;
-          padding: 0 12px;
-          border: 1px solid rgba(139, 92, 246, 0.25);
-          background: var(--bg-card);
-          border-radius: 8px;
-        }
-        .mgr-filter svg {
-          color: ${accent};
-          flex: 0 0 auto;
-        }
-        .mgr-filter select {
-          width: 100%;
-          min-width: 0;
-          border: 0;
-          outline: 0;
-          background: transparent;
-          color: var(--text-primary);
-          font: inherit;
-          font-size: 13px;
-          cursor: pointer;
-        }
-        .mgr-filter select option {
-          background: var(--bg-base);
-          color: var(--text-primary);
-        }
-        .mgr-icon-button {
-          width: 42px;
-          height: 42px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          background: var(--bg-card);
-          color: var(--text-secondary);
-          cursor: pointer;
-        }
-        .mgr-icon-button:hover {
-          border-color: rgba(139, 92, 246, 0.45);
-          color: ${accent};
-        }
-        .mgr-segmented {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          padding: 4px;
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          background: var(--bg-input);
-        }
-        .mgr-segmented button {
-          min-width: 42px;
-          height: 30px;
-          border: 0;
-          border-radius: 6px;
-          background: transparent;
-          color: var(--text-muted);
-          font: inherit;
-          font-size: 12px;
-          font-weight: 800;
-          cursor: pointer;
-        }
-        .mgr-segmented button.active {
-          background: rgba(139, 92, 246, 0.18);
-          color: var(--text-primary);
-        }
-        .mgr-kpi-grid {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 14px;
-        }
-        .mgr-card,
-        .mgr-panel,
-        .mgr-member {
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          background: var(--bg-card);
-          box-shadow: var(--shadow-card);
-        }
-        .mgr-card {
-          padding: 20px;
-          min-height: 132px;
-        }
-        .mgr-card-primary {
-          background: linear-gradient(135deg, ${accent}, #7c3aed 52%, #db2777);
-          color: white;
-          border-color: transparent;
-        }
-        .mgr-card-top {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          color: inherit;
-          opacity: 0.78;
-          font-size: 12px;
-          margin-bottom: 20px;
-        }
-        .mgr-card strong {
-          display: block;
-          font-size: 28px;
-          line-height: 1;
-          font-weight: 800;
-          letter-spacing: 0;
-          color: inherit;
-          word-break: break-word;
-        }
-        .mgr-card small {
-          display: block;
-          margin-top: 16px;
-          color: inherit;
-          opacity: 0.72;
-          font-size: 12px;
-        }
-        .mgr-card:not(.mgr-card-primary) strong {
-          color: var(--text-primary);
-        }
-        .mgr-card:not(.mgr-card-primary) small,
-        .mgr-card:not(.mgr-card-primary) .mgr-card-top {
-          color: var(--text-secondary);
-        }
-        .mgr-panel {
-          padding: 20px;
-        }
-        .mgr-panel-head {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-        .mgr-panel-title {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          font-size: 15px;
-          font-weight: 800;
-          color: var(--text-primary);
-        }
-        .mgr-panel-title svg {
-          color: ${accent};
-        }
-        .mgr-panel-sub {
-          color: var(--text-muted);
-          font-size: 12px;
-        }
-        .mgr-chart {
-          width: 100%;
-          height: 280px;
-        }
-        .mgr-chart-legend {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex-wrap: wrap;
-          gap: 10px 14px;
-          margin-top: 10px;
-          color: var(--text-muted);
-          font-size: 12px;
-        }
-        .mgr-chart-legend span {
-          display: inline-flex;
-          align-items: center;
-          gap: 7px;
-        }
-        .mgr-chart-legend i {
-          width: 9px;
-          height: 9px;
-          border-radius: 50%;
-          display: inline-block;
-        }
-        .mgr-split,
-        .mgr-bottom-insights {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 16px;
-        }
-        .mgr-text-card {
-          min-height: 230px;
-        }
-        .mgr-text-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-          margin: 0;
-          padding: 0;
-          list-style: none;
-        }
-        .mgr-text-item {
-          display: grid;
-          grid-template-columns: 34px minmax(0, 1fr);
-          gap: 12px;
-          align-items: flex-start;
-          padding: 13px 14px;
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          background: var(--bg-input);
-        }
-        .mgr-text-item-icon {
-          width: 34px;
-          height: 34px;
-          border-radius: 8px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          flex: 0 0 auto;
-        }
-        .mgr-text-item span:last-child {
-          color: var(--text-secondary);
-          font-size: 13px;
-          line-height: 1.45;
-        }
-        .mgr-members {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-        .mgr-section-head {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 16px;
-          margin: 4px 0 2px;
-        }
-        .mgr-section-head h2 {
-          margin: 0;
-          font-size: 17px;
-          letter-spacing: 0;
-        }
-        .mgr-section-head span {
-          color: var(--text-muted);
-          font-size: 12px;
-        }
-        .mgr-member {
-          padding: 16px;
-        }
-        .mgr-member-main {
-          display: grid;
-          grid-template-columns: 44px minmax(0, 1fr) auto;
-          gap: 12px;
-          align-items: center;
-        }
-        .mgr-avatar {
-          width: 44px;
-          height: 44px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          overflow: hidden;
-          background: linear-gradient(135deg, ${accent}, #ec4899);
-          color: white;
-          font-size: 13px;
-          font-weight: 800;
-        }
-        .mgr-avatar img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-        .mgr-member-title {
-          min-width: 0;
-        }
-        .mgr-member-title strong {
-          display: block;
-          color: var(--text-primary);
-          font-size: 14px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .mgr-member-title span {
-          color: var(--text-muted);
-          font-size: 12px;
-        }
-        .mgr-member-score {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          justify-self: end;
-        }
-        .mgr-member-score span {
-          border-radius: 999px;
-          padding: 4px 8px;
-          font-size: 11px;
-          font-weight: 800;
-          white-space: nowrap;
-        }
-        .mgr-member-score strong {
-          font-size: 25px;
-          line-height: 1;
-          color: var(--text-primary);
-          min-width: 38px;
-          text-align: right;
-        }
-        .mgr-score-stack {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 4px;
-        }
-        .mgr-delta {
-          display: inline-flex;
-          align-items: center;
-          gap: 3px;
-          font-size: 11px;
-          font-weight: 900;
-          line-height: 1;
-        }
-        .mgr-delta-up {
-          color: #22c55e;
-        }
-        .mgr-delta-down {
-          color: #f87171;
-        }
-        .mgr-delta-flat {
-          color: var(--text-muted);
-        }
-        .mgr-detail-button {
-          height: 32px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          border: 1px solid rgba(139, 92, 246, 0.28);
-          border-radius: 8px;
-          padding: 0 10px;
-          background: rgba(139, 92, 246, 0.1);
-          color: var(--text-secondary);
-          font: inherit;
-          font-size: 12px;
-          font-weight: 800;
-          cursor: pointer;
-          white-space: nowrap;
-        }
-        .mgr-detail-button:hover {
-          border-color: rgba(139, 92, 246, 0.55);
-          color: var(--text-primary);
-        }
-        .mgr-member-skills {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 12px;
-          margin-top: 16px;
-        }
-        .mgr-mini-skill {
-          min-width: 0;
-        }
-        .mgr-mini-skill div {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-          color: var(--text-muted);
-          font-size: 11px;
-          margin-bottom: 6px;
-        }
-        .mgr-mini-skill strong {
-          color: var(--text-secondary);
-          font-size: 11px;
-        }
-        .mgr-progress {
-          height: 5px;
-          width: 100%;
-          border-radius: 999px;
-          overflow: hidden;
-          background: var(--border);
-        }
-        .mgr-progress span {
-          display: block;
-          height: 100%;
-          border-radius: inherit;
-        }
-        .mgr-member-foot {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          color: var(--text-muted);
-          font-size: 12px;
-          margin-top: 14px;
-        }
-        .mgr-detail-panel {
-          border-color: rgba(139, 92, 246, 0.28);
-        }
-        .mgr-modal-backdrop {
-          position: fixed;
-          inset: 0;
-          z-index: 9999;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 32px;
-          background: rgba(2, 6, 23, 0.72);
-        }
-        .mgr-member-modal {
-          width: min(1120px, 100%);
-          max-height: min(88vh, 920px);
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-          border-radius: 8px;
-          border: 1px solid var(--border);
-          background: var(--bg-base);
-          color: var(--text-primary);
-          box-shadow: 0 28px 80px rgba(2, 6, 23, 0.38);
-        }
-        .mgr-modal-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 18px;
-          padding: 28px 30px 24px;
-          border-bottom: 1px solid var(--border);
-        }
-        .mgr-modal-profile {
-          display: flex;
-          align-items: center;
-          gap: 18px;
-          min-width: 0;
-        }
-        .mgr-modal-avatar {
-          width: 80px;
-          height: 80px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          overflow: hidden;
-          background: linear-gradient(135deg, #7c3aed, #9333ea);
-          color: white;
-          font-size: 24px;
-          font-weight: 900;
-          flex: 0 0 auto;
-        }
-        .mgr-modal-avatar img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-        .mgr-modal-profile h2 {
-          margin: 0 0 6px;
-          color: var(--text-primary);
-          font-size: 26px;
-          line-height: 1.1;
-          letter-spacing: 0;
-        }
-        .mgr-modal-profile p {
-          margin: 0 0 12px;
-          color: var(--text-secondary);
-          font-size: 16px;
-        }
-        .mgr-modal-meta {
-          display: flex;
-          align-items: center;
-          flex-wrap: wrap;
-          gap: 9px 12px;
-          color: var(--text-muted);
-          font-size: 13px;
-        }
-        .mgr-modal-meta span:first-child {
-          border-radius: 8px;
-          padding: 4px 10px;
-          font-weight: 800;
-        }
-        .mgr-modal-close {
-          width: 36px;
-          height: 36px;
-          border: 0;
-          border-radius: 8px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          background: transparent;
-          color: var(--text-primary);
-          cursor: pointer;
-        }
-        .mgr-modal-close:hover {
-          background: var(--bg-card-hover);
-        }
-        .mgr-modal-body {
-          overflow: auto;
-          padding: 30px;
-          background: var(--bg-base);
-        }
-        .mgr-overall-card {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) 160px;
-          gap: 24px;
-          align-items: center;
-          min-height: 172px;
-          margin-bottom: 30px;
-          padding: 28px 30px;
-          border: 1px solid rgba(139, 92, 246, 0.28);
-          border-radius: 8px;
-          background: linear-gradient(135deg, rgba(139, 92, 246, 0.13), rgba(6, 182, 212, 0.08));
-        }
-        .mgr-overall-card span {
-          color: var(--text-secondary);
-          font-size: 15px;
-        }
-        .mgr-overall-card strong {
-          display: block;
-          margin: 12px 0;
-          color: var(--text-primary);
-          font-size: 56px;
-          line-height: 0.95;
-          letter-spacing: 0;
-        }
-        .mgr-overall-mark {
-          width: 126px;
-          height: 126px;
-          border: 9px solid rgba(139, 92, 246, 0.24);
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: #4f46e5;
-          background: var(--bg-card);
-          justify-self: end;
-        }
-        .mgr-modal-section-title {
-          margin: 0 0 16px;
-          color: var(--text-primary);
-          font-size: 21px;
-          letter-spacing: 0;
-        }
-        .mgr-skill-card-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 14px;
-          margin-bottom: 30px;
-        }
-        .mgr-skill-card {
-          min-height: 118px;
-          padding: 22px 20px;
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          background: var(--bg-input);
-        }
-        .mgr-skill-card > div {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 22px;
-        }
-        .mgr-skill-card span {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-          color: var(--text-primary);
-          font-size: 15px;
-          font-weight: 800;
-        }
-        .mgr-skill-card svg {
-          color: #4f46e5;
-        }
-        .mgr-skill-card strong {
-          color: var(--text-primary);
-          font-size: 24px;
-          line-height: 1;
-        }
-        .mgr-skill-card .mgr-progress {
-          background: var(--border);
-        }
-        .mgr-modal-chart-card {
-          padding: 22px 22px 24px;
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          background: var(--bg-input);
-        }
-        .mgr-member-modal .mgr-chart-legend {
-          color: var(--text-muted);
-        }
-        .mgr-modal-chart-card .mgr-empty {
-          border-color: var(--border-hover);
-          background: var(--bg-card);
-          color: var(--text-muted);
-        }
-        .mgr-modal-insights {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 18px;
-          margin-top: 28px;
-        }
-        .mgr-modal-insight-card {
-          min-height: 180px;
-          padding: 24px 26px;
-          border-radius: 8px;
-        }
-        .mgr-modal-insight-card h3 {
-          margin: 0 0 18px;
-          font-size: 20px;
-          letter-spacing: 0;
-        }
-        .mgr-modal-insight-card ul {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-          margin: 0;
-          padding-left: 18px;
-          color: var(--text-secondary);
-          font-size: 14px;
-          line-height: 1.45;
-        }
-        .mgr-modal-strength {
-          border: 1px solid rgba(34, 197, 94, 0.3);
-          background: rgba(34, 197, 94, 0.1);
-        }
-        .mgr-modal-strength h3 {
-          color: #22c55e;
-        }
-        .mgr-modal-improvement {
-          border: 1px solid rgba(245, 158, 11, 0.32);
-          background: rgba(245, 158, 11, 0.1);
-        }
-        .mgr-modal-improvement h3 {
-          color: #f59e0b;
-        }
-        .mgr-detail-insights {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 16px;
-          margin-top: 18px;
-        }
-        .mgr-detail-insights h3 {
-          margin: 0 0 10px;
-          color: var(--text-primary);
-          font-size: 14px;
-          letter-spacing: 0;
-        }
-        .mgr-insight-list {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-        }
-        .mgr-insight-row {
-          display: grid;
-          grid-template-columns: 34px minmax(0, 1fr) auto;
-          gap: 10px;
-          align-items: center;
-          padding: 11px 0;
-          border-bottom: 1px solid var(--border);
-        }
-        .mgr-insight-row:last-child {
-          border-bottom: 0;
-        }
-        .mgr-insight-icon {
-          width: 34px;
-          height: 34px;
-          border-radius: 8px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .mgr-insight-row strong {
-          display: block;
-          font-size: 13px;
-          color: var(--text-primary);
-        }
-        .mgr-insight-row span {
-          color: var(--text-muted);
-          font-size: 12px;
-        }
-        .mgr-insight-score {
-          font-size: 12px;
-          font-weight: 800;
-          color: var(--text-secondary);
-        }
-        .mgr-empty {
-          border: 1px dashed var(--border-hover);
-          border-radius: 8px;
-          padding: 34px 18px;
-          text-align: center;
-          color: var(--text-muted);
-          background: var(--bg-card);
-        }
-        .mgr-empty strong {
-          display: block;
-          color: var(--text-secondary);
-          margin-bottom: 5px;
-        }
-        .mgr-error {
-          border: 1px solid rgba(248, 113, 113, 0.35);
-          color: #f87171;
-          background: rgba(248, 113, 113, 0.09);
-          border-radius: 8px;
-          padding: 12px 14px;
-          font-size: 13px;
-        }
-        .mgr-skeleton {
-          background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
-          background-size: 400% 100%;
-          animation: mgr-shimmer 1.4s ease-in-out infinite;
-        }
-        @keyframes mgr-shimmer {
-          0% { background-position: 100% 50%; }
-          100% { background-position: 0 50%; }
-        }
-        @media (max-width: 1060px) {
-          .mgr-kpi-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-          .mgr-split {
-            grid-template-columns: 1fr;
-          }
+          background: var(--bg-gradient);
+        }
+        .m-shell { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 0; }
+
+        /* ── Header ── */
+        .m-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 28px; flex-wrap: wrap; }
+        .m-eyebrow {
+          display: inline-flex; align-items: center; gap: 7px;
+          padding: 5px 14px; border-radius: 999px;
+          border: 1px solid ${accent}40; background: ${accent}12;
+          color: ${accent}; font-size: 11px; font-weight: 800;
+          letter-spacing: 0.8px; text-transform: uppercase; width: fit-content; margin-bottom: 10px;
+        }
+        .m-header h1 {
+          margin: 0; font-size: 30px; line-height: 1.1; font-weight: 800;
+          font-family: 'Syne', sans-serif; letter-spacing: -0.5px;
+        }
+        .m-header-sub { color: var(--text-muted); margin: 6px 0 0; font-size: 14px; }
+        .m-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .m-refresh-btn {
+          width: 42px; height: 42px; border: 1px solid var(--border);
+          background: var(--bg-card); color: var(--text-primary);
+          border-radius: 12px; display: grid; place-items: center;
+          cursor: pointer; transition: border-color 0.2s, background 0.2s;
+        }
+        .m-refresh-btn:hover { border-color: ${accent}80; background: ${accent}12; color: ${accent}; }
+
+        /* ── Repo Dropdown ── */
+        .m-repo-trigger {
+          min-width: 280px; border: 1px solid rgba(139,92,246,0.28);
+          background: var(--bg-input, var(--bg-card)); color: var(--text-primary);
+          border-radius: 14px; padding: 11px 15px; cursor: pointer;
+          display: flex; align-items: center; justify-content: space-between; gap: 14px;
+          font-family: 'DM Sans', system-ui, sans-serif; text-align: left;
+          transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .m-repo-trigger:hover, .m-repo-trigger.open {
+          border-color: ${accent}80; box-shadow: 0 0 0 4px ${accent}12;
+        }
+        .m-repo-trigger-inner { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+        .m-repo-trigger-icon { flex-shrink: 0; }
+        .m-repo-trigger-name { display: block; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+        .m-repo-trigger-sub { display: block; color: var(--text-muted); font-size: 12px; margin-top: 3px; }
+        .m-repo-caret { color: ${accent}; transition: transform 0.2s; flex-shrink: 0; }
+        .m-repo-menu {
+          position: absolute; z-index: 60; top: calc(100% + 8px); left: 0; right: 0;
+          background: #1a1a2e; border: 1px solid rgba(139,92,246,0.4);
+          border-radius: 16px;
+          box-shadow: 0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(139,92,246,0.12), inset 0 1px 0 rgba(255,255,255,0.05);
+          max-height: 300px; overflow: auto; padding: 8px; backdrop-filter: blur(20px);
+        }
+        .m-repo-option {
+          width: 100%; border: none; cursor: pointer; border-radius: 12px;
+          padding: 11px 12px; background: transparent; color: rgba(200,200,220,0.9);
+          display: flex; align-items: center; gap: 10px; justify-content: space-between;
+          font-family: 'DM Sans', system-ui, sans-serif; text-align: left;
+          transition: background 0.15s, color 0.15s;
+        }
+        .m-repo-option:hover { background: ${accent}18; color: #fff; }
+        .m-repo-option.selected { background: ${accent}22; color: #fff; }
+        .m-repo-opt-lock { color: var(--text-muted); flex-shrink: 0; }
+        .m-repo-opt-name { display: block; font-weight: 700; font-size: 13.5px; }
+        .m-repo-opt-sub { display: block; color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+
+        /* ── Score Band ── */
+        .m-score-band {
+          display: grid; grid-template-columns: 200px 1fr; gap: 18px;
+          border: 1px solid var(--border); border-radius: 20px;
+          background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(20,184,166,0.06));
+          padding: 22px; margin-bottom: 24px;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+        }
+        .m-score-col {
+          border-right: 1px solid var(--border); padding-right: 18px;
+          display: grid; align-content: center; gap: 8px;
+        }
+        .m-score-label { color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; }
+        .m-score-number { font-size: 52px; line-height: 1; font-family: 'Syne', sans-serif; font-weight: 800; }
+        .m-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+        .m-summary-item {
+          border: 1px solid var(--border); border-radius: 14px;
+          background: var(--bg-card); padding: 14px;
+          display: flex; align-items: flex-start; gap: 10px;
+        }
+        .m-summary-icon { color: ${accent}; flex-shrink: 0; margin-top: 2px; }
+        .m-summary-value { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+
+        /* ── Tabs ── */
+        .m-tabs-wrap { position: sticky; top: 0; z-index: 40; background: var(--bg-gradient); padding: 0 0 0; margin-bottom: 24px; }
+        .m-tabs {
+          display: flex; gap: 4px; border-bottom: 1px solid var(--border);
+          overflow-x: auto; padding-bottom: 0;
+          scrollbar-width: none;
+        }
+        .m-tabs::-webkit-scrollbar { display: none; }
+        .m-tab {
+          display: inline-flex; align-items: center; gap: 7px;
+          padding: 11px 18px; border: none; background: none;
+          color: var(--text-muted); cursor: pointer; font-family: 'DM Sans', system-ui, sans-serif;
+          font-size: 13.5px; font-weight: 600; white-space: nowrap;
+          border-bottom: 2px solid transparent; margin-bottom: -1px;
+          transition: color 0.15s, border-color 0.15s;
+        }
+        .m-tab:hover { color: var(--text-primary); }
+        .m-tab.active { color: ${accent}; border-bottom-color: ${accent}; font-weight: 700; }
+
+        /* ── Section wrapper ── */
+        .m-section { display: flex; flex-direction: column; gap: 18px; animation: mFadeIn 0.22s ease; }
+        @keyframes mFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .m-section-title { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
+        .m-section-title h2 { margin: 0; color: ${accent}; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; }
+        .m-section-aside { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 2px; }
+
+        /* ── Cards shared ── */
+        .m-card {
+          background: var(--bg-card); border: 1px solid var(--border);
+          border-radius: 18px; padding: 22px 24px;
+          transition: border-color 0.2s;
+        }
+        .m-card:hover { border-color: ${accent}40; }
+        .m-label { color: var(--text-muted); font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.7px; display: block; margin-bottom: 4px; }
+
+        /* ── Metric Tiles ── */
+        .m-metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        .m-metric-tile {
+          background: var(--bg-card); border: 1px solid var(--border);
+          border-radius: 16px; padding: 16px; display: flex; gap: 13px; align-items: flex-start;
+          transition: border-color 0.2s, transform 0.2s;
+        }
+        .m-metric-tile:hover { border-color: ${accent}40; transform: translateY(-2px); }
+        .m-metric-icon { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex-shrink: 0; }
+        .m-metric-value { display: block; font-size: 24px; font-weight: 800; line-height: 1.1; margin: 7px 0 4px; font-family: 'Syne', sans-serif; }
+        .m-status {
+          display: inline-flex; width: fit-content; border-radius: 999px;
+          padding: 3px 9px; font-size: 11px; font-weight: 800;
+          color: var(--text-muted); background: rgba(148,163,184,0.16); white-space: nowrap;
+        }
+        .m-status.excellent, .m-status.good { color: #16a34a; background: rgba(34,197,94,0.13); }
+        .m-status.fair { color: #d97706; background: rgba(245,158,11,0.15); }
+        .m-status.support { color: #dc2626; background: rgba(239,68,68,0.14); }
+
+        /* ── Team section ── */
+        .m-team-top { display: grid; grid-template-columns: 200px 1fr 1fr; gap: 12px; }
+        .m-team-stat {
+          background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+          padding: 18px; display: grid; align-content: center; gap: 6px;
+        }
+        .m-team-stat-number { font-size: 38px; font-weight: 800; font-family: 'Syne', sans-serif; }
+        .m-highlight {
+          background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+          padding: 18px; min-width: 0;
+        }
+        .m-highlight-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .m-highlight-icon { color: ${accent}; }
+        .m-highlight-name { display: block; font-size: 16px; font-weight: 700; margin-bottom: 2px; }
+        .m-highlight-username { display: block; color: var(--text-muted); font-size: 12.5px; margin-bottom: 8px; }
+        .m-highlight-reason { color: var(--text-muted); font-size: 13px; line-height: 1.5; margin: 0; }
+        .m-gauge-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+        .m-ring-card, .m-smells-card, .m-gauge-card {
+          background: var(--bg-card); border: 1px solid var(--border);
+          border-radius: 16px; padding: 18px; min-height: 230px;
+        }
+        .m-ring-desc { margin: 4px 0 14px; color: var(--text-muted); font-size: 12.5px; line-height: 1.45; }
+        .m-ring-body { display: flex; align-items: center; gap: 18px; }
+        .m-ring-legend { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+        .m-ring-zone { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+        .m-ring-zone em { margin-left: auto; font-style: normal; font-size: 11px; color: var(--text-muted); opacity: 0.7; }
+        .m-ring-zone span { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+        .m-ring-zone-red span { background: #ef4444; }
+        .m-ring-zone-amber span { background: #f59e0b; }
+        .m-ring-zone-green span { background: #22c55e; }
+        .m-score-status { display: block; width: fit-content; margin-top: 14px; border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 800; color: var(--text-muted); background: rgba(148,163,184,0.16); }
+        .m-score-status.excellent, .m-score-status.good { color: #16a34a; background: rgba(34,197,94,0.13); }
+        .m-score-status.fair { color: #d97706; background: rgba(245,158,11,0.15); }
+        .m-score-status.support { color: #dc2626; background: rgba(239,68,68,0.14); }
+
+        /* ── Contributors Table ── */
+        .m-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 18px; background: var(--bg-card); }
+        .m-table { width: 100%; border-collapse: collapse; min-width: 980px; }
+        .m-table th { text-align: left; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; padding: 14px 14px; border-bottom: 1px solid var(--border); font-weight: 800; }
+        .m-table td { padding: 13px 14px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 13px; }
+        .m-table tr:last-child td { border-bottom: 0; }
+        .m-table td strong { display: block; color: var(--text-primary); font-weight: 700; }
+        .m-table td small { color: var(--text-muted); font-size: 12px; }
+        .m-table tbody tr { transition: background 0.12s; }
+        .m-table tbody tr:hover { background: ${accent}08; }
+
+        /* ── Trends ── */
+        .m-trend-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 18px; padding: 20px; }
+        .m-trend-select {
+          border: 1px solid var(--border); background: var(--bg-card);
+          color: var(--text-primary); border-radius: 10px; height: 38px; padding: 0 12px;
+          font-weight: 700; font-family: 'DM Sans', system-ui, sans-serif; cursor: pointer;
+        }
+
+        /* ── Risks ── */
+        .m-risk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+        .m-risk-list {
+          background: var(--bg-card); border: 1px solid var(--border);
+          border-radius: 18px; padding: 18px; min-width: 0;
+        }
+        .m-risk-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+        .m-risk-icon { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; background: rgba(239,68,68,0.12); color: #ef4444; flex-shrink: 0; }
+        .m-risk-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+        .m-risk-count { background: rgba(239,68,68,0.12); color: #ef4444; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 800; }
+        .m-risk-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border-top: 1px solid var(--border); padding: 11px 0; }
+        .m-risk-row strong { display: block; color: var(--text-primary); font-size: 13.5px; overflow-wrap: anywhere; margin-bottom: 3px; }
+        .m-risk-row p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.4; }
+        .m-risk-badge { border-radius: 999px; background: rgba(148,163,184,0.15); padding: 5px 10px; font-size: 11.5px; font-weight: 800; color: var(--text-muted); white-space: nowrap; }
+        .m-risk-badge.excellent, .m-risk-badge.good { color: #16a34a; background: rgba(34,197,94,0.13); }
+        .m-risk-badge.fair { color: #d97706; background: rgba(245,158,11,0.15); }
+        .m-risk-badge.support { color: #dc2626; background: rgba(239,68,68,0.14); }
+
+        /* ── Recommendations ── */
+        .m-rec-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+        .m-rec {
+          background: var(--bg-card); border: 1px solid var(--border);
+          border-radius: 18px; padding: 18px;
+        }
+        .m-rec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .m-rec-icon { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex-shrink: 0; }
+        .m-rec h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--text-primary); }
+        .m-rec p { border-top: 1px solid var(--border); padding-top: 10px; margin: 10px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+        .m-rec-fix { border-color: rgba(239,68,68,0.3); }
+        .m-rec-fix .m-rec-icon { background: rgba(239,68,68,0.12); color: #ef4444; }
+        .m-rec-next { border-color: rgba(249,115,22,0.3); }
+        .m-rec-next .m-rec-icon { background: rgba(249,115,22,0.12); color: #f97316; }
+        .m-rec-plan { border-color: rgba(59,130,246,0.3); }
+        .m-rec-plan .m-rec-icon { background: rgba(59,130,246,0.12); color: #3b82f6; }
+        .m-rec-strong { border-color: rgba(34,197,94,0.3); }
+        .m-rec-strong .m-rec-icon { background: rgba(34,197,94,0.12); color: #22c55e; }
+        .m-reason-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+        .m-reason-card {
+          background: var(--bg-card); border: 1px solid var(--border);
+          border-radius: 16px; padding: 16px;
+        }
+        .m-reason-head { display: flex; align-items: center; gap: 8px; color: ${accent}; margin-bottom: 10px; }
+        .m-reason-head strong { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+        .m-reason-card p { margin: 7px 0 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.45; }
+
+        /* ── States ── */
+        .m-empty { color: var(--text-muted); font-size: 13px; margin: 0; }
+        .m-loading { border: 1px solid var(--border); border-radius: 18px; min-height: 240px; padding: 24px; background: var(--bg-card); animation: mShimmer 1.4s ease-in-out infinite; background-size: 400% 100%; }
+        .m-error { border: 1px solid rgba(239,68,68,0.3); border-radius: 18px; min-height: 120px; padding: 24px; color: #ef4444; background: rgba(239,68,68,0.06); display: grid; place-items: center; font-weight: 700; }
+        @keyframes mShimmer { 0%{background-position:100% 50%} 100%{background-position:0% 50%} }
+        .sk { background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover, rgba(255,255,255,0.04)) 50%, var(--bg-card) 75%); background-size: 400% 100%; animation: mShimmer 1.4s ease-in-out infinite; border-radius: 10px; }
+
+        /* ── Responsive ── */
+        @media (max-width: 1100px) {
+          .m-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .m-team-top, .m-gauge-grid, .m-reason-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .m-rec-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 760px) {
-          .mgr-page {
-            padding: 24px 16px 56px;
-          }
-          .mgr-header {
-            align-items: stretch;
-          }
-          .mgr-toolbar {
-            width: 100%;
-          }
-          .mgr-kpi-grid,
-          .mgr-member-skills,
-          .mgr-bottom-insights,
-          .mgr-detail-insights,
-          .mgr-skill-card-grid,
-          .mgr-modal-insights {
-            grid-template-columns: 1fr;
-          }
-          .mgr-panel-head {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-          .mgr-segmented {
-            width: 100%;
-            justify-content: space-between;
-          }
-          .mgr-segmented button {
-            flex: 1;
-          }
-          .mgr-member-main {
-            grid-template-columns: 44px minmax(0, 1fr);
-          }
-          .mgr-member-score {
-            grid-column: 1 / -1;
-            justify-self: stretch;
-            justify-content: space-between;
-            flex-wrap: wrap;
-          }
-          .mgr-member-foot {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-          .mgr-modal-backdrop {
-            align-items: stretch;
-            padding: 12px;
-          }
-          .mgr-member-modal {
-            max-height: 100%;
-          }
-          .mgr-modal-header,
-          .mgr-modal-body {
-            padding: 20px;
-          }
-          .mgr-modal-profile {
-            align-items: flex-start;
-          }
-          .mgr-modal-avatar {
-            width: 62px;
-            height: 62px;
-            font-size: 19px;
-          }
-          .mgr-overall-card {
-            grid-template-columns: 1fr;
-            padding: 22px;
-          }
-          .mgr-overall-mark {
-            justify-self: start;
-            width: 96px;
-            height: 96px;
-          }
+          .m-page { padding: 22px 16px 60px; }
+          .m-header { flex-direction: column; }
+          .m-score-band { grid-template-columns: 1fr; }
+          .m-score-col { border-right: 0; border-bottom: 1px solid var(--border); padding-right: 0; padding-bottom: 14px; }
+          .m-summary-grid, .m-metric-grid, .m-team-top, .m-gauge-grid, .m-risk-grid, .m-rec-grid, .m-reason-grid { grid-template-columns: 1fr; }
+          .m-risk-row { grid-template-columns: 1fr; }
+          .m-repo-trigger { min-width: 0; width: 100%; }
         }
       `}</style>
 
-      <main className="mgr-page">
-        <div className="mgr-shell">
-          <div className="mgr-header">
-            <div className="mgr-title">
-              <h1>Team Dashboard</h1>
-              <p>Team-level insights and performance evaluation</p>
-            </div>
+      <main className="m-page">
+        <div className="m-shell">
 
-            <div className="mgr-toolbar">
-              <label className="mgr-filter" title="Repository filter">
-                <GitBranch size={17} strokeWidth={2} />
-                <select
-                  value={selectedRepoId}
-                  onChange={event => setSelectedRepoId(event.target.value)}
-                  disabled={loadingRepos}
-                >
-                  <option value="all">All Repositories</option>
-                  {repos.map(repo => (
-                    <option key={repo.id} value={repo.id}>
-                      {repo.full_name || repo.name || `Repository ${repo.id}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button className="mgr-icon-button" type="button" onClick={refreshAll} title="Refresh dashboard">
-                <RefreshCcw size={17} strokeWidth={2} />
+          {/* ── Header ── */}
+          <header className="m-header">
+            <div>
+              <div className="m-eyebrow"><BarChart3 size={13} /> Manager Dashboard</div>
+              <h1>Monitor your repository<br />and team performance</h1>
+              <p className="m-header-sub">Get a full picture of code health, team velocity, and actionable insights.</p>
+            </div>
+            <div className="m-actions">
+              <RepoDropdown
+                repos={data.repositories}
+                selectedRepoId={selectedRepoId}
+                loading={loading}
+                onChange={setSelectedRepoId}
+                dropdownRef={dropdownRef}
+              />
+              <button type="button" className="m-refresh-btn" onClick={fetchOverview} title="Refresh dashboard">
+                <RefreshCcw size={17} />
               </button>
+            </div>
+          </header>
+
+          {/* ── Score band (always visible) ── */}
+          {!loading && !error && (
+            <div className="m-score-band">
+              <div className="m-score-col">
+                <span className="m-score-label">Overall Repository Score</span>
+                <strong className="m-score-number" style={{ color: scoreColor(score) }}>
+                  {fmtNumber(score)}
+                </strong>
+                <span className={`m-status ${statusClass(data.repository_summary.repository_status)}`}>
+                  {data.repository_summary.repository_status}
+                </span>
+              </div>
+              <div className="m-summary-grid">
+                <SummaryItem label="Repository" value={data.repository_summary.repository_name || "—"} icon={<Building2 size={15} />} />
+                <SummaryItem label="Organization" value={data.repository_summary.organization || "—"} icon={<Users size={15} />} />
+                <SummaryItem label="Branch" value={<><GitBranch size={13} style={{ flexShrink: 0 }} /> {data.repository_summary.branch || "—"}</>} icon={<GitBranch size={15} />} />
+                <SummaryItem label="Last Analysis" value={fmtDate(data.repository_summary.last_analysis)} icon={<CalendarClock size={15} />} />
+                <SummaryItem label="Analyzed On" value={fmtDate(data.repository_summary.analyzed_on)} icon={<CalendarClock size={15} />} />
+                <SummaryItem label="Analysis ID" value={data.repository_summary.analysis_run_id ? `#${data.repository_summary.analysis_run_id}` : "—"} icon={<GitCommitHorizontal size={15} />} />
+              </div>
+            </div>
+          )}
+
+          {/* ── Tabs ── */}
+          <div className="m-tabs-wrap">
+            <div className="m-tabs" role="tablist">
+              {TABS.map(tab => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab.key}
+                  className={`m-tab ${activeTab === tab.key ? "active" : ""}`}
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  {tab.icon}{tab.label}
+                </button>
+              ))}
             </div>
           </div>
 
-          {error && <div className="mgr-error">{error}</div>}
-
-          {loadingDashboard ? (
-            <ManagerDashboardSkeleton />
+          {/* ── Content ── */}
+          {loading ? (
+            <div className="m-loading sk" style={{ minHeight: 320 }} />
+          ) : error ? (
+            <div className="m-error">{error}</div>
           ) : (
             <>
-              <div className="mgr-kpi-grid">
-                <KpiCard
-                  label="Team Average"
-                  value={fmtScore(kpis.team_average_score)}
-                  detail="Overall score"
-                  icon={Activity}
-                  highlight
-                />
-                <KpiCard
-                  label="Team Size"
-                  value={String(kpis.team_size)}
-                  detail="Active contributors"
-                  icon={Users}
-                />
-                <KpiCard
-                  label="Top Performer"
-                  value={kpis.top_performer?.full_name || "—"}
-                  detail={kpis.top_performer ? `Score: ${fmtScore(kpis.top_performer.average_score)}` : "No scores yet"}
-                  icon={Trophy}
-                />
-                <KpiCard
-                  label="Growth Rate"
-                  value={`${kpis.growth_rate >= 0 ? "+" : ""}${fmtScore(kpis.growth_rate, 1)}`}
-                  detail="Avg monthly"
-                  icon={TrendingUp}
-                />
-              </div>
-
-              <section className="mgr-panel">
-                <div className="mgr-panel-head">
-                  <div>
-                    <div className="mgr-panel-title">
-                      <BarChart3 size={17} strokeWidth={2} />
-                      Team Score Trends
-                    </div>
-                    <div className="mgr-panel-sub">{selectedRepo ? selectedRepo.full_name : "All repositories"}</div>
+              {/* ── Repository Health ── */}
+              {activeTab === "overview" && (
+                <div className="m-section">
+                  <div className="m-section-title">
+                    <Gauge size={14} style={{ color: accent }} />
+                    <h2>Repository Metrics</h2>
                   </div>
-                  <div className="mgr-segmented" aria-label="Trend range">
-                    {trendRangeOptions.map(option => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={selectedTrendRange === option.value ? "active" : ""}
-                        onClick={() => setSelectedTrendRange(option.value)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
+                  <div className="m-metric-grid">
+                    {metricsWithoutGate.map(metric => <MetricTile key={metric.key} metric={metric} />)}
                   </div>
-                </div>
-                {trendData.length ? (
-                  <>
-                    <div className="mgr-chart">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={trendData} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
-                          <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
-                          <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} />
-                          <YAxis domain={[0, 100]} tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} width={34} />
-                          <Tooltip
-                            cursor={{ stroke: "rgba(139,92,246,0.35)" }}
-                            contentStyle={{
-                              background: "var(--tooltip-bg)",
-                              border: "1px solid var(--tooltip-border)",
-                              borderRadius: 8,
-                              color: "var(--text-primary)",
-                            }}
-                            formatter={(value: unknown, name: unknown) => {
-                              const meta = scoreLineMeta.find(item => item.key === name);
-                              return [fmtScore(Number(value), 1), meta?.label || String(name)];
-                            }}
-                          />
-                          {scoreLineMeta.map(line => (
-                            <Line
-                              key={line.key}
-                              type="monotone"
-                              dataKey={line.key}
-                              stroke={line.color}
-                              strokeWidth={line.key === "average_score" ? 3 : 2}
-                              dot={{ r: 3, strokeWidth: 2, fill: "var(--bg-base)", stroke: line.color }}
-                              activeDot={{ r: 5, strokeWidth: 0, fill: line.color }}
-                            />
-                          ))}
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                    <div className="mgr-chart-legend">
-                      {scoreLineMeta.map(line => (
-                        <span key={line.key}>
-                          <i style={{ background: line.color }} />
-                          {line.label}
-                        </span>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <div className="mgr-empty">
-                    <strong>No trend data yet</strong>
-                    Analyze a repository to populate team history.
-                  </div>
-                )}
-              </section>
-
-              <section className="mgr-panel">
-                <div className="mgr-panel-head">
-                  <div className="mgr-panel-title">
-                    <Star size={17} strokeWidth={2} />
-                    Team Skill Distribution
-                  </div>
-                </div>
-                {members.length ? (
-                  <div className="mgr-chart" style={{ height: 250 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={skillData} layout="vertical" margin={{ top: 8, right: 18, left: 20, bottom: 8 }}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" horizontal={false} />
-                        <XAxis type="number" domain={[0, 100]} tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} />
-                        <YAxis type="category" dataKey="name" tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={false} tickLine={false} width={118} />
-                        <Tooltip
-                          cursor={{ fill: "rgba(139,92,246,0.08)" }}
-                          contentStyle={{
-                            background: "var(--tooltip-bg)",
-                            border: "1px solid var(--tooltip-border)",
-                            borderRadius: 8,
-                            color: "var(--text-primary)",
-                          }}
-                          formatter={(value: unknown) => [fmtScore(Number(value), 1), "Team Average"]}
-                        />
-                        <Bar dataKey="score" radius={[0, 6, 6, 0]} fill={accent} barSize={20} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                ) : (
-                  <div className="mgr-empty">
-                    <strong>No skill distribution yet</strong>
-                    Team skill averages appear after manager-run analysis completes.
-                  </div>
-                )}
-              </section>
-
-              <div className="mgr-section-head">
-                <h2>Team Members</h2>
-                <span>{members.length} dynamic contributors</span>
-              </div>
-
-              {members.length ? (
-                <div className="mgr-members">
-                  {members.map(member => (
-                    <MemberRow
-                      key={member.id}
-                      member={member}
-                      onViewDetails={openMemberDetails}
-                      showDetails={selectedRepoId === "all"}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="mgr-empty">
-                  <strong>No team members yet</strong>
-                  Analyze a repository with registered developer contributors to form the team automatically.
                 </div>
               )}
 
-              {recommendationGroups.length > 0 && (
-                <>
-                  <div className="mgr-section-head">
-                    <h2>Actionable Recommendations</h2>
-                    <span>Prioritized team next moves</span>
+              {/* ── Team Performance ── */}
+              {activeTab === "team" && (
+                <div className="m-section">
+                  <div className="m-section-title">
+                    <Users size={14} style={{ color: accent }} />
+                    <h2>Team Performance Overview</h2>
                   </div>
+                  <div className="m-team-top">
+                    <div className="m-team-stat">
+                      <span className="m-label">Average Team Score</span>
+                      <strong className="m-team-stat-number" style={{ color: scoreColor(data.team_performance.average_team_score) }}>
+                        {fmtNumber(data.team_performance.average_team_score)}
+                      </strong>
+                      <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                        {data.team_performance.total_contributors} active contributors
+                      </span>
+                    </div>
+                    <HighlightCard title="Best Contributor" person={data.team_performance.best_contributor} icon={<TrendingUp size={17} />} />
+                    <HighlightCard title="Needs Support" person={data.team_performance.needs_support_contributor} icon={<Target size={17} />} />
+                  </div>
+                  <div className="m-gauge-grid">
+                    <ScoreRingMetric label="Team Average Skill Score" value={data.team_performance.average_team_score} description="Combined team capability score across contributors." />
+                    <ScoreRingMetric label="Team Average Security Score" value={data.team_performance.average_team_security_score} description="Security posture average from the latest contributor analyses." />
+                    <CodeSmellsMetric value={data.team_performance.average_code_smells} />
+                  </div>
+                </div>
+              )}
 
-                  <div className="mgr-bottom-insights">
-                    {recommendationGroups.map(group => {
-                      const Icon = group.icon;
-                      return (
-                        <section key={group.key} className="mgr-panel mgr-text-card">
-                          <div className="mgr-panel-head">
-                            <div className="mgr-panel-title">
-                              <Icon size={17} strokeWidth={2} />
-                              {group.title}
-                            </div>
-                          </div>
-                          <ul className="mgr-text-list">
-                            {group.items.map((item, index) => (
-                              <li key={`${item}-${index}`} className="mgr-text-item">
-                                <span className="mgr-text-item-icon" style={{ color: group.color, background: group.bg }}>
-                                  <Icon size={16} strokeWidth={2} />
-                                </span>
-                                <span>{item}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </section>
-                      );
-                    })}
+              {/* ── Contributors ── */}
+              {activeTab === "contributors" && (
+                <div className="m-section">
+                  <div className="m-section-title">
+                    <BarChart3 size={14} style={{ color: accent }} />
+                    <h2>Contributors Overview</h2>
                   </div>
-                </>
+                  <div className="m-table-wrap">
+                    <table className="m-table">
+                      <thead>
+                        <tr>
+                          {["Developer", "Role", "Skill Score", "Health Score", "Security Score", "Coverage", "Bugs", "Code Smells", "Complexity", "Status"].map(h => (
+                            <th key={h}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.contributors.map(row => (
+                          <tr key={row.id}>
+                            <td><strong>{row.developer}</strong><small>@{row.username}</small></td>
+                            <td>{row.role || "Developer"}</td>
+                            <td style={{ color: scoreColor(row.skill_score), fontWeight: 700 }}>{fmtNumber(row.skill_score)}</td>
+                            <td>{fmtNumber(row.health_score)}</td>
+                            <td>{fmtNumber(row.security_score)}</td>
+                            <td>{fmtPlainMetric(row.coverage, "%", 1)}</td>
+                            <td>{fmtPlainMetric(row.bugs)}</td>
+                            <td>{fmtPlainMetric(row.code_smells)}</td>
+                            <td>{fmtPlainMetric(row.complexity)}</td>
+                            <td><span className={`m-status ${statusClass(row.status)}`}>{row.status}</span></td>
+                          </tr>
+                        ))}
+                        {!data.contributors.length && (
+                          <tr><td colSpan={10} style={{ color: "var(--text-muted)", textAlign: "center", padding: 28 }}>No completed contributor analysis is available yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Trends ── */}
+              {activeTab === "trends" && (
+                <div className="m-section">
+                  <div className="m-section-aside">
+                    <div className="m-section-title" style={{ marginBottom: 0 }}>
+                      <LineChartIcon size={14} style={{ color: accent }} />
+                      <h2>Repository Trends</h2>
+                    </div>
+                    <select
+                      className="m-trend-select"
+                      value={trendGranularity}
+                      onChange={e => setTrendGranularity(e.target.value as "daily" | "monthly")}
+                    >
+                      <option value="daily">Daily</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                  </div>
+                  <div className="m-trend-card">
+                    {trendData.length ? (
+                      <ResponsiveContainer width="100%" height={280}>
+                        <LineChart data={trendData}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148,163,184,0.15)" />
+                          <XAxis dataKey="label" tickLine={false} axisLine={false} style={{ fontSize: 12 }} />
+                          <YAxis domain={[0, 100]} tickLine={false} axisLine={false} style={{ fontSize: 12 }} />
+                          <Tooltip contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(139,92,246,0.3)", borderRadius: 12 }} />
+                          <Line type="monotone" dataKey="health_score" name="Health Score" stroke="#3b82f6" strokeWidth={2.4} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="security_score" name="Security Score" stroke="#22c55e" strokeWidth={2.4} dot={{ r: 3 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : <p className="m-empty" style={{ padding: 32, textAlign: "center" }}>No historical trend data available yet.</p>}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Risks & Insights ── */}
+              {activeTab === "risks" && (
+                <div className="m-section">
+                  <div className="m-section-title">
+                    <AlertTriangle size={14} style={{ color: accent }} />
+                    <h2>Risks & Attention</h2>
+                  </div>
+                  <div className="m-risk-grid">
+                    <RiskPanel title="Files with Code Smells" items={data.risks.high_code_smells} metricLabel="Code Smells" icon={<Flame size={16} />} />
+                    <RiskPanel title="Files for Bugs" items={(data.risks.files_for_bugs?.length ? data.risks.files_for_bugs : data.risks.high_bug_files)} metricLabel="Bugs" icon={<Bug size={16} />} />
+                  </div>
+                </div>
+              )}
+
+              {/* ── Recommendations ── */}
+              {activeTab === "recommendations" && (
+                <div className="m-section">
+                  <div className="m-section-title">
+                    <Sparkles size={14} style={{ color: accent }} />
+                    <h2>Actionable Recommendations</h2>
+                  </div>
+                  <div className="m-rec-grid">
+                    <RecommendationGroup title="Fix First" items={data.recommendations.fix_first} tone="fix" icon={<AlertCircle size={18} />} />
+                    <RecommendationGroup title="Prioritize Next" items={data.recommendations.prioritize_next} tone="next" icon={<TrendingUp size={18} />} />
+                    <RecommendationGroup title="Plan When Possible" items={data.recommendations.plan_when_possible} tone="plan" icon={<CheckCircle2 size={18} />} />
+                    <RecommendationGroup title="Strengthen Further" items={data.recommendations.strengthen_further} tone="strong" icon={<Award size={18} />} />
+                  </div>
+                  <div className="m-reason-grid">
+                    <div className="m-reason-card">
+                      <div className="m-reason-head"><Brain size={16} /><strong>Architectural Concerns</strong></div>
+                      {data.recommendations.architectural_concerns.map(item => <p key={item}>{item}</p>)}
+                      {!data.recommendations.architectural_concerns.length && <p className="m-empty">None identified.</p>}
+                    </div>
+                    <div className="m-reason-card">
+                      <div className="m-reason-head"><Activity size={16} /><strong>Delivery Risks</strong></div>
+                      {data.recommendations.delivery_risks.map(item => <p key={item}>{item}</p>)}
+                      {!data.recommendations.delivery_risks.length && <p className="m-empty">None identified.</p>}
+                    </div>
+                    <div className="m-reason-card">
+                      <div className="m-reason-head"><Layers size={16} /><strong>Quality Concerns</strong></div>
+                      {data.recommendations.quality_concerns.map(item => <p key={item}>{item}</p>)}
+                      {!data.recommendations.quality_concerns.length && <p className="m-empty">None identified.</p>}
+                    </div>
+                    <div className="m-reason-card">
+                      <div className="m-reason-head"><ShieldCheck size={16} /><strong>Team Strengths</strong></div>
+                      {data.recommendations.team_strengths.map(item => <p key={item}>{item}</p>)}
+                      {!data.recommendations.team_strengths.length && <p className="m-empty">None identified.</p>}
+                    </div>
+                    <div className="m-reason-card">
+                      <div className="m-reason-head"><CheckCircle2 size={16} /><strong>Recommended Priorities</strong></div>
+                      {data.recommendations.recommended_priorities.map(item => <p key={item}>{item}</p>)}
+                      {!data.recommendations.recommended_priorities.length && <p className="m-empty">None identified.</p>}
+                    </div>
+                  </div>
+                </div>
               )}
             </>
           )}
         </div>
-
-        {selectedMemberId && createPortal((
-          <div className="mgr-modal-backdrop" role="presentation" onMouseDown={closeMemberDetails}>
-            <section
-              className="mgr-member-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Developer performance details"
-              onMouseDown={event => event.stopPropagation()}
-            >
-              <div className="mgr-modal-header">
-                <div className="mgr-modal-profile">
-                  <div className="mgr-modal-avatar">
-                    {selectedMember?.avatar_url ? <img src={selectedMember.avatar_url} alt="" /> : initials(selectedMember?.full_name || "SP")}
-                  </div>
-                  <div>
-                    <h2>{selectedMember?.full_name || "Developer Details"}</h2>
-                    <p>{specializationLabel(selectedMember?.specialization || null)}</p>
-                    <div className="mgr-modal-meta">
-                      {selectedMember && (
-                        <>
-                          <span style={{ color: scoreBadge(selectedMember.average_overall_score).color, background: scoreBadge(selectedMember.average_overall_score).bg }}>
-                            {scoreBadge(selectedMember.average_overall_score).label}
-                          </span>
-                          <span>{selectedMember.repository_count} repositories</span>
-                          <span>{selectedMember.analysis_count} snapshots</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <button className="mgr-modal-close" type="button" onClick={closeMemberDetails} title="Close details">
-                  <X size={20} strokeWidth={2} />
-                </button>
-              </div>
-
-              <div className="mgr-modal-body">
-                {selectedMember && (
-                  <section className="mgr-overall-card">
-                    <div>
-                      <span>Overall Performance Score</span>
-                      <strong>{fmtScore(selectedMember.average_overall_score)}</strong>
-                      <ScoreDelta value={selectedMember.overall_delta} />
-                    </div>
-                    <div className="mgr-overall-mark">
-                      <Trophy size={48} strokeWidth={1.8} />
-                    </div>
-                  </section>
-                )}
-
-                <section>
-                  <h3 className="mgr-modal-section-title">Skill Breakdown</h3>
-                  {selectedMember && (
-                    <div className="mgr-skill-card-grid">
-                      {skillMeta.map(skill => {
-                        const Icon = skill.icon;
-                        const value = selectedMember[skill.key];
-                        return (
-                          <article key={skill.key} className="mgr-skill-card">
-                            <div>
-                              <span>
-                                <Icon size={16} strokeWidth={2} />
-                                {skill.label}
-                              </span>
-                              <strong>{fmtScore(value)}</strong>
-                            </div>
-                            <ProgressBar value={value} color={skill.color} />
-                          </article>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
-
-                <section className="mgr-modal-chart-card">
-                  <h3 className="mgr-modal-section-title">Performance Timeline</h3>
-                  {loadingMemberDetail ? (
-                    <div className="mgr-skeleton" style={{ height: 280, borderRadius: 8 }} />
-                  ) : memberDetail && memberTimelineData.length ? (
-                    <>
-                      <div className="mgr-chart" style={{ height: 280 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={memberTimelineData} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
-                            <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" />
-                            <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} />
-                            <YAxis domain={[0, 100]} tick={{ fill: "var(--text-muted)", fontSize: 12 }} axisLine={{ stroke: "var(--border-hover)" }} tickLine={false} width={34} />
-                            <Tooltip
-                              cursor={{ stroke: "rgba(99,102,241,0.35)" }}
-                              contentStyle={{
-                                background: "var(--tooltip-bg)",
-                                border: "1px solid var(--tooltip-border)",
-                                borderRadius: 8,
-                                color: "var(--text-primary)",
-                              }}
-                              formatter={(value: unknown, name: unknown) => {
-                                const meta = scoreLineMeta.find(item => item.key === name);
-                                return [fmtScore(Number(value), 1), meta?.label || String(name)];
-                              }}
-                            />
-                            {scoreLineMeta.map(line => (
-                              <Line
-                                key={line.key}
-                                type="monotone"
-                                dataKey={line.key}
-                                stroke={line.color}
-                                strokeWidth={line.key === "average_score" ? 3 : 2}
-                                dot={{ r: 3, strokeWidth: 2, fill: "var(--bg-card)", stroke: line.color }}
-                                activeDot={{ r: 5, strokeWidth: 0, fill: line.color }}
-                              />
-                            ))}
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <div className="mgr-chart-legend mgr-chart-legend-centered">
-                        {scoreLineMeta.map(line => (
-                          <span key={line.key}>
-                            <i style={{ background: line.color }} />
-                            {line.label}
-                          </span>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="mgr-empty">
-                      <strong>No performance timeline yet</strong>
-                      More score snapshots are needed to draw this developer's trend.
-                    </div>
-                  )}
-                </section>
-
-                {memberDetail && (memberDetail.key_strengths.length > 0 || memberDetail.areas_for_improvement.length > 0) && (
-                  <section className="mgr-modal-insights">
-                    {memberDetail.key_strengths.length > 0 && (
-                      <div className="mgr-modal-insight-card mgr-modal-strength">
-                        <h3>Key Strengths</h3>
-                        <ul>
-                          {memberDetail.key_strengths.map((item, index) => (
-                            <li key={`${item}-${index}`}>{item}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {memberDetail.areas_for_improvement.length > 0 && (
-                      <div className="mgr-modal-insight-card mgr-modal-improvement">
-                        <h3>Areas for Improvement</h3>
-                        <ul>
-                          {memberDetail.areas_for_improvement.map((item, index) => (
-                            <li key={`${item}-${index}`}>{item}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </section>
-                )}
-              </div>
-            </section>
-          </div>
-        ), document.body)}
       </main>
     </DashboardLayout>
   );

@@ -30,7 +30,7 @@ class BulkRepository(BaseModel):
     latest_commit_sha: str | None = None
     analyzed_at: datetime | None = None
     analysis_version: str | None = None
-    overall_score: float | None = None
+    sonar_health_score: float | None = None
 
 
 class BulkAnalyzeResponse(BaseModel):
@@ -139,7 +139,7 @@ async def _schedule_rows(
             latest_commit_sha=result.get("latest_commit_sha"),
             analyzed_at=result.get("analyzed_at"),
             analysis_version=result.get("analysis_version"),
-            overall_score=result.get("overall_score"),
+            sonar_health_score=result.get("sonar_health_score"),
         ))
 
     return BulkAnalyzeResponse(repositories=repositories, skipped=skipped)

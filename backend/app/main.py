@@ -11,7 +11,10 @@ for _p in [_BACKEND_DIR, _PROJECT_ROOT, _CWD]:
         sys.path.insert(0, _p)
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.recruiter import router as recruiter_router
 from app.api import auth
@@ -33,13 +36,13 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from ai_services.rag.rag_seeder import seed_standards
-from ai_services.learning.resource_seeder import seed_learning_resources
+from ai_services.rag.learning_rag import validate_learning_rag_startup
 
 from app.api.profile import router as profile_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     seed_standards()
-    seed_learning_resources()
+    validate_learning_rag_startup()
     yield
 
 
@@ -55,6 +58,15 @@ app.state.limiter = limiter
 
 # handle rate limit exceeded errors
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print(exc.errors())
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({"detail": exc.errors()}),
+    )
 
 # activate rate limiting middleware
 app.add_middleware(SlowAPIMiddleware)

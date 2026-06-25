@@ -10,7 +10,12 @@ interface Analysis {
   branch: string;
   status: string;
   triggered_at: string;
-  score: number | null;
+  skill_score: number | null;
+  skill_score_level: string;
+  sonar_health_score: number | null;
+  sonar_state: string;
+  quality_gate: string | null;
+  analysis_scope?: string;
 }
 
 interface TechnicalTask {
@@ -73,6 +78,16 @@ const scoreLabel = (s: number | null) => {
   return "Needs work";
 };
 
+const formatScore = (s: number | null) => {
+  if (s === null || s === undefined) return "N/A";
+  return Number.isInteger(s) ? String(s) : s.toFixed(1);
+};
+
+const formatState = (value: string | null | undefined) => {
+  if (!value) return "N/A";
+  return value.replace(/_/g, " ");
+};
+
 const statusConfig: Record<string, { color: string; bg: string; dot: string; label: string }> = {
   completed: { color: "#34d399", bg: "rgba(52,211,153,0.1)",   dot: "#34d399", label: "Completed" },
   failed:    { color: "#f87171", bg: "rgba(248,113,113,0.1)",  dot: "#f87171", label: "Failed"    },
@@ -95,6 +110,8 @@ export default function RepositoryAnalysis() {
   const [programmingLanguage, setProgrammingLanguage] = useState("python");
   const [branch, setBranch]     = useState("main");
   const [file, setFile]         = useState<File | null>(null);
+  const [coverageFile, setCoverageFile] = useState<File | null>(null);
+  const [coverageFileError, setCoverageFileError] = useState("");
   const [loading, setLoading]   = useState(false);
   const [runId, setRunId]       = useState<number | null>(null);
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
@@ -103,6 +120,7 @@ export default function RepositoryAnalysis() {
   const [dragOver, setDragOver] = useState(false);
   const [urlError, setUrlError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const coverageInputRef = useRef<HTMLInputElement>(null);
   const role = localStorage.getItem("role") || "developer";
 
   const [pendingAutoRun, setPendingAutoRun] = useState<{ url: string; branch: string; programmingLanguage?: string } | null>(null);
@@ -175,7 +193,11 @@ export default function RepositoryAnalysis() {
       return {
         ...item,
         status: data.status ?? item.status,
-        score: data.score ?? data.overall_score ?? item.score,
+        skill_score: data.skill_score ?? item.skill_score,
+        skill_score_level: data.skill_score_level ?? item.skill_score_level,
+        sonar_health_score: data.sonar_health_score ?? item.sonar_health_score,
+        sonar_state: data.sonar_state ?? item.sonar_state,
+        quality_gate: data.quality_gate ?? item.quality_gate,
       };
     }));
   };
@@ -296,6 +318,52 @@ export default function RepositoryAnalysis() {
     finally { setIsSavingEdit(false); }
   };
 
+  const handleCoverageFileChange = (selected: File | null) => {
+    setCoverageFileError("");
+    if (!selected) {
+      setCoverageFile(null);
+      return;
+    }
+
+    const isXml = selected.name.toLowerCase().endsWith(".xml") || selected.type === "text/xml" || selected.type === "application/xml";
+    if (!isXml) {
+      setCoverageFile(null);
+      setCoverageFileError("Please upload a valid coverage.xml file.");
+      return;
+    }
+
+    const maxSize = 10 * 1024 * 1024;
+    if (selected.size > maxSize) {
+      setCoverageFile(null);
+      setCoverageFileError("coverage.xml must be 10MB or smaller.");
+      return;
+    }
+
+    setCoverageFile(selected);
+  };
+
+  const submitAnalysisRun = async (url: string, selectedBranch: string) => {
+    if (coverageFile) {
+      const formData = new FormData();
+      formData.append("repo_url", url);
+      formData.append("branch", selectedBranch);
+      formData.append("programming_language", programmingLanguage);
+      formData.append("coverage_file", coverageFile);
+
+      for (const pair of formData.entries()) {
+        console.log(pair[0], pair[1]);
+      }
+
+      return api.post("/analysis/run/with-coverage", formData);
+    }
+
+    return api.post("/analysis/run", {
+      repo_url: url,
+      branch: selectedBranch,
+      programming_language: programmingLanguage,
+    });
+  };
+
   const startAnalysis = async (url: string, br: string) => {
     if (!url) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!/^https:\/\/github\.com\/.+/.test(url)) { setUrlError("URL must start with https://github.com/…"); return; }
@@ -308,7 +376,7 @@ export default function RepositoryAnalysis() {
       setReviewContributors([]);
     }
     try {
-      const res = await api.post("/analysis/run", { repo_url: url, branch: selectedBranch, programming_language: programmingLanguage });
+      const res = await submitAnalysisRun(url, selectedBranch);
       if (res.data.cached) {
         setLoading(false);
         const repoName = url.replace("https://github.com/", "").split("/").pop() || url;
@@ -354,7 +422,7 @@ export default function RepositoryAnalysis() {
     const selectedBranch = (branch || "main").trim() || "main";
     setLoading(true);
     try {
-      const res = await api.post("/analysis/run", { repo_url: repoUrl, branch: selectedBranch, programming_language: programmingLanguage });
+      const res = await submitAnalysisRun(repoUrl, selectedBranch);
       const repoId = res.data.repo_id || requirementsRepoId;
       if (!repoId) throw new Error("Repository id was not returned.");
       setRequirementsRepoId(repoId);
@@ -483,6 +551,32 @@ export default function RepositoryAnalysis() {
           color: rgba(167,139,250,0.8);
           text-transform: uppercase; letter-spacing: 0.8px;
           margin-bottom: 8px; display: block;
+        }
+
+
+        .coverage-upload {
+          border: 1px dashed rgba(99,102,241,0.38);
+          background: linear-gradient(135deg, rgba(99,102,241,0.09), rgba(236,72,153,0.05));
+          border-radius: 14px;
+          padding: 14px 16px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+        }
+        .coverage-upload:hover { border-color: ${accent}80; background: ${accent}10; }
+        .coverage-file-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(52,211,153,0.24);
+          background: rgba(52,211,153,0.08);
+          color: #34d399;
+          font-size: 12px;
+          font-weight: 700;
+          max-width: 100%;
         }
 
         .ra-row {
@@ -718,7 +812,7 @@ export default function RepositoryAnalysis() {
               Analyze GitHub repositories
             </h1>
             <p style={{ fontSize: 13.5, color: "var(--text-muted)", margin: 0, lineHeight: 1.6 }}>
-              Convert source code into measurable skill scores and track developer performance over time.
+              Convert source code into SonarQube health metrics and track repository health over time.
             </p>
           </div>
 
@@ -804,6 +898,50 @@ export default function RepositoryAnalysis() {
                     onChange={e => setBranch(e.target.value)}
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="ra-label">Coverage Report (Optional)</label>
+                <div className="coverage-upload">
+                  <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 12, background: `${accent}18`, color: accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 15h8"/><path d="M8 18h5"/></svg>
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 800, color: "var(--text-primary)" }}>Upload coverage.xml</div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, lineHeight: 1.45 }}>
+                        Optional. If uploaded, SonarQube imports it. If not, SkillPulse will look for coverage.xml in the repository.
+                      </div>
+                      {coverageFile && (
+                        <div className="coverage-file-pill" style={{ marginTop: 9 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{coverageFile.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => { setCoverageFile(null); setCoverageFileError(""); if (coverageInputRef.current) coverageInputRef.current.value = ""; }}
+                            style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer", fontWeight: 900, padding: 0 }}
+                            aria-label="Remove coverage file"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <input
+                    ref={coverageInputRef}
+                    type="file"
+                    accept=".xml,text/xml,application/xml"
+                    style={{ display: "none" }}
+                    onChange={(e) => handleCoverageFileChange(e.target.files?.[0] || null)}
+                  />
+                  <button type="button" className="ra-btn-ghost" onClick={() => coverageInputRef.current?.click()}>
+                    {coverageFile ? "Change file" : "Choose file"}
+                  </button>
+                </div>
+                {coverageFileError && (
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: "#f87171" }}>{coverageFileError}</div>
+                )}
               </div>
 
               {githubAuthUrl && role !== "recruiter" && (
@@ -974,7 +1112,7 @@ export default function RepositoryAnalysis() {
 
               {!historyLoading && analyses.map(a => {
                 const st = statusConfig[a.status] || statusConfig.pending;
-                const sc = a.score;
+                const sc = a.skill_score;
                 const sColor = scoreColor(sc);
                 return (
                   <div key={a.analysis_id} className="ra-row">
@@ -993,14 +1131,21 @@ export default function RepositoryAnalysis() {
                           {st.label}
                         </span>
                       </div>
+                      {role === "manager" && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const, marginTop: 7 }}>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Sonar {formatScore(a.sonar_health_score)}</span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Gate {a.quality_gate || "N/A"}</span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "capitalize" as const }}>{formatState(a.sonar_state)}</span>
+                        </div>
+                      )}
                     </div>
                     <div style={{ textAlign: "right" as const, flexShrink: 0 }}>
                       {sc !== null ? (
                         <>
                           <div style={{ fontSize: 22, fontWeight: 800, color: sColor, lineHeight: 1 }}>{sc}</div>
-                          <div style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 2 }}>{scoreLabel(sc)}</div>
+                          <div style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 2 }}>{a.skill_score_level || scoreLabel(sc)}</div>
                         </>
-                      ) : <div style={{ fontSize: 13, color: "var(--text-muted)" }}>—</div>}
+                      ) : <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Score unavailable</div>}
                     </div>
                   </div>
                 );

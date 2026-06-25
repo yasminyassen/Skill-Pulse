@@ -54,7 +54,9 @@ interface RecruiterProfileData {
   recent_activity: Array<{
     title: string;
     description: string;
-    score: number | null;
+    sonar_health_score: number | null;
+    sonar_state?: string;
+    quality_gate?: string | null;
     completed_at: string | null;
   }>;
 }
@@ -202,7 +204,6 @@ export default function RecruiterProfilePage() {
   const [savingEval, setSavingEval] = useState(false);
   const [securityOn, setSecurityOn] = useState(true);
   const [threshold, setThreshold] = useState(75);
-  const [weights, setWeights] = useState({ code: 20, architecture: 20, maintainability: 20, security: 20, activity: 20 });
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -219,13 +220,6 @@ export default function RecruiterProfilePage() {
     });
     setSecurityOn(data.user.security_score_visible ?? true);
     setThreshold(data.user.high_priority_threshold ?? 75);
-    setWeights({
-      code: data.user.weight_code_quality ?? 20,
-      architecture: data.user.weight_architecture ?? 20,
-      maintainability: data.user.weight_maintainability ?? 20,
-      security: data.user.weight_security ?? 20,
-      activity: data.user.weight_git_activity ?? 20,
-    });
   };
 
   const loadProfile = async () => {
@@ -287,16 +281,6 @@ export default function RecruiterProfilePage() {
     }
   }, []);
 
-  const saveWeights = async () => {
-    await saveEvalSettings({
-      weight_code_quality: weights.code,
-      weight_architecture: weights.architecture,
-      weight_maintainability: weights.maintainability,
-      weight_security: weights.security,
-      weight_git_activity: weights.activity,
-    });
-  };
-
   const saveThreshold = async () => {
     await saveEvalSettings({ high_priority_threshold: threshold });
   };
@@ -316,7 +300,6 @@ export default function RecruiterProfilePage() {
     [profile],
   );
 
-  const totalWeight = weights.code + weights.architecture + weights.maintainability + weights.security + weights.activity;
   const visibleActivities = showAllActivities ? profile.recent_activity : profile.recent_activity.slice(0, 5);
 
   const renderSettings = () => {
@@ -381,39 +364,12 @@ export default function RecruiterProfilePage() {
         <div className="rp-panel-head">
           <div>
             <h2>Evaluation Preferences</h2>
-            <span>Weights must total 100% before saving.</span>
+            <span>Candidate ranking now uses the Skill Score Engine.</span>
           </div>
         </div>
-        <div className="rp-weight-grid">
-          <label className="rp-slider-block">
-            <div className="rp-slider-label"><strong>Code Quality</strong><span>{weights.code}%</span></div>
-            <input type="range" min={0} max={100} value={weights.code} onChange={event => setWeights(prev => ({ ...prev, code: Number(event.target.value) }))} />
-          </label>
-          <label className="rp-slider-block">
-            <div className="rp-slider-label"><strong>Architecture</strong><span>{weights.architecture}%</span></div>
-            <input type="range" min={0} max={100} value={weights.architecture} onChange={event => setWeights(prev => ({ ...prev, architecture: Number(event.target.value) }))} />
-          </label>
-          <label className="rp-slider-block">
-            <div className="rp-slider-label"><strong>Maintainability</strong><span>{weights.maintainability}%</span></div>
-            <input type="range" min={0} max={100} value={weights.maintainability} onChange={event => setWeights(prev => ({ ...prev, maintainability: Number(event.target.value) }))} />
-          </label>
-          <label className="rp-slider-block">
-            <div className="rp-slider-label"><strong>Security</strong><span>{weights.security}%</span></div>
-            <input type="range" min={0} max={100} value={weights.security} onChange={event => setWeights(prev => ({ ...prev, security: Number(event.target.value) }))} />
-          </label>
-          <label className="rp-slider-block">
-            <div className="rp-slider-label"><strong>Problem Solving</strong><span>{weights.activity}%</span></div>
-            <input type="range" min={0} max={100} value={weights.activity} onChange={event => setWeights(prev => ({ ...prev, activity: Number(event.target.value) }))} />
-          </label>
-        </div>
-        <div className={`rp-notice ${totalWeight === 100 ? "" : "danger"}`}>
+        <div className="rp-notice">
           <AlertTriangle size={16} />
-          <span>Current total: {totalWeight}%</span>
-        </div>
-        <div className="rp-actions">
-          <button className="rp-btn primary" type="button" disabled={savingEval || totalWeight !== 100} onClick={saveWeights}>
-            Save Preferences
-          </button>
+          <span>Legacy weighting sliders are disabled and no longer affect candidate ranking or comparison.</span>
         </div>
       </section>
     );
@@ -1099,8 +1055,8 @@ export default function RecruiterProfilePage() {
                       </div>
                       <span className="rp-activity-time">
                         {fmtAgo(item.completed_at)}
-                        {item.score !== null && securityOn && <span className="rp-activity-score">{item.score}</span>}
-                        {item.score !== null && !securityOn && <span className="rp-activity-score">hidden</span>}
+                        {item.sonar_health_score !== null && <span className="rp-activity-score">{item.sonar_health_score}</span>}
+                        {item.sonar_health_score === null && <span className="rp-activity-score">sonar_unavailable</span>}
                       </span>
                     </article>
                   ))}
