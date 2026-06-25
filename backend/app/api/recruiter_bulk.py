@@ -30,7 +30,20 @@ class BulkRepository(BaseModel):
     latest_commit_sha: str | None = None
     analyzed_at: datetime | None = None
     analysis_version: str | None = None
+    skill_score: float | None = None
+    skill_score_level: str | None = None
     sonar_health_score: float | None = None
+    sonar_state: str | None = None
+    quality_gate: str | None = None
+    bugs: float | None = None
+    code_smells: float | None = None
+    coverage: float | None = None
+    duplication_percentage: float | None = None
+    cognitive_complexity: float | None = None
+    reliability_rating: str | None = None
+    maintainability_rating: str | None = None
+    technical_debt_minutes: float | None = None
+    lines_of_code: float | None = None
 
 
 class BulkAnalyzeResponse(BaseModel):
@@ -139,7 +152,20 @@ async def _schedule_rows(
             latest_commit_sha=result.get("latest_commit_sha"),
             analyzed_at=result.get("analyzed_at"),
             analysis_version=result.get("analysis_version"),
+            skill_score=result.get("skill_score"),
+            skill_score_level=result.get("skill_score_level"),
             sonar_health_score=result.get("sonar_health_score"),
+            sonar_state=result.get("sonar_state"),
+            quality_gate=result.get("quality_gate"),
+            bugs=result.get("bugs"),
+            code_smells=result.get("code_smells"),
+            coverage=result.get("coverage"),
+            duplication_percentage=result.get("duplication_percentage"),
+            cognitive_complexity=result.get("cognitive_complexity"),
+            reliability_rating=result.get("reliability_rating"),
+            maintainability_rating=result.get("maintainability_rating"),
+            technical_debt_minutes=result.get("technical_debt_minutes"),
+            lines_of_code=result.get("lines_of_code"),
         ))
 
     return BulkAnalyzeResponse(repositories=repositories, skipped=skipped)

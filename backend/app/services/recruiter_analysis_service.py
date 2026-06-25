@@ -6,10 +6,10 @@ from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.models import AnalysisRun, RecruiterCandidate, Repository, RepositoryAnalysis, User
+from app.db.models import AnalysisRun, RecruiterCandidate, Repository, RepositoryAnalysis, SkillScore, User
 from app.services.analysis_orchestrator import background_analysis_task
 from app.services.github_client import get_branch_head_sha, verify_repo_access
-from app.services.sonarqube_score_service import build_sonar_repo_summary
+from app.services.sonarqube_score_service import build_skill_score_fields, build_sonar_repo_summary
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +105,25 @@ async def schedule_recruiter_repo_analysis(
     )
 
     if not needs_reanalysis and existing_analysis:
-        existing_score = None
+        sonar_summary: dict[str, Any] = {}
+        skill_fields: dict[str, Any] = {"skill_score": None, "skill_score_level": "Unavailable"}
         if existing_analysis.last_run_id:
             existing_run = db.query(AnalysisRun).filter(AnalysisRun.id == existing_analysis.last_run_id).first()
             if existing_run:
-                existing_score = build_sonar_repo_summary(existing_run).get("sonar_health_score")
+                sonar_summary = build_sonar_repo_summary(existing_run)
+                score_row = (
+                    db.query(SkillScore)
+                    .filter(
+                        SkillScore.analysis_run_id == existing_run.id,
+                        SkillScore.user_id == current_user.id,
+                    )
+                    .first()
+                )
+                skill_fields = build_skill_score_fields(
+                    score_row,
+                    sonar_health_score=sonar_summary.get("sonar_health_score"),
+                    security_score=getattr(score_row, "security_awareness_score", None),
+                )
 
         return {
             "scheduled": False,
@@ -124,7 +138,19 @@ async def schedule_recruiter_repo_analysis(
             "latest_commit_sha": existing_analysis.latest_commit_sha,
             "analyzed_at": existing_analysis.analyzed_at,
             "analysis_version": existing_analysis.analysis_version,
-            "sonar_health_score": existing_score,
+            **skill_fields,
+            "sonar_health_score": sonar_summary.get("sonar_health_score"),
+            "sonar_state": sonar_summary.get("sonar_state"),
+            "quality_gate": sonar_summary.get("quality_gate"),
+            "bugs": sonar_summary.get("bugs"),
+            "code_smells": sonar_summary.get("code_smells"),
+            "coverage": sonar_summary.get("coverage"),
+            "duplication_percentage": sonar_summary.get("duplication_percentage"),
+            "cognitive_complexity": sonar_summary.get("cognitive_complexity"),
+            "reliability_rating": sonar_summary.get("reliability_rating"),
+            "maintainability_rating": sonar_summary.get("maintainability_rating"),
+            "technical_debt_minutes": sonar_summary.get("technical_debt_minutes"),
+            "lines_of_code": sonar_summary.get("lines_of_code"),
         }
 
     run = AnalysisRun(
@@ -206,5 +232,18 @@ async def schedule_recruiter_repo_analysis(
         "latest_commit_sha": head_sha,
         "analyzed_at": None,
         "analysis_version": analysis_version,
+        "skill_score": None,
+        "skill_score_level": "Unavailable",
         "sonar_health_score": None,
+        "sonar_state": "pending",
+        "quality_gate": None,
+        "bugs": None,
+        "code_smells": None,
+        "coverage": None,
+        "duplication_percentage": None,
+        "cognitive_complexity": None,
+        "reliability_rating": None,
+        "maintainability_rating": None,
+        "technical_debt_minutes": None,
+        "lines_of_code": None,
     }
