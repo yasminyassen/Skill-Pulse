@@ -4,17 +4,14 @@ import {
   AlertTriangle,
   ArrowUp,
   BarChart3,
-  Brain,
   CalendarDays,
   Download,
   Eye,
   Filter,
   Gauge,
   GitBranch,
-  RefreshCw,
   Search,
   ShieldCheck,
-  Sparkles,
   Star,
   Target,
   Users,
@@ -40,6 +37,7 @@ type RecruiterTask = {
 type CandidateRow = {
   candidate_name: string;
   github_login: string | null;
+  github_avatar_url?: string | null;
   repo_name?: string | null;
   repo_url?: string | null;
   task_id?: number | null;
@@ -69,6 +67,7 @@ type CandidateRow = {
 type CandidateInsight = {
   candidate_name: string;
   github_login?: string | null;
+  github_avatar_url?: string | null;
   run_id: number;
   repo_name?: string | null;
   task_title?: string | null;
@@ -192,14 +191,6 @@ const scoreTone = (score: number | null | undefined) => {
   return "red";
 };
 
-const qualityGateTone = (gate?: string | null) => {
-  const value = String(gate || "").toUpperCase();
-  if (["OK", "PASS", "PASSED"].includes(value)) return "green";
-  if (["WARN", "WARNING"].includes(value)) return "yellow";
-  if (["ERROR", "FAILED", "FAIL"].includes(value)) return "red";
-  return "muted";
-};
-
 const riskLabel = (level: RiskLevel) => level.charAt(0).toUpperCase() + level.slice(1);
 
 const recommendationLabel: Record<CandidateInsight["recommendation"], string> = {
@@ -223,6 +214,25 @@ const initials = (name?: string | null) =>
     .join("")
     .toUpperCase()
     .slice(0, 2) || "?";
+
+function CandidateAvatar({ src, name, large = false }: { src?: string | null; name?: string | null; large?: boolean }) {
+  return (
+    <span className={`rd-avatar${large ? " large" : ""}`}>
+      {src && (
+        <img
+          src={src}
+          alt={`${name || "Candidate"} GitHub avatar`}
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+            const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
+            if (fallback) fallback.style.opacity = "1";
+          }}
+        />
+      )}
+      <span>{initials(name)}</span>
+    </span>
+  );
+}
 
 const buildParams = (filters: CandidateFilters, searchValue: string) => {
   const params: Record<string, string> = {
@@ -289,29 +299,12 @@ export default function CandidateEvaluation() {
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingCandidates, setLoadingCandidates] = useState(true);
   const [loadingSummary, setLoadingSummary] = useState(true);
-  const [loadingInsight, setLoadingInsight] = useState(false);
-  const [refreshingInsight, setRefreshingInsight] = useState(false);
   const [candidateError, setCandidateError] = useState("");
   const [summaryError, setSummaryError] = useState("");
-  const [insightError, setInsightError] = useState("");
   const [toast, setToast] = useState<ToastState>(null);
 
   const [activeTab, setActiveTab] = useState<"ranking" | "analytics">("ranking");
 
-  const selectedCandidate = useMemo(
-    () => candidates.find((candidate) => candidate.run_id === selectedRunId) || null,
-    [candidates, selectedRunId],
-  );
-
-  const selectedInsight = selectedRunId ? insightsByRun[selectedRunId] : undefined;
-
-  const topRunId = useMemo(() => {
-    const scored = candidates.filter((candidate) => candidate.skill_score !== null);
-    if (!scored.length) return null;
-    return scored.reduce((best, current) =>
-      (current.skill_score ?? -1) > (best.skill_score ?? -1) ? current : best,
-    ).run_id;
-  }, [candidates]);
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
@@ -377,30 +370,6 @@ export default function CandidateEvaluation() {
     fetchSummary();
   }, [fetchSummary]);
 
-  useEffect(() => {
-    if (!selectedRunId || insightsByRun[selectedRunId]) {
-      setInsightError("");
-      return;
-    }
-
-    let cancelled = false;
-    setLoadingInsight(true);
-    setInsightError("");
-    loadCandidateInsights(selectedRunId)
-      .then((insight) => {
-        if (!cancelled) setInsightsByRun((prev) => ({ ...prev, [selectedRunId]: insight }));
-      })
-      .catch(() => {
-        if (!cancelled) setInsightError("Unable to generate candidate insight.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingInsight(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [insightsByRun, selectedRunId]);
 
   const setFilter = <K extends keyof CandidateFilters>(key: K, value: CandidateFilters[K]) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -439,21 +408,6 @@ export default function CandidateEvaluation() {
     URL.revokeObjectURL(url);
   };
 
-  const regenerateInsight = async () => {
-    if (!selectedRunId) return;
-    setRefreshingInsight(true);
-    setInsightError("");
-    try {
-      const insight = await loadCandidateInsights(selectedRunId, true);
-      setInsightsByRun((prev) => ({ ...prev, [selectedRunId]: insight }));
-      showToast("AI insight regenerated.");
-    } catch {
-      setInsightError("Unable to generate candidate insight.");
-      showToast("Unable to regenerate insight.", "error");
-    } finally {
-      setRefreshingInsight(false);
-    }
-  };
 
   const overview = summary.overview;
   const totalDistribution =
@@ -571,7 +525,8 @@ export default function CandidateEvaluation() {
         </div>
 
         {activeTab === "ranking" && (
-          <section className="rd-panel rd-table-panel">
+          <div className="rd-main-grid">
+            <section className="rd-panel rd-table-panel">
               <div className="rd-panel-title">
                 <div>
                   <span className="rd-eyebrow"><BarChart3 size={14} /> Candidate Ranking</span>
@@ -610,7 +565,7 @@ export default function CandidateEvaluation() {
                           <td><span className="rd-rank">{index + 1}</span></td>
                           <td>
                             <div className="rd-candidate-cell">
-                              <div className="rd-avatar">{initials(candidate.candidate_name)}</div>
+                              <CandidateAvatar src={candidate.github_avatar_url} name={candidate.candidate_name} />
                               <div>
                                 <strong>{candidate.candidate_name}</strong>
                                 <span>{candidate.github_login || "GitHub unavailable"}</span>
@@ -652,6 +607,7 @@ export default function CandidateEvaluation() {
                 </div>
               )}
             </section>
+          </div>
         )}
 
         {activeTab === "analytics" && (
@@ -778,7 +734,7 @@ function InsightsPanel({
       ) : (
         <>
           <div className="rd-insight-head">
-            <div className="rd-avatar large">{initials(candidate.candidate_name)}</div>
+            <CandidateAvatar src={candidate.github_avatar_url || insight?.github_avatar_url} name={candidate.candidate_name} large />
             <div>
               <h3>{candidate.candidate_name}</h3>
               <p>{candidate.github_login || "GitHub unavailable"}</p>
@@ -819,6 +775,9 @@ function InsightsPanel({
           <div className="rd-insight-actions">
             <button className="rd-ghost-btn" type="button" onClick={onView}>
               <Eye size={16} /> View Full Analysis
+            </button>
+            <button className="rd-clear-btn" type="button" onClick={onRegenerate} disabled={refreshing || !candidate}>
+              <RefreshCw size={16} className={refreshing ? "rd-spin" : ""} /> Refresh Insight
             </button>
           </div>
         </>
@@ -962,11 +921,9 @@ const dashboardCss = `
 .rd-page {
   min-height: 100vh;
   padding: 28px;
-  color: #f8fafc;
-  background:
-    radial-gradient(circle at 18% 0%, rgba(139, 92, 246, .18), transparent 32%),
-    radial-gradient(circle at 82% 12%, rgba(52, 211, 153, .08), transparent 26%),
-    linear-gradient(135deg, #020617 0%, #0f172a 46%, #050816 100%);
+  color: var(--sp-text);
+  background: var(--sp-bg-gradient);
+  font-family: var(--font-body);
 }
 .rd-header, .rd-actions, .rd-panel-title, .rd-candidate-cell, .rd-repo-cell a, .rd-insight-head, .rd-insight-actions, .rd-risk-legend, .rd-risk-pill, .rd-eyebrow, .rd-badge, .rd-clear-btn, .rd-ghost-btn, .rd-primary-btn, .rd-input-icon, .rd-kpi small {
   display: flex;
@@ -979,14 +936,15 @@ const dashboardCss = `
 }
 .rd-header h1 {
   margin: 0;
-  font-family: "Syne", system-ui, sans-serif;
+  font-family: var(--font-heading);
   font-size: clamp(28px, 4vw, 42px);
+  font-weight: 700;
   line-height: 1.05;
-  letter-spacing: 0;
+  letter-spacing: -0.02em;
 }
 .rd-header p {
   margin: 8px 0 0;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 14px;
 }
 .rd-actions {
@@ -995,28 +953,28 @@ const dashboardCss = `
   justify-content: flex-end;
 }
 .rd-ghost-btn, .rd-primary-btn, .rd-clear-btn, .rd-icon-btn {
-  border: 1px solid rgba(148, 163, 184, .18);
+  border: 1px solid var(--sp-border);
   border-radius: 8px;
   cursor: pointer;
-  font-weight: 800;
+  font-weight: 700;
   transition: transform .16s ease, border-color .16s ease, background .16s ease;
 }
 .rd-ghost-btn, .rd-primary-btn, .rd-clear-btn {
   gap: 8px;
   min-height: 38px;
   padding: 9px 13px;
-  color: #f8fafc;
+  color: var(--sp-text);
 }
 .rd-ghost-btn {
-  background: rgba(15, 23, 42, .72);
+  background: var(--sp-surface);
 }
 .rd-primary-btn {
   background: linear-gradient(135deg, #8b5cf6, #a855f7);
   border-color: rgba(168, 85, 247, .55);
 }
 .rd-clear-btn {
-  background: rgba(148, 163, 184, .08);
-  color: #cbd5e1;
+  background: var(--sp-surface-strong);
+  color: var(--sp-text-secondary);
 }
 .rd-ghost-btn:hover, .rd-primary-btn:hover, .rd-clear-btn:hover, .rd-icon-btn:hover {
   transform: translateY(-1px);
@@ -1033,9 +991,9 @@ const dashboardCss = `
   margin-bottom: 14px;
 }
 .rd-kpi, .rd-panel {
-  background: rgba(15, 23, 42, .78);
-  border: 1px solid rgba(148, 163, 184, .18);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, .24);
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
+  box-shadow: var(--sp-shadow);
   backdrop-filter: blur(18px);
 }
 .rd-kpi {
@@ -1070,10 +1028,11 @@ const dashboardCss = `
 .rd-kpi-icon.red { background: rgba(248,113,113,.15); color: #f87171; }
 .rd-kpi span {
   display: block;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: .04em;
 }
 .rd-kpi strong {
   display: block;
@@ -1084,7 +1043,7 @@ const dashboardCss = `
 .rd-kpi small {
   gap: 4px;
   margin-top: 10px;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 12px;
 }
 .rd-panel {
@@ -1099,15 +1058,17 @@ const dashboardCss = `
 .rd-panel-title h2 {
   margin: 5px 0 0;
   font-size: 17px;
+  font-weight: 700;
   line-height: 1.2;
-  letter-spacing: 0;
+  letter-spacing: -0.02em;
 }
 .rd-eyebrow {
   gap: 7px;
   color: #a78bfa;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: .04em;
 }
 .rd-filters {
   margin-bottom: 14px;
@@ -1123,17 +1084,17 @@ const dashboardCss = `
   gap: 7px;
 }
 .rd-field > span {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
 }
 .rd-field input, .rd-field select {
   width: 100%;
   min-height: 38px;
-  border: 1px solid rgba(148, 163, 184, .2);
+  border: 1px solid var(--sp-border);
   border-radius: 8px;
-  background: rgba(2, 6, 23, .5);
-  color: #f8fafc;
+  background: var(--sp-input-bg);
+  color: var(--sp-text);
   padding: 9px 10px;
   outline: none;
 }
@@ -1142,11 +1103,11 @@ const dashboardCss = `
 }
 .rd-input-icon {
   gap: 8px;
-  border: 1px solid rgba(148, 163, 184, .2);
+  border: 1px solid var(--sp-border);
   border-radius: 8px;
-  background: rgba(2, 6, 23, .5);
+  background: var(--sp-input-bg);
   padding-left: 10px;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
 }
 .rd-input-icon input {
   border: 0;
@@ -1159,9 +1120,7 @@ const dashboardCss = `
   gap: 8px;
 }
 .rd-main-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(330px, .9fr);
-  gap: 14px;
+  display: block;
 }
 .rd-table-panel {
   min-width: 0;
@@ -1177,33 +1136,34 @@ const dashboardCss = `
 }
 .rd-table th {
   padding: 0 12px 8px;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 11px;
   text-align: left;
   text-transform: uppercase;
+  letter-spacing: .04em;
   white-space: nowrap;
 }
 .rd-table td {
   padding: 11px 12px;
-  background: rgba(2, 6, 23, .36);
-  border-top: 1px solid rgba(148, 163, 184, .1);
-  border-bottom: 1px solid rgba(148, 163, 184, .1);
-  color: #dbeafe;
+  background: var(--sp-surface-strong);
+  border-top: 1px solid var(--sp-border-soft);
+  border-bottom: 1px solid var(--sp-border-soft);
+  color: var(--sp-text-secondary);
   font-size: 13px;
 }
 .rd-table tr td:first-child {
-  border-left: 1px solid rgba(148, 163, 184, .1);
+  border-left: 1px solid var(--sp-border-soft);
   border-radius: 8px 0 0 8px;
 }
 .rd-table tr td:last-child {
-  border-right: 1px solid rgba(148, 163, 184, .1);
+  border-right: 1px solid var(--sp-border-soft);
   border-radius: 0 8px 8px 0;
 }
 .rd-table tbody tr {
   cursor: pointer;
 }
 .rd-table tr.selected td {
-  background: rgba(139, 92, 246, .15);
+  background: var(--sp-surface-hover);
   border-color: rgba(168, 85, 247, .4);
 }
 .rd-rank {
@@ -1212,9 +1172,9 @@ const dashboardCss = `
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: rgba(148, 163, 184, .12);
-  color: #cbd5e1;
-  font-weight: 900;
+  background: var(--sp-surface-hover);
+  color: var(--sp-text-secondary);
+  font-weight: 700;
 }
 .rd-candidate-cell {
   gap: 10px;
@@ -1227,21 +1187,39 @@ const dashboardCss = `
   flex: 0 0 auto;
   border-radius: 50%;
   background: linear-gradient(135deg, #8b5cf6, #ec4899);
+  border: 2px solid rgba(139,92,246,.72);
   color: white;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 0 0 2px rgba(139,92,246,.12);
 }
 .rd-avatar.large {
-  width: 52px;
-  height: 52px;
+  width: 72px;
+  height: 72px;
   font-size: 16px;
+}
+.rd-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.rd-avatar > span {
+  position: relative;
+  z-index: 1;
+}
+.rd-avatar img + span {
+  opacity: 0;
 }
 .rd-candidate-cell strong, .rd-repo-cell strong {
   display: block;
-  color: #f8fafc;
+  color: var(--sp-text);
 }
 .rd-candidate-cell span, .rd-repo-cell a {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 12px;
   text-decoration: none;
 }
@@ -1251,13 +1229,13 @@ const dashboardCss = `
   color: #a78bfa;
 }
 .rd-score {
-  font-weight: 900;
+  font-weight: 700;
 }
 .rd-score-green { color: #34d399; }
 .rd-score-yellow { color: #fbbf24; }
 .rd-score-orange { color: #fb923c; }
 .rd-score-red { color: #f87171; }
-.rd-score-muted { color: #94a3b8; }
+.rd-score-muted { color: var(--sp-text-muted); }
 .rd-score-purple { color: #c4b5fd; }
 .rd-badge {
   display: inline-flex;
@@ -1267,11 +1245,11 @@ const dashboardCss = `
   min-height: 24px;
   padding: 4px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, .16);
-  background: rgba(148, 163, 184, .08);
-  color: #cbd5e1;
+  border: 1px solid var(--sp-border-soft);
+  background: var(--sp-surface-strong);
+  color: var(--sp-text-secondary);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 700;
   white-space: nowrap;
 }
 .rd-badge.green, .rd-badge.low { color: #34d399; background: rgba(52,211,153,.12); border-color: rgba(52,211,153,.28); }
@@ -1301,10 +1279,13 @@ const dashboardCss = `
 .rd-insight-head h3 {
   margin: 0;
   font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--sp-text);
 }
 .rd-insight-head p {
   margin: 2px 0 7px;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 13px;
 }
 .rd-task-chip {
@@ -1336,7 +1317,7 @@ const dashboardCss = `
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: #0f172a;
+  background: var(--sp-surface);
   text-align: center;
 }
 .rd-score-ring strong {
@@ -1344,12 +1325,12 @@ const dashboardCss = `
   font-size: 24px;
 }
 .rd-score-ring span {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 700;
 }
 .rd-insight-body > p {
-  color: #dbeafe;
+  color: var(--sp-text-secondary);
   line-height: 1.65;
   margin: 0 0 14px;
 }
@@ -1357,10 +1338,11 @@ const dashboardCss = `
   margin-top: 14px;
 }
 .rd-insight-list > span, .rd-reason > span {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: .04em;
 }
 .rd-insight-list ul {
   margin: 8px 0 0;
@@ -1371,7 +1353,7 @@ const dashboardCss = `
   display: flex;
   gap: 8px;
   margin-bottom: 7px;
-  color: #e2e8f0;
+  color: var(--sp-text-secondary);
   font-size: 13px;
 }
 .rd-insight-list li span, .risk-dot {
@@ -1389,12 +1371,12 @@ const dashboardCss = `
   margin-top: 14px;
   padding: 12px;
   border-radius: 8px;
-  background: rgba(2, 6, 23, .34);
-  border: 1px solid rgba(148, 163, 184, .12);
+  background: var(--sp-surface-strong);
+  border: 1px solid var(--sp-border-soft);
 }
 .rd-reason p {
   margin: 6px 0 0;
-  color: #e2e8f0;
+  color: var(--sp-text-secondary);
   font-size: 13px;
 }
 .rd-insight-actions {
@@ -1417,7 +1399,7 @@ const dashboardCss = `
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 12px;
 }
 .rd-heatmap {
@@ -1432,23 +1414,24 @@ const dashboardCss = `
   min-width: 760px;
 }
 .rd-heatmap-head {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: .04em;
   padding: 0 6px 8px;
 }
 .rd-heatmap-row {
   padding: 10px 6px;
-  border-top: 1px solid rgba(148, 163, 184, .1);
+  border-top: 1px solid var(--sp-border-soft);
 }
 .rd-heatmap-row strong {
-  color: #f8fafc;
+  color: var(--sp-text);
   font-size: 13px;
 }
 .rd-risk-pill {
   gap: 6px;
-  color: #cbd5e1;
+  color: var(--sp-text-secondary);
   font-size: 12px;
 }
 .rd-analytics {
@@ -1470,7 +1453,7 @@ const dashboardCss = `
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: #0f172a;
+  background: var(--sp-surface);
   text-align: center;
 }
 .rd-donut strong {
@@ -1478,7 +1461,7 @@ const dashboardCss = `
   font-size: 24px;
 }
 .rd-donut span {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 11px;
 }
 .rd-bars {
@@ -1493,11 +1476,11 @@ const dashboardCss = `
 }
 .rd-bar-row strong {
   display: block;
-  color: #f8fafc;
+  color: var(--sp-text);
   font-size: 13px;
 }
 .rd-bar-row span {
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 11px;
 }
 .rd-bar-track {
@@ -1516,7 +1499,7 @@ const dashboardCss = `
 .rd-bar-track i.yellow { background: #fbbf24; }
 .rd-bar-track i.red { background: #f87171; }
 .rd-bar-row b {
-  color: #f8fafc;
+  color: var(--sp-text);
   font-size: 13px;
   text-align: right;
 }
@@ -1525,7 +1508,7 @@ const dashboardCss = `
   display: grid;
   place-items: center;
   gap: 10px;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   text-align: center;
 }
 .rd-empty.compact {
@@ -1545,7 +1528,7 @@ const dashboardCss = `
 }
 .rd-skeleton {
   border-radius: 8px;
-  background: linear-gradient(90deg, rgba(148,163,184,.1), rgba(148,163,184,.18), rgba(148,163,184,.1));
+  background: linear-gradient(90deg, var(--sp-surface-strong), var(--sp-surface-hover), var(--sp-surface-strong));
   background-size: 220% 100%;
   animation: rdShimmer 1.25s linear infinite;
 }
@@ -1599,10 +1582,10 @@ const dashboardCss = `
   padding: 12px 15px;
   border-radius: 8px;
   border: 1px solid rgba(52, 211, 153, .35);
-  background: rgba(15, 23, 42, .94);
+  background: var(--sp-surface);
   color: #34d399;
-  box-shadow: 0 16px 50px rgba(0,0,0,.32);
-  font-weight: 800;
+  box-shadow: var(--sp-shadow);
+  font-weight: 700;
   font-size: 13px;
 }
 .rd-toast.error {
@@ -1618,8 +1601,8 @@ const dashboardCss = `
   gap: 4px;
   margin-bottom: 14px;
   padding: 4px;
-  background: rgba(15, 23, 42, .72);
-  border: 1px solid rgba(148, 163, 184, .14);
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
   border-radius: 10px;
   width: fit-content;
 }
@@ -1631,20 +1614,35 @@ const dashboardCss = `
   border-radius: 7px;
   border: 1px solid transparent;
   background: transparent;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
   transition: color .18s ease, background .18s ease, border-color .18s ease;
 }
 .rd-tab-btn:hover {
-  color: #e2e8f0;
-  background: rgba(148, 163, 184, .08);
+  color: var(--sp-text-secondary);
+  background: var(--sp-surface-hover);
 }
 .rd-tab-btn.active {
   background: linear-gradient(135deg, rgba(139,92,246,.28), rgba(168,85,247,.18));
   border-color: rgba(168, 85, 247, .45);
   color: #c4b5fd;
+}
+:root[data-theme="light"] .rd-avatar.large,
+:root[data-theme="light"] .rd-avatar {
+  box-shadow: 0 0 0 2px rgba(139,92,246,.15), 0 10px 24px rgba(15,23,42,.08);
+}
+:root[data-theme="light"] .rd-ghost-btn,
+:root[data-theme="light"] .rd-clear-btn,
+:root[data-theme="light"] .rd-field input,
+:root[data-theme="light"] .rd-field select,
+:root[data-theme="light"] .rd-input-icon {
+  background: var(--sp-input-bg);
+}
+:root[data-theme="light"] .rd-toast {
+  background: rgba(255,255,255,.96);
+  box-shadow: var(--sp-shadow);
 }
 @keyframes rdShimmer {
   to { background-position: -220% 0; }

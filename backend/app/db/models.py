@@ -151,6 +151,7 @@ class RecruiterCandidate(Base):
     task_id = Column(Integer, ForeignKey("recruiter_tasks.id"), nullable=True, index=True)
     candidate_name = Column(String, nullable=False)
     github_login = Column(String, nullable=True)
+    github_avatar_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     analysis_run = relationship("AnalysisRun", back_populates="recruiter_candidate")

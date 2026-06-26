@@ -99,6 +99,7 @@ class RepoRequest(BaseModel):
 class RecruiterCandidateRow(BaseModel):
     candidate_name: str
     github_login: str
+    github_avatar_url: str | None = None
     repo_name: str | None = None
     repo_url: str | None = None
     task_id: int | None = None
@@ -142,6 +143,7 @@ class RecruiterTaskResponse(BaseModel):
 class RecruiterCandidateDashboardRow(BaseModel):
     candidate_name: str
     github_login: str
+    github_avatar_url: str | None = None
     repo_name: str
     repo_url: str | None = None
     task_id: int | None = None
@@ -196,6 +198,7 @@ class RiskHeatmapRow(BaseModel):
 class RecruiterCandidateInsightResponse(BaseModel):
     candidate_name: str
     github_login: str
+    github_avatar_url: str | None = None
     run_id: int
     repo_name: str
     task_title: str | None = None
@@ -449,6 +452,57 @@ def _security_status(score: float | None) -> str:
     return "🔴 Critical Risk"
 
 
+def _security_status_label(score: float | None) -> str:
+    if score is None:
+        return "Unavailable"
+    if score >= 95:
+        return "Excellent"
+    if score >= 80:
+        return "Good"
+    if score >= 60:
+        return "Moderate Risk"
+    if score >= 40:
+        return "High Risk"
+    return "Critical Risk"
+
+
+def _security_risk_level_from_score(score: float | int | None) -> str:
+    numeric = _safe_number(score)
+    if numeric is None:
+        return "Unavailable"
+    if numeric >= 90:
+        return "Low"
+    if numeric >= 70:
+        return "Medium"
+    if numeric >= 50:
+        return "High"
+    return "Critical"
+
+
+def _security_breakdown_for_run(db: Session, run_id: int, security_score: object | None) -> dict:
+    findings = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run_id).all()
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for finding in findings:
+        severity = str(finding.severity or "").upper()
+        if severity in {"CRITICAL", "BLOCKER"}:
+            counts["critical"] += 1
+        elif severity in {"HIGH", "MAJOR"}:
+            counts["high"] += 1
+        elif severity == "MEDIUM":
+            counts["medium"] += 1
+        else:
+            counts["low"] += 1
+
+    rounded_score = _round_metric(security_score)
+    return {
+        "score": rounded_score,
+        "status": _security_status_label(float(rounded_score) if rounded_score is not None else None),
+        "risk_level": _security_risk_level_from_score(rounded_score),
+        "findings_count": len(findings),
+        "breakdown": counts,
+    }
+
+
 def _numeric_measure_map(measures: object) -> dict:
     if not isinstance(measures, dict):
         return {}
@@ -550,6 +604,7 @@ def build_candidate_dashboard_row(
     return {
         "candidate_name": candidate.candidate_name,
         "github_login": candidate.github_login or "",
+        "github_avatar_url": candidate.github_avatar_url,
         "repo_name": repo.name or repo.full_name or "",
         "repo_url": repo.url,
         "task_id": candidate.task_id,
@@ -718,6 +773,7 @@ def _summary_candidate_from_row(row: dict, cached: dict | None = None) -> dict:
     return {
         "candidate_name": row["candidate_name"],
         "github_login": row.get("github_login") or "",
+        "github_avatar_url": row.get("github_avatar_url"),
         "run_id": row["run_id"],
         "repo_name": row["repo_name"],
         "task_title": row.get("task_title"),
@@ -2891,7 +2947,11 @@ async def get_analysis_result(
         SkillScore.analysis_run_id == run.id,
         SkillScore.user_id == current_user.id,
     ).first()
-    findings_count = db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id == run.id).count()
+    candidate = (
+        db.query(RecruiterCandidate)
+        .filter(RecruiterCandidate.analysis_run_id == run.id)
+        .first()
+    )
     ai_insights = run.ai_insights or {}
     if isinstance(ai_insights, dict):
         ai_insights = dict(ai_insights)
@@ -2904,11 +2964,19 @@ async def get_analysis_result(
         sonar_health_score=sonar_summary["sonar_health_score"],
         security_score=getattr(score_row, "security_awareness_score", None),
     )
+    security_assessment = _security_breakdown_for_run(
+        db,
+        run.id,
+        getattr(score_row, "security_awareness_score", None),
+    )
     return {
         "analysis_run_id": run.id,
         "repo": run.repository.full_name,
         "branch": run.branch,
         "status": run.status,
+        "candidate_name": candidate.candidate_name if candidate else None,
+        "github_login": candidate.github_login if candidate else None,
+        "github_avatar_url": candidate.github_avatar_url if candidate else None,
         **skill_fields,
         "sonar_health_score": sonar_summary["sonar_health_score"],
         "sonar_state": sonar_summary["sonar_state"],
@@ -2922,7 +2990,8 @@ async def get_analysis_result(
         "maintainability_rating": sonar_summary["maintainability_rating"],
         "technical_debt_minutes": sonar_summary["technical_debt_minutes"],
         "lines_of_code": sonar_summary["lines_of_code"],
-        "security_findings_count": findings_count,
+        "security_findings_count": security_assessment["findings_count"],
+        "security_assessment": security_assessment,
         "ai_insights": ai_insights,
         "completed_at": run.completed_at
     }

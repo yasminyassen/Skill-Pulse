@@ -163,7 +163,7 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
       display: "flex",
       minHeight: "100vh",
       background: "var(--bg-base)",
-      fontFamily: "'DM Sans', system-ui, sans-serif",
+      fontFamily: "var(--font-body)",
       transition: "background 0.3s ease",
     }}>
 
@@ -204,7 +204,7 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
                   }} />
                 ))}
               </div>
-              <span style={{ fontFamily: "'Syne', sans-serif", fontSize: "16px", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.3px", whiteSpace: "nowrap" }}>
+              <span style={{ fontFamily: "var(--font-heading)", fontSize: "16px", fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.02em", whiteSpace: "nowrap" }}>
                 <span style={{ color: accentColor }}>Skill</span>Pulse
               </span>
             </div>
@@ -348,9 +348,5 @@ function DashboardLayoutInner({ children }: DashboardLayoutProps) {
 // ─── Export with provider ──────────────────────────────────────────────────
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
-  return (
-    <ThemeProvider>
-      <DashboardLayoutInner>{children}</DashboardLayoutInner>
-    </ThemeProvider>
-  );
+  return <DashboardLayoutInner>{children}</DashboardLayoutInner>;
 }

@@ -240,7 +240,7 @@ function Metric({ label, value, color = "var(--text-primary)", helper }: { label
   return (
     <div className="rec-metric-card">
       <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px", fontWeight: 800 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 900, color, marginTop: 5, fontFamily: "'Syne',sans-serif" }}>{value}</div>
+      <div style={{ fontSize: 28, fontWeight: 900, color, marginTop: 5, fontFamily: "'Inter',sans-serif" }}>{value}</div>
       {helper && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{helper}</div>}
     </div>
   );
@@ -501,7 +501,7 @@ export default function RecruiterDashboard() {
   );
 
   const sectionTitle = (text: string) => (
-    <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: 18, fontWeight: 800, color: "var(--text-primary)", margin: "0 0 16px" }}>
+    <h2 style={{ fontFamily: "'Inter',sans-serif", fontSize: 18, fontWeight: 800, color: "var(--text-primary)", margin: "0 0 16px" }}>
       {text}
     </h2>
   );
@@ -509,12 +509,12 @@ export default function RecruiterDashboard() {
   return (
     <DashboardLayout>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
-        input { outline: none; font-family: 'DM Sans', sans-serif; color: var(--text-primary); }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        input { outline: none; font-family: 'Inter', sans-serif; color: var(--text-primary); }
         input::placeholder { color: var(--text-faint); }
         .rec-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 24px 28px; }
         .rec-label { font-size: 12px; letter-spacing: 0.6px; text-transform: uppercase; color: rgba(167,139,250,0.8); font-weight: 700; display: block; margin-bottom: 10px; }
-        .rec-input { background: var(--bg-input); border: 1px solid var(--border-input); color: var(--text-primary); border-radius: 10px; padding: 10px 12px; font-size: 13px; transition: border-color 0.2s; font-family: 'DM Sans', sans-serif; }
+        .rec-input { background: var(--bg-input); border: 1px solid var(--border-input); color: var(--text-primary); border-radius: 10px; padding: 10px 12px; font-size: 13px; transition: border-color 0.2s; font-family: 'Inter', sans-serif; }
         .rec-input:focus { border-color: rgba(99,102,241,0.5); outline: none; }
         .rec-row-card { padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-card-hover); margin-bottom: 10px; transition: border-color 0.15s; }
         .rec-row-card:hover { border-color: var(--border-hover); }
@@ -533,13 +533,13 @@ export default function RecruiterDashboard() {
         .rec-table td { padding: 11px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
       `}</style>
 
-      <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'DM Sans', sans-serif", background: "var(--bg-gradient)" }}>
+      <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'Inter', sans-serif", background: "var(--bg-gradient)" }}>
         <div style={{ maxWidth: 1160, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
           <div>
             <div className="rec-label" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 14px", borderRadius: 999, border: "1px solid rgba(99,102,241,0.4)", background: "rgba(99,102,241,0.12)", width: "fit-content", marginBottom: 10 }}>
               Recruiter Bulk Analysis
             </div>
-            <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 28, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: "0 0 4px" }}>
+            <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 28, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.5px", margin: "0 0 4px" }}>
               Analyze candidate submissions at scale
             </h1>
             <p style={{ fontSize: 13.5, color: "var(--text-muted)", margin: 0, lineHeight: 1.6 }}>

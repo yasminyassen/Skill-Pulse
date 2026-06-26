@@ -11,6 +11,22 @@ interface AnalysisResult {
   repo?: string;
   branch?: string;
   status: string;
+  candidate_name?: string | null;
+  github_login?: string | null;
+  github_avatar_url?: string | null;
+  security_score?: number | null;
+  security_assessment?: {
+    score: number | null;
+    status: string;
+    risk_level: string;
+    findings_count: number;
+    breakdown?: {
+      critical?: number;
+      high?: number;
+      medium?: number;
+      low?: number;
+    };
+  };
   completed_at?: string | null;
   error_reason?: string;
   message?: string;
@@ -50,6 +66,7 @@ type InsightSrc = "llm" | "fallback" | "summary";
 interface CandidateInsight {
   candidate_name: string;
   github_login?: string | null;
+  github_avatar_url?: string | null;
   run_id: number;
   repo_name?: string | null;
   task_title?: string | null;
@@ -86,6 +103,27 @@ const fmtDate = (v: string | null | undefined) => { if (!v) return "n/a"; return
 const getInitials = (name: string) => name.split(/\s+/).filter(Boolean).map(p => p[0]).join("").toUpperCase().slice(0, 2) || "?";
 const scoreTone = (s: number | null) => s === null ? "#94a3b8" : s >= 80 ? "#34d399" : s >= 60 ? "#fbbf24" : "#f87171";
 
+function CandidateAvatar({ src, name, size = 72 }: { src?: string | null; name: string; size?: number }) {
+  return src ? (
+    <>
+      <img
+        className="sp-candidate-avatar"
+        src={src}
+        alt={`${name} GitHub avatar`}
+        style={{ width: size, height: size }}
+        onError={(event) => {
+          event.currentTarget.style.display = "none";
+          const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
+          if (fallback) fallback.style.display = "flex";
+        }}
+      />
+      <div className="sp-candidate-avatar placeholder" style={{ width: size, height: size, display: "none" }}>{getInitials(name)}</div>
+    </>
+  ) : (
+    <div className="sp-candidate-avatar placeholder" style={{ width: size, height: size }}>{getInitials(name)}</div>
+  );
+}
+
 // ─── SVG Icons ────────────────────────────────────────────────────────────────
 
 const I = {
@@ -111,7 +149,7 @@ const I = {
 
 function Eyebrow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: ".7px", color: "#a78bfa" }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", color: "#a78bfa" }}>
       <span style={{ color: "#a78bfa", display: "inline-flex" }}>{icon}</span>
       {children}
     </span>
@@ -181,11 +219,14 @@ function IssuesExplorer({ issues }: { issues: SonarIssue[] }) {
 
 // ─── AI Insights panel ────────────────────────────────────────────────────────
 
-function AiInsightsContent({ insight, loading, error, skillScore, candidateName }: {
-  insight: CandidateInsight | null; loading: boolean; error: string; skillScore: number | null; candidateName: string;
+function AiInsightsContent({ insight, loading, error, skillScore, candidateName, githubLogin, candidateAvatarUrl }: {
+  insight: CandidateInsight | null; loading: boolean; error: string; skillScore: number | null; candidateName: string; githubLogin?: string | null; candidateAvatarUrl?: string | null;
 }) {
   const score = insight?.skill_score ?? skillScore ?? null;
   const deg = Math.max(0, Math.min(100, score ?? 0)) * 3.6;
+  const displayName = insight?.candidate_name || candidateName;
+  const displayLogin = insight?.github_login || githubLogin;
+  const avatarUrl = insight?.github_avatar_url || candidateAvatarUrl;
 
   if (loading) return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -195,8 +236,21 @@ function AiInsightsContent({ insight, loading, error, skillScore, candidateName 
     </div>
   );
 
-  if (error && !insight) return <p style={{ color: "#f87171", fontSize: 13, margin: 0 }}>{error}</p>;
-  if (!insight) return <p style={{ color: "rgba(148,163,184,.7)", fontSize: 13, margin: 0 }}>No AI insight available for this candidate.</p>;
+  if (error && !insight) return (
+    <div className="ai-layout">
+      <div className="ai-left">
+        <div className="ai-identity">
+          <div className="ai-avatar-wrap"><CandidateAvatar src={avatarUrl} name={displayName} size={72} /></div>
+          <div>
+            <div className="ai-name">{displayName}</div>
+            {displayLogin && <div className="ai-github">@{displayLogin}</div>}
+          </div>
+        </div>
+      </div>
+      <p style={{ color: "#f87171", fontSize: 13, margin: 0 }}>{error}</p>
+    </div>
+  );
+  if (!insight) return <p style={{ color: "var(--sp-text-muted)", fontSize: 13, margin: 0 }}>No AI insight available for this candidate.</p>;
 
   return (
     <div className="ai-layout">
@@ -204,11 +258,11 @@ function AiInsightsContent({ insight, loading, error, skillScore, candidateName 
       <div className="ai-left">
         <div className="ai-identity">
           <div className="ai-avatar-wrap">
-            <div className="ai-avatar">{getInitials(insight.candidate_name || candidateName)}</div>
+            <CandidateAvatar src={avatarUrl} name={displayName} size={72} />
           </div>
           <div>
-            <div className="ai-name">{insight.candidate_name || candidateName}</div>
-            {insight.github_login && <div className="ai-github">@{insight.github_login}</div>}
+            <div className="ai-name">{displayName}</div>
+            {displayLogin && <div className="ai-github">@{displayLogin}</div>}
             {insight.task_title && <span className="ai-task-chip">{insight.task_title}</span>}
           </div>
         </div>
@@ -273,8 +327,6 @@ function AiInsightsContent({ insight, loading, error, skillScore, candidateName 
 export default function AnalysisDetail() {
   const { analysisId } = useParams<{ analysisId: string }>();
   const navigate = useNavigate();
-  const role = localStorage.getItem("role") || "developer";
-  const dashboardPath = `/dashboard/${role}/analysis`;
 
   const [result, setResult]             = useState<AnalysisResult | null>(null);
   const [sonar, setSonar]               = useState<SonarDashboard | null>(null);
@@ -342,6 +394,10 @@ export default function AnalysisDetail() {
   const branch        = sonar?.repository.branch ?? result?.branch ?? "main";
   const skillScore    = sonar?.overall.skill_score ?? null;
   const skillLevel    = sonar?.overall.skill_score_level ?? "—";
+  const candidateName = insight?.candidate_name || result?.candidate_name || sonar?.repository.name || repoName;
+  const githubLogin = insight?.github_login || result?.github_login;
+  const candidateAvatarUrl = insight?.github_avatar_url || result?.github_avatar_url;
+  const security = result?.security_assessment;
 
   return (
     <DashboardLayout>
@@ -350,7 +406,7 @@ export default function AnalysisDetail() {
 
         {/* ── Top nav bar ── */}
         <div className="ad-topbar">
-          <button className="ad-back-btn" onClick={() => navigate(dashboardPath)} title="Back to dashboard">
+          <button className="ad-back-btn" onClick={() => navigate("/dashboard/recruiter/candidates")} title="Back to candidate evaluation">
             {I.back}
           </button>
           <div className="ad-topbar-info">
@@ -427,13 +483,34 @@ export default function AnalysisDetail() {
               </div>
             </div>
 
-            {/* AI Insights */}
-            <SectionCard title="Selected Candidate" eyebrow="AI Candidate Insights" icon={I.brain} delay={40}>
-              <AiInsightsContent insight={insight} loading={insightLoading} error={insightError} skillScore={skillScore} candidateName={sonar.repository.name} />
+            {/* Candidate Information */}
+            <SectionCard title="Candidate Information" eyebrow="AI Candidate Insights" icon={I.brain} delay={40}>
+              <AiInsightsContent
+                insight={insight}
+                loading={insightLoading}
+                error={insightError}
+                skillScore={skillScore}
+                candidateName={candidateName}
+                githubLogin={githubLogin}
+                candidateAvatarUrl={candidateAvatarUrl}
+              />
+            </SectionCard>
+
+            {/* Security Assessment */}
+            <SectionCard title="Security Assessment" eyebrow="Repository security" icon={I.shield} delay={80}>
+              <MetricGrid items={[
+                { label: "Security Score", value: security?.score !== null && security?.score !== undefined ? fmtPct(security.score) : "n/a", tone: scoreTone(security?.score ?? null) },
+                { label: "Security Status", value: security?.status || "Unavailable" },
+                { label: "Risk Level", value: security?.risk_level || "Unavailable", tone: (security?.risk_level || "").toLowerCase() === "critical" ? "#f87171" : (security?.risk_level || "").toLowerCase() === "high" ? "#fb923c" : (security?.risk_level || "").toLowerCase() === "medium" ? "#fbbf24" : "#34d399" },
+                { label: "Critical Findings", value: fmtNum(security?.breakdown?.critical ?? 0), tone: (security?.breakdown?.critical ?? 0) > 0 ? "#f87171" : "#34d399" },
+                { label: "High Findings", value: fmtNum(security?.breakdown?.high ?? 0), tone: (security?.breakdown?.high ?? 0) > 0 ? "#fb923c" : "#34d399" },
+                { label: "Medium Findings", value: fmtNum(security?.breakdown?.medium ?? 0), tone: (security?.breakdown?.medium ?? 0) > 0 ? "#fbbf24" : "#34d399" },
+                { label: "Low Findings", value: fmtNum(security?.breakdown?.low ?? 0) },
+              ]} />
             </SectionCard>
 
             {/* Skill Score */}
-            <SectionCard title="Skill Score Engine" eyebrow="Overall performance" icon={I.gauge} delay={80}>
+            <SectionCard title="Skill Score Engine" eyebrow="Overall performance" icon={I.gauge} delay={120}>
               <MetricGrid items={[
                 { label: "Overall Score", value: skillScore ?? "n/a", tone: scoreTone(skillScore) },
                 { label: "Score Level", value: skillLevel },
@@ -513,7 +590,7 @@ export default function AnalysisDetail() {
 // ─── CSS ──────────────────────────────────────────────────────────────────────
 
 const PAGE_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 @keyframes fadeUp  { from { opacity:0; transform:translateY(16px) } to { opacity:1; transform:translateY(0) } }
 @keyframes rdSpin  { to { transform:rotate(360deg) } }
@@ -527,12 +604,9 @@ const PAGE_CSS = `
   min-height: 100vh;
   width: 100%;
   padding: 28px 32px 64px;
-  font-family: 'DM Sans', sans-serif;
-  color: #f8fafc;
-  background:
-    radial-gradient(circle at 14% 0%, rgba(139,92,246,.2), transparent 34%),
-    radial-gradient(circle at 88% 10%, rgba(52,211,153,.07), transparent 28%),
-    linear-gradient(135deg, #020617 0%, #0f172a 46%, #050816 100%);
+  font-family: var(--font-body);
+  color: var(--sp-text);
+  background: var(--sp-bg-gradient);
   box-sizing: border-box;
 }
 
@@ -552,41 +626,43 @@ const PAGE_CSS = `
 .ad-back-btn {
   width: 38px; height: 38px;
   border-radius: 8px;
-  border: 1px solid rgba(148,163,184,.18);
-  background: rgba(15,23,42,.78);
+  border: 1px solid var(--sp-border);
+  background: var(--sp-surface);
   backdrop-filter: blur(12px);
   display: flex; align-items: center; justify-content: center;
-  color: #94a3b8;
+  color: var(--sp-text-muted);
   cursor: pointer;
   flex-shrink: 0;
   transition: all .15s;
 }
-.ad-back-btn:hover { background: rgba(139,92,246,.15); border-color: rgba(167,139,250,.4); color:#c4b5fd; }
+.ad-back-btn:hover { background: var(--sp-surface-hover); border-color: rgba(167,139,250,.4); color:#8b5cf6; }
 .ad-topbar-title {
-  font-family: 'Syne', sans-serif;
+  font-family: var(--font-heading);
   font-size: clamp(20px,3vw,28px);
-  font-weight: 800;
-  color: #f8fafc;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--sp-text);
   margin: 0;
   line-height: 1.1;
 }
-.ad-topbar-sub { font-size: 12px; color: #64748b; margin: 3px 0 0; }
+.ad-topbar-sub { font-size: 12px; color: var(--sp-text-faint); margin: 3px 0 0; }
 
 /* Cards */
 .ad-card {
   padding: 24px 26px;
   border-radius: 12px;
-  background: rgba(15,23,42,.78);
-  border: 1px solid rgba(148,163,184,.14);
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
   backdrop-filter: blur(18px);
-  box-shadow: 0 18px 60px rgba(0,0,0,.22);
+  box-shadow: var(--sp-shadow);
 }
 .ad-card-header { margin-bottom: 20px; }
 .ad-card-title {
-  font-family: 'Syne', sans-serif;
+  font-family: var(--font-heading);
   font-size: 17px;
-  font-weight: 800;
-  color: #f8fafc;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--sp-text);
   margin: 6px 0 0;
 }
 
@@ -594,10 +670,10 @@ const PAGE_CSS = `
 .ad-hero {
   padding: 26px 28px;
   border-radius: 12px;
-  background: rgba(15,23,42,.78);
-  border: 1px solid rgba(148,163,184,.14);
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
   backdrop-filter: blur(18px);
-  box-shadow: 0 18px 60px rgba(0,0,0,.22);
+  box-shadow: var(--sp-shadow);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -609,31 +685,31 @@ const PAGE_CSS = `
   display: inline-flex; align-items: center;
   padding: 4px 10px; border-radius: 999px;
   background: rgba(139,92,246,.15); border: 1px solid rgba(139,92,246,.3);
-  color: #a78bfa; font-size: 11px; font-weight: 900; text-transform: uppercase;
+  color: #a78bfa; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing:.04em;
 }
-.ad-hero-sub { font-size:11px; color:#64748b; font-weight:800; text-transform:uppercase; letter-spacing:.6px; }
-.ad-hero-title { font-family:'Syne',sans-serif; font-size:22px; font-weight:800; color:#f8fafc; margin:0 0 10px; }
-.ad-hero-meta { display:flex; flex-wrap:wrap; gap:6px 20px; font-size:12px; color:#64748b; }
-.ad-hero-meta strong { color:#94a3b8; }
+.ad-hero-sub { font-size:11px; color:var(--sp-text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.ad-hero-title { font-family:var(--font-heading); font-size:22px; font-weight:700; letter-spacing:-0.02em; color:var(--sp-text); margin:0 0 10px; }
+.ad-hero-meta { display:flex; flex-wrap:wrap; gap:6px 20px; font-size:12px; color:var(--sp-text-faint); }
+.ad-hero-meta strong { color:var(--sp-text-muted); }
 .ad-hero-stats { display:flex; gap:10px; flex-wrap:wrap; }
 .ad-hero-stat {
   display:flex; flex-direction:column; align-items:center;
   padding:14px 18px; border-radius:10px;
-  background:rgba(2,6,23,.5); border:1px solid rgba(148,163,184,.12);
+  background:var(--sp-surface-strong); border:1px solid var(--sp-border-soft);
   min-width:90px; gap:4px;
 }
-.ad-hero-stat-val { font-size:22px; font-weight:700; color:#f8fafc; font-variant-numeric:tabular-nums; }
-.ad-hero-stat-lbl { font-size:10px; color:#64748b; text-transform:uppercase; font-weight:800; }
+.ad-hero-stat-val { font-size:22px; font-weight:700; color:var(--sp-text); font-variant-numeric:tabular-nums; }
+.ad-hero-stat-lbl { font-size:10px; color:var(--sp-text-faint); text-transform:uppercase; font-weight:700; letter-spacing:.04em; }
 
 /* Metric tiles */
 .ad-metric-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:10px; }
 .ad-tile {
   padding:14px 16px; border-radius:8px;
-  background:rgba(2,6,23,.45); border:1px solid rgba(148,163,184,.1);
+  background:var(--sp-surface-strong); border:1px solid var(--sp-border-soft);
   display:flex; flex-direction:column; gap:8px; min-height:76px;
 }
-.ad-tile-label { font-size:10px; color:#64748b; text-transform:uppercase; font-weight:900; letter-spacing:.5px; }
-.ad-tile-value { font-size:20px; font-weight:700; color:#e2e8f0; font-variant-numeric:tabular-nums; }
+.ad-tile-label { font-size:10px; color:var(--sp-text-faint); text-transform:uppercase; font-weight:700; letter-spacing:.04em; }
+.ad-tile-value { font-size:20px; font-weight:700; color:var(--sp-text-secondary); font-variant-numeric:tabular-nums; }
 
 /* AI Insights layout */
 .ai-layout {
@@ -649,16 +725,31 @@ const PAGE_CSS = `
   width:64px; height:64px; border-radius:50%;
   background:linear-gradient(135deg,#7c3aed,#a855f7);
   display:flex; align-items:center; justify-content:center;
-  font-family:'Syne',sans-serif; font-size:18px; font-weight:800; color:#fff;
+  font-family:var(--font-heading); font-size:18px; font-weight:700; color:#fff;
   box-shadow:0 0 0 3px rgba(139,92,246,.25), 0 0 24px rgba(139,92,246,.2);
 }
-.ai-name { font-family:'Syne',sans-serif; font-size:15px; font-weight:800; color:#f8fafc; }
-.ai-github { font-size:12px; color:#64748b; }
+.sp-candidate-avatar {
+  border-radius:50%;
+  object-fit:cover;
+  border:3px solid rgba(139,92,246,.75);
+  box-shadow:0 0 0 3px rgba(139,92,246,.14), 0 12px 30px rgba(139,92,246,.18);
+  flex:0 0 auto;
+}
+.sp-candidate-avatar.placeholder {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg,#7c3aed,#a855f7);
+  color:#fff;
+  font-weight:700;
+}
+.ai-name { font-family:var(--font-heading); font-size:15px; font-weight:700; color:var(--sp-text); letter-spacing:-0.02em; }
+.ai-github { font-size:12px; color:var(--sp-text-faint); }
 .ai-task-chip {
   display:inline-block; margin-top:4px;
   padding:3px 10px; border-radius:999px;
   background:rgba(99,102,241,.14); border:1px solid rgba(99,102,241,.28);
-  color:#818cf8; font-size:11px; font-weight:800;
+  color:#818cf8; font-size:11px; font-weight:700;
 }
 .ai-score-ring {
   width:110px; height:110px; border-radius:50%;
@@ -666,41 +757,41 @@ const PAGE_CSS = `
 }
 .ai-score-inner {
   width:80px; height:80px; border-radius:50%;
-  background:rgba(2,6,23,.9);
+  background:var(--sp-surface);
   display:grid; place-items:center; text-align:center;
 }
-.ai-score-inner strong { display:block; font-size:22px; font-weight:700; color:#f8fafc; font-variant-numeric:tabular-nums; }
-.ai-score-inner span  { font-size:9px; color:#64748b; font-weight:900; text-transform:uppercase; }
+.ai-score-inner strong { display:block; font-size:22px; font-weight:700; color:var(--sp-text); font-variant-numeric:tabular-nums; }
+.ai-score-inner span  { font-size:9px; color:var(--sp-text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
 .ai-badges { display:flex; flex-direction:column; gap:7px; width:100%; }
 .ai-badge {
   display:inline-flex; align-items:center; justify-content:center;
   gap:6px; padding:6px 12px; border-radius:8px;
-  font-size:11px; font-weight:800; border:1px solid; width:100%; box-sizing:border-box;
+  font-size:11px; font-weight:700; border:1px solid; width:100%; box-sizing:border-box;
 }
 
 /* AI right col */
 .ai-right { display:flex; flex-direction:column; gap:16px; }
-.ai-summary { color:#cbd5e1; font-size:14px; line-height:1.75; margin:0; }
+.ai-summary { color:var(--sp-text-secondary); font-size:14px; line-height:1.75; margin:0; }
 .ai-list-block { display:flex; flex-direction:column; gap:9px; }
-.ai-list-label { font-size:10px; color:#64748b; font-weight:900; text-transform:uppercase; letter-spacing:.6px; }
+.ai-list-label { font-size:10px; color:var(--sp-text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
 .ai-list { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
-.ai-list li { display:flex; gap:9px; align-items:flex-start; font-size:13px; color:#e2e8f0; line-height:1.55; }
+.ai-list li { display:flex; gap:9px; align-items:flex-start; font-size:13px; color:var(--sp-text-secondary); line-height:1.55; }
 .ai-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:5px; }
 .ai-reason-box {
   padding:14px 16px; border-radius:8px;
-  background:rgba(2,6,23,.5); border:1px solid rgba(148,163,184,.1);
+  background:var(--sp-surface-strong); border:1px solid var(--sp-border-soft);
   display:flex; flex-direction:column; gap:8px;
 }
-.ai-reason-box p { margin:0; color:#cbd5e1; font-size:13px; line-height:1.65; }
+.ai-reason-box p { margin:0; color:var(--sp-text-secondary); font-size:13px; line-height:1.65; }
 
 /* Table */
-.ad-table-wrap { overflow-x:auto; border-radius:10px; border:1px solid rgba(148,163,184,.1); background:rgba(2,6,23,.3); }
+.ad-table-wrap { overflow-x:auto; border-radius:10px; border:1px solid var(--sp-border-soft); background:var(--sp-surface-strong); }
 .ad-table { width:100%; border-collapse:separate; border-spacing:0; min-width:700px; font-size:13px; }
-.ad-table th { text-align:left; padding:12px 16px; color:#64748b; font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.6px; background:rgba(255,255,255,.025); border-bottom:1px solid rgba(148,163,184,.1); }
-.ad-table td { padding:13px 16px; color:#94a3b8; line-height:1.45; vertical-align:top; border-top:1px solid rgba(148,163,184,.07); }
+.ad-table th { text-align:left; padding:12px 16px; color:var(--sp-text-faint); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:var(--sp-surface-strong); border-bottom:1px solid var(--sp-border-soft); }
+.ad-table td { padding:13px 16px; color:var(--sp-text-muted); line-height:1.45; vertical-align:top; border-top:1px solid var(--sp-border-soft); }
 .ad-table tbody tr:first-child td { border-top:none; }
-.ad-table tbody tr:hover td { background:rgba(139,92,246,.06); color:#e2e8f0; }
-.ad-chip { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; font-size:10px; font-weight:900; white-space:nowrap; border:1px solid; }
+.ad-table tbody tr:hover td { background:var(--sp-surface-hover); color:var(--sp-text-secondary); }
+.ad-chip { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; font-size:10px; font-weight:700; white-space:nowrap; border:1px solid; }
 .chip-bug      { color:#f87171; background:rgba(248,113,113,.1);  border-color:rgba(248,113,113,.22); }
 .chip-smell    { color:#818cf8; background:rgba(99,102,241,.1);   border-color:rgba(99,102,241,.22); }
 .chip-severity { color:#fbbf24; background:rgba(251,191,36,.09);  border-color:rgba(251,191,36,.2); }
@@ -709,7 +800,7 @@ const PAGE_CSS = `
 .ad-empty-state {
   display:flex; flex-direction:column; align-items:center;
   padding:64px 28px; text-align:center;
-  background:rgba(15,23,42,.78); border:1px solid rgba(148,163,184,.12);
+  background:var(--sp-surface); border:1px solid var(--sp-border);
   border-radius:12px; backdrop-filter:blur(18px);
 }
 .ad-empty-icon {
@@ -719,13 +810,13 @@ const PAGE_CSS = `
   color:#a78bfa; margin-bottom:18px;
 }
 .ad-spin-icon { margin-bottom:18px; color:#a78bfa; }
-.ad-empty-title { font-family:'Syne',sans-serif; font-size:20px; font-weight:800; color:#f8fafc; margin:0 0 10px; }
-.ad-empty-detail { font-size:14px; color:#64748b; margin:0; line-height:1.7; max-width:380px; }
+.ad-empty-title { font-family:var(--font-heading); font-size:20px; font-weight:700; letter-spacing:-0.02em; color:var(--sp-text); margin:0 0 10px; }
+.ad-empty-detail { font-size:14px; color:var(--sp-text-faint); margin:0; line-height:1.7; max-width:380px; }
 
 /* Skeleton */
 .ad-skeleton {
   border-radius:8px;
-  background:linear-gradient(90deg,rgba(148,163,184,.07),rgba(148,163,184,.14),rgba(148,163,184,.07));
+  background:linear-gradient(90deg,var(--sp-surface-strong),var(--sp-surface-hover),var(--sp-surface-strong));
   background-size:220% 100%;
   animation:shimmer 1.3s linear infinite;
 }

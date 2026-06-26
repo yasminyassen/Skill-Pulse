@@ -30,6 +30,68 @@ def _foreign_key_names(inspector, table_name: str) -> set[str]:
     return {fk["name"] for fk in inspector.get_foreign_keys(table_name) if fk.get("name")}
 
 
+def _backfill_missing_tasks(bind) -> None:
+    bind.execute(sa.text("""
+        INSERT INTO recruiter_tasks (
+            id,
+            recruiter_id,
+            title,
+            csv_filename,
+            total_candidates,
+            valid_count,
+            skipped_count,
+            status,
+            created_at,
+            updated_at
+        )
+        SELECT
+            grouped.task_id,
+            grouped.recruiter_id,
+            'Recovered Recruiter Batch ' || grouped.task_id,
+            NULL,
+            grouped.total_candidates,
+            grouped.total_candidates,
+            0,
+            'completed',
+            grouped.created_at,
+            grouped.created_at
+        FROM (
+            SELECT
+                rc.task_id,
+                MIN(ar.user_id) AS recruiter_id,
+                COUNT(*) AS total_candidates,
+                COALESCE(MIN(rc.created_at), NOW()) AS created_at
+            FROM recruiter_candidates rc
+            JOIN analysis_runs ar ON ar.id = rc.analysis_run_id
+            JOIN users u ON u.id = ar.user_id
+            WHERE rc.task_id IS NOT NULL
+            GROUP BY rc.task_id
+        ) AS grouped
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM recruiter_tasks rt
+            WHERE rt.id = grouped.task_id
+        )
+    """))
+    bind.execute(sa.text("""
+        UPDATE recruiter_candidates rc
+        SET task_id = NULL
+        WHERE rc.task_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM recruiter_tasks rt
+              WHERE rt.id = rc.task_id
+          )
+    """))
+    bind.execute(sa.text("""
+        SELECT setval(
+            pg_get_serial_sequence('recruiter_tasks', 'id'),
+            GREATEST(COALESCE((SELECT MAX(id) FROM recruiter_tasks), 0), 1),
+            TRUE
+        )
+    """))
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
@@ -60,6 +122,9 @@ def upgrade() -> None:
     if "task_id" not in candidate_columns:
         op.add_column("recruiter_candidates", sa.Column("task_id", sa.Integer(), nullable=True))
         inspector = inspect(bind)
+
+    _backfill_missing_tasks(bind)
+    inspector = inspect(bind)
 
     candidate_foreign_keys = _foreign_key_names(inspector, "recruiter_candidates")
     if "fk_recruiter_candidates_task_id" not in candidate_foreign_keys:

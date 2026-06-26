@@ -29,6 +29,8 @@ async def schedule_recruiter_repo_analysis(
     task_id: int | None = None,
 ) -> dict[str, Any]:
     analysis_version = settings.analysis_version
+    github_avatar_url: str | None = None
+    github_login: str | None = None
 
     try:
         repo_data = await verify_repo_access(token, full_name)
@@ -36,6 +38,7 @@ async def schedule_recruiter_repo_analysis(
         return {
             "scheduled": False,
             "candidate": candidate_name,
+            "github_avatar_url": github_avatar_url,
             "repo_name": repo_name,
             "html_url": repo_url,
             "default_branch": branch,
@@ -46,6 +49,7 @@ async def schedule_recruiter_repo_analysis(
         return {
             "scheduled": False,
             "candidate": candidate_name,
+            "github_avatar_url": github_avatar_url,
             "repo_name": repo_name,
             "html_url": repo_url,
             "default_branch": branch,
@@ -53,11 +57,15 @@ async def schedule_recruiter_repo_analysis(
         }
 
     default_branch = repo_data.get("default_branch") or branch or "main"
+    owner = repo_data.get("owner") or {}
+    github_avatar_url = owner.get("avatar_url")
+    github_login = owner.get("login")
     head_sha = await get_branch_head_sha(token, full_name, default_branch)
     if not head_sha:
         return {
             "scheduled": False,
             "candidate": candidate_name,
+            "github_avatar_url": github_avatar_url,
             "repo_name": repo_name,
             "html_url": repo_url,
             "default_branch": default_branch,
@@ -118,6 +126,11 @@ async def schedule_recruiter_repo_analysis(
                 )
                 if existing_candidate and task_id and existing_candidate.task_id is None:
                     existing_candidate.task_id = task_id
+                if existing_candidate and github_login and not existing_candidate.github_login:
+                    existing_candidate.github_login = github_login
+                if existing_candidate and github_avatar_url and not existing_candidate.github_avatar_url:
+                    existing_candidate.github_avatar_url = github_avatar_url
+                if existing_candidate:
                     db.commit()
                 sonar_summary = build_sonar_repo_summary(existing_run)
                 score_row = (
@@ -137,6 +150,7 @@ async def schedule_recruiter_repo_analysis(
         return {
             "scheduled": False,
             "candidate": candidate_name,
+            "github_avatar_url": github_avatar_url,
             "repo_name": repo_name,
             "clone_path": "",
             "html_url": html_url,
@@ -200,7 +214,8 @@ async def schedule_recruiter_repo_analysis(
         analysis_run_id=run.id,
         task_id=task_id,
         candidate_name=candidate_name,
-        github_login=None,
+        github_login=github_login,
+        github_avatar_url=github_avatar_url,
     ))
     db.commit()
 
@@ -232,6 +247,7 @@ async def schedule_recruiter_repo_analysis(
     return {
         "scheduled": True,
         "candidate": candidate_name,
+        "github_avatar_url": github_avatar_url,
         "repo_name": repo_name,
         "clone_path": "",
         "html_url": html_url,

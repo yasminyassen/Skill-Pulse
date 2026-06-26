@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Route, BrowserRouter as Router, Routes } from 'react-router-dom';
+import { ThemeProvider } from './pages/DashboardLayout';
 
 const GitHubCallback = lazy(() => import('./pages/GitHubCallback'));
 const Login = lazy(() => import('./pages/Login'));
@@ -32,9 +33,10 @@ const DeveloperProfile = lazy(() => import('./pages/Dashboard/DeveloperProfile')
 
 function App() {
   return (
-    <Router>
-      <Suspense fallback={<div style={{ padding: 24 }}>Loading...</div>}>
-        <Routes>
+    <ThemeProvider>
+      <Router>
+        <Suspense fallback={<div style={{ padding: 24 }}>Loading...</div>}>
+          <Routes>
           {/* ── Auth pages ── */}
           <Route path="/" element={<Register />} />
           <Route path="/login" element={<Login />} />
@@ -77,9 +79,10 @@ function App() {
 
           {/* ── Fallback ── */}
           <Route path="*" element={<NotFound />} />
-        </Routes>
-      </Suspense>
-    </Router>
+          </Routes>
+        </Suspense>
+      </Router>
+    </ThemeProvider>
   );
 }
 
