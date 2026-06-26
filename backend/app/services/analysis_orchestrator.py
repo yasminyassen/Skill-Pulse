@@ -611,6 +611,24 @@ def _persist_contributor_sonar_detail_rows(
         SonarFileMeasure.analysis_run_id == run.id,
         SonarFileMeasure.user_id == user_id,
     ).delete(synchronize_session=False)
+    db.query(SonarAnalysisSummary).filter(
+        SonarAnalysisSummary.analysis_run_id == run.id,
+        SonarAnalysisSummary.user_id == user_id,
+    ).delete(synchronize_session=False)
+
+    project_measures = _extract_project_measures(sonar_payload)
+    db.add(SonarAnalysisSummary(
+        analysis_run_id=run.id,
+        user_id=user_id,
+        project_key=sonar_result.get("project_key"),
+        quality_gate=_extract_quality_gate(sonar_payload),
+        sonar_health_score=compute_sonar_health_score(sonar_payload),
+        measures=project_measures,
+        coverage=sonar_payload.get("coverage"),
+        scanner=sonar_payload.get("scanner"),
+        ce_task=sonar_payload.get("ce_task"),
+        raw_payload=sonar_payload,
+    ))
 
     for component in (sonar_payload.get("file_measures") or {}).get("components") or []:
         if not isinstance(component, dict):

@@ -433,19 +433,36 @@ export default function ManagerSecurityDashboard() {
               <div className="ms-note"><Info size={14} /> Based on OWASP-aligned static security analysis.</div>
               <div className="ms-divider" />
               <h3>Security Risk Trend (Last 3 Months)</h3>
-              <div className="ms-chart">
-                <ResponsiveContainer width="100%" height={170}>
-                  <BarChart data={teamData.trend}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--chart-grid)" />
-                    <XAxis dataKey="label" tickLine={false} axisLine={false} />
-                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
-                    <Tooltip />
-                    <Bar dataKey="high" stackId="a" fill="#fecaca" name="High" />
-                    <Bar dataKey="medium" stackId="a" fill="#fed7aa" name="Medium" />
-                    <Bar dataKey="low" stackId="a" fill="#fef08a" name="Low" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              {teamData.trend.length === 0 ? (
+                <div style={{ padding: "28px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No trend data available yet.</div>
+              ) : (
+                <div className="ms-chart">
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={teamData.trend} barCategoryGap="30%" barGap={4}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148,163,184,0.15)" />
+                      <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "var(--text-muted)", fontSize: 12 }} />
+                      <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: "var(--text-muted)", fontSize: 12 }} width={28} />
+                      <Tooltip
+                        cursor={{ fill: "rgba(99,102,241,0.07)" }}
+                        contentStyle={{ background: "var(--bg-card)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 10, fontSize: 12.5, color: "var(--text-primary)", boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
+                        labelStyle={{ fontWeight: 700, marginBottom: 6, color: "var(--text-primary)" }}
+                        itemStyle={{ padding: "2px 0" }}
+                      />
+                      <Bar dataKey="high" fill="#ef4444" name="High" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                      <Bar dataKey="medium" fill="#f97316" name="Medium" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                      <Bar dataKey="low" fill="#eab308" name="Low" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div style={{ display: "flex", gap: 18, justifyContent: "center", marginTop: 6 }}>
+                    {[["#ef4444", "High"], ["#f97316", "Medium"], ["#eab308", "Low"]].map(([color, label]) => (
+                      <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)" }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </Panel>
 
             <Panel title="Most Common Security Issues">
@@ -502,14 +519,14 @@ export default function ManagerSecurityDashboard() {
       </main>
 
       <style>{`
-        .ms-page { max-width: 960px; margin: 0 auto; padding: 32px 18px 56px; color: var(--text-primary); }
+        .ms-page { max-width: 1180px; margin: 0 auto; padding: 32px 32px 56px; color: var(--text-primary); }
         .ms-header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 22px; }
         .ms-header h1 { margin: 0 0 6px; font-size: 28px; font-weight: 850; font-family: 'Inter', sans-serif; letter-spacing: 0; }
         .ms-header p, .ms-subtle { margin: 0; color: var(--text-secondary); font-size: 13.5px; }
         .ms-refresh { width: 42px; height: 42px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
         .ms-hero, .ms-panel, .ms-filter, .ms-callout, .ms-about { border: 1px solid var(--border); background: var(--bg-card); border-radius: 8px; box-shadow: var(--shadow-card); }
-        .ms-hero { display: flex; justify-content: space-between; gap: 24px; align-items: center; padding: 22px; margin-bottom: 18px; border-color: rgba(249,115,22,0.35); background: linear-gradient(120deg, rgba(255,247,237,0.88), rgba(254,242,242,0.72)); }
-        [data-theme="dark"] .ms-hero { background: linear-gradient(120deg, rgba(124,45,18,0.26), rgba(127,29,29,0.18)); }
+        .ms-hero { display: flex; justify-content: space-between; gap: 24px; align-items: center; padding: 22px; margin-bottom: 18px; border-color: rgba(99,102,241,0.35); background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(236,72,153,0.06)); }
+        [data-theme="dark"] .ms-hero { background: linear-gradient(135deg, rgba(99,102,241,0.22), rgba(236,72,153,0.12)); }
         .ms-hero-label { display: flex; align-items: center; gap: 9px; font-weight: 800; color: var(--text-primary); }
         .ms-hero-score, .ms-repo-score { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 8px; }
         .ms-hero-score strong, .ms-repo-score strong { font-size: 38px; line-height: 1; color: var(--text-primary); }
@@ -517,10 +534,10 @@ export default function ManagerSecurityDashboard() {
         .ms-hero p { color: var(--text-secondary); margin: 0 0 18px; font-size: 13px; }
         .ms-hero-stats, .ms-repo-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
         .ms-repo-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 18px; }
-        .ms-mini { border: 1px solid rgba(249,115,22,0.25); border-radius: 8px; padding: 12px; min-width: 0; }
+        .ms-mini { border: 1px solid rgba(99,102,241,0.25); border-radius: 8px; padding: 12px; min-width: 0; }
         .ms-mini strong { display: block; font-size: 19px; color: var(--text-primary); }
         .ms-mini span { color: var(--text-muted); font-size: 11.5px; }
-        .ms-score-ring { --score: 0deg; position: relative; width: 108px; height: 108px; border-radius: 50%; background: conic-gradient(#f97316 var(--score), rgba(249,115,22,0.2) 0); display: grid; place-items: center; color: #f97316; flex: 0 0 auto; }
+        .ms-score-ring { --score: 0deg; position: relative; width: 108px; height: 108px; border-radius: 50%; background: conic-gradient(#6366f1 var(--score), rgba(99,102,241,0.2) 0); display: grid; place-items: center; color: #6366f1; flex: 0 0 auto; }
         .ms-score-ring:before { content: ""; position: absolute; inset: 11px; border-radius: 50%; background: var(--bg-card); }
         .ms-score-ring svg { position: relative; z-index: 1; }
         .ms-filter { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 12px 16px; margin-bottom: 18px; background: rgba(59,130,246,0.08); border-color: rgba(59,130,246,0.22); }
@@ -543,7 +560,7 @@ export default function ManagerSecurityDashboard() {
         .ms-note { display: flex; gap: 6px; align-items: center; color: var(--text-muted); margin-top: 22px; font-size: 12px; }
         .ms-divider { height: 1px; background: var(--border); margin: 28px 0 18px; }
         .ms-panel h3 { font-size: 13px; margin: 0 0 12px; color: var(--text-primary); }
-        .ms-chart { height: 180px; }
+        .ms-chart { height: 230px; }
         .ms-list { display: grid; gap: 12px; }
         .ms-issue-row, .ms-vuln-row, .ms-member-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 14px; align-items: center; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg-soft); }
         .ms-vuln-row { grid-template-columns: auto 1fr; align-items: flex-start; }
@@ -562,7 +579,7 @@ export default function ManagerSecurityDashboard() {
         .ms-avatar { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #a855f7); color: white; display: grid; place-items: center; font-weight: 850; overflow: hidden; font-size: 12px; }
         .ms-avatar img { width: 100%; height: 100%; object-fit: cover; }
         .ms-member-row small { display: flex; gap: 8px; margin-top: 6px; color: var(--text-muted); }
-        .ms-high { color: #ef4444; } .ms-med { color: #f97316; } .ms-low { color: #ca8a04; }
+        .ms-high { color: #ef4444; } .ms-med { color: #6366f1; } .ms-low { color: #ca8a04; }
         .ms-member-score { text-align: right; }
         .ms-member-score strong { display: block; font-size: 20px; }
         .ms-member-score span { color: var(--text-muted); font-size: 12px; }

@@ -217,7 +217,7 @@ function Donut({ items }: { items: Array<{ label: string; value: number; tone: s
 
 const numericHeaders = new Set(["Value", "Line", "Lines", "Coverage", "Complexity", "Smells", "Debt", "Duplicated Lines"]);
 
-function Table({ headers, children }: { headers: TableHeader[]; children: ReactNode }) {
+function Table({ headers, children, compact }: { headers: TableHeader[]; children: ReactNode; compact?: boolean }) {
   const normalizedHeaders = headers.map((header) => (
     typeof header === "string"
       ? { label: header, align: numericHeaders.has(header) ? "right" as const : "left" as const }
@@ -226,7 +226,7 @@ function Table({ headers, children }: { headers: TableHeader[]; children: ReactN
 
   return (
     <div className="sp-table-wrap">
-      <table className="sp-table">
+      <table className={`sp-table${compact ? " compact" : ""}`}>
         <thead>
           <tr>
             {normalizedHeaders.map((header) => (
@@ -430,8 +430,10 @@ export default function DeveloperSkills() {
   const [loading, setLoading] = useState(true);
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [expandedIssue, setExpandedIssue] = useState<Issue | null>(null);
-  const [filter, setFilter] = useState<"ALL" | "BUG" | "CODE_SMELL" | "RELIABILITY">("ALL");
+  const [filter, setFilter] = useState<"ALL" | "BUG" | "CODE_SMELL">("ALL");
   const [query, setQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"metrics" | "issues" | "summary">("metrics");
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   useEffect(() => {
     api.get<SkillsSummary>("/analysis/skills/summary")
@@ -462,7 +464,6 @@ export default function DeveloperSkills() {
   useEffect(() => {
     setFilter("ALL");
     setQuery("");
-    setExpandedIssue(null);
     setSelectedIssue(null);
   }, [selectedId]);
 
@@ -514,7 +515,7 @@ export default function DeveloperSkills() {
 
   const filteredIssues = useMemo(() => allIssues.filter(issue => {
     const issueType = String(issue.type).toUpperCase();
-    const matchesType = filter === "ALL" || (filter === "RELIABILITY" ? issueType === "BUG" : issueType === filter);
+    const matchesType = filter === "ALL" || issueType === filter;
     const matchesSearch = !query.trim() || `${issue.file || ""} ${issue.message || ""} ${issue.severity || ""}`.toLowerCase().includes(query.trim().toLowerCase());
     return matchesType && matchesSearch;
   }), [allIssues, filter, query]);
@@ -537,19 +538,39 @@ export default function DeveloperSkills() {
         .sp-label { font-size: 11px; font-weight: 800; color: rgba(167,139,250,.82); text-transform: uppercase; letter-spacing: .75px; }
         .sp-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid; font-size: 11.5px; font-weight: 800; white-space: nowrap; }
         .sp-empty { padding: 28px 20px; border: 1px dashed var(--border-hover); border-radius: 14px; background: var(--bg-input); color: var(--text-muted); font-size: 13px; text-align: center; }
-        .skl-select, .sp-search { background: var(--bg-input); border: 1px solid rgba(99,102,241,.25); border-radius: 12px; color: var(--text-primary); font-family: 'Inter', sans-serif; font-size: 13.5px; padding: 10px 14px; outline: none; transition: border-color .2s; }
-        .skl-select:focus, .sp-search:focus { border-color: ${accent}80; }
-        .skl-select option { background: var(--bg-base); color: var(--text-primary); }
+        .skl-select { appearance: none; -webkit-appearance: none; background: var(--bg-input) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") no-repeat right 14px center; border: 1px solid rgba(99,102,241,.35); border-radius: 12px; color: var(--text-primary); font-family: 'Inter', sans-serif; font-size: 13.5px; padding: 10px 38px 10px 14px; outline: none; transition: border-color .2s, box-shadow .2s; cursor: pointer; color-scheme: dark; }
+        .skl-select:focus { border-color: ${accent}; box-shadow: 0 0 0 3px ${accent}22; }
+        .skl-select:hover { border-color: ${accent}70; }
+        .skl-select option { background: #0f1021; color: #e2e8f0; }
+        .sp-search { background: var(--bg-input); border: 1px solid rgba(99,102,241,.25); border-radius: 12px; color: var(--text-primary); font-family: 'Inter', sans-serif; font-size: 13.5px; padding: 10px 14px; outline: none; transition: border-color .2s; }
+        .sp-search:focus { border-color: ${accent}80; }
         .filter-btn { border: 1px solid var(--border); background: var(--bg-input); color: var(--text-secondary); padding: 8px 12px; border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 800; }
         .filter-btn.active { color: ${accent}; border-color: ${accent}70; background: ${accent}14; }
         .sp-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; }
-        .sp-table { width: 100%; border-collapse: collapse; min-width: 560px; table-layout: fixed; }
+        .sp-table { width: 100%; border-collapse: collapse; min-width: 560px; table-layout: auto; }
         .sp-table th { padding: 12px 16px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .7px; background: var(--bg-input); border-bottom: 1px solid var(--border); white-space: nowrap; }
-        .sp-table td { padding: 12px 16px; font-size: 13px; color: var(--text-secondary); vertical-align: top; overflow-wrap: anywhere; }
+        .sp-table td { padding: 12px 16px; font-size: 13px; color: var(--text-secondary); vertical-align: middle; overflow-wrap: anywhere; line-height: 1.4; }
+        .sp-table tbody tr { height: 52px; }
         .sp-table th:last-child, .sp-table td:last-child { padding-right: 18px; }
-        .sp-cell-number { font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .sp-cell-number { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
         .sp-table tbody tr:hover td { background: var(--bg-input); color: var(--text-primary); }
-        tbody tr:hover td { background: var(--bg-input); color: var(--text-primary); }
+        .sp-table.compact th { padding: 10px 14px; }
+        .sp-table.compact td { padding: 8px 14px; }
+        .sp-table.compact tbody tr { height: 46px; }
+        /* Tabs */
+        .sk-tabs { display: flex; gap: 4px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 14px; padding: 5px; }
+        .sk-tab { flex: 1; padding: 10px 16px; border-radius: 10px; border: none; background: transparent; color: var(--text-muted); font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700; cursor: pointer; transition: all .2s ease; letter-spacing: .2px; white-space: nowrap; }
+        .sk-tab:hover { color: var(--text-primary); background: rgba(99,102,241,.08); }
+        .sk-tab.active { background: rgba(99,102,241,.18); color: #a78bfa; border: 1px solid rgba(99,102,241,.3); box-shadow: 0 2px 8px rgba(99,102,241,.15); }
+        /* Summary section */
+        .summary-signal { display: flex; align-items: flex-start; gap: 16px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-input); transition: border-color .2s, background .2s; }
+        .summary-signal:hover { border-color: rgba(99,102,241,.35); background: rgba(99,102,241,.06); }
+        .summary-icon { font-size: 26px; flex-shrink: 0; line-height: 1; margin-top: 2px; }
+        .summary-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
+        .summary-desc { font-size: 12.5px; color: var(--text-muted); line-height: 1.55; }
+        .rec-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px 18px; border-radius: 12px; background: rgba(99,102,241,.06); border: 1px solid rgba(99,102,241,.15); }
+        .rec-bullet { width: 6px; height: 6px; border-radius: 50%; background: ${accent}; flex-shrink: 0; margin-top: 6px; }
+        .rec-text { font-size: 13.5px; color: var(--text-secondary); line-height: 1.55; }
       `}</style>
 
       <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'Inter', sans-serif", background: "var(--bg-gradient)" }}>
@@ -568,7 +589,30 @@ export default function DeveloperSkills() {
                 <span>·</span>
                 <span>Duration: {secondsFmt(repo?.duration_seconds)}</span>
               </div>
-              {summary && <div style={{ marginTop: 20 }}><select className="skl-select" value={selectedId ?? ""} onChange={(e) => setSelectedId(Number(e.target.value) || null)}>{summary.repos.map(r => <option key={r.analysis_id} value={r.analysis_id}>{r.repo_name} / {r.branch} · {dateFmt(r.completed_at)}</option>)}</select></div>}
+              {summary && <div style={{ marginTop: 20, position: "relative" }}>
+                <button
+                  onClick={() => setIsDropdownOpen(o => !o)}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%", maxWidth: 420, background: "var(--bg-input)", border: `1px solid rgba(99,102,241,${isDropdownOpen ? ".6" : ".3"})`, borderRadius: 12, color: "var(--text-primary)", fontFamily: "'Inter', sans-serif", fontSize: 13.5, padding: "10px 14px", outline: "none", cursor: "pointer", transition: "border-color .2s, box-shadow .2s", boxShadow: isDropdownOpen ? `0 0 0 3px ${accent}22` : "none", textAlign: "left" }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {(() => { const r = summary.repos.find(r => r.analysis_id === selectedId); return r ? `${r.repo_name} / ${r.branch} · ${dateFmt(r.completed_at)}` : "Select repository…"; })()}
+                  </span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: isDropdownOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s" }}><polyline points="6 9 12 15 18 9" /></svg>
+                </button>
+                {isDropdownOpen && <>
+                  <div onClick={() => setIsDropdownOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 90 }} />
+                  <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: "100%", maxWidth: 420, maxHeight: 280, overflowY: "auto", background: "var(--bg-card)", border: "1px solid rgba(99,102,241,.35)", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,.45)", zIndex: 100, padding: "5px" }}>
+                    {summary.repos.map(r => (
+                      <div key={r.analysis_id} onClick={() => { setSelectedId(r.analysis_id); setIsDropdownOpen(false); }} style={{ padding: "9px 12px", borderRadius: 8, cursor: "pointer", fontSize: 13.5, color: r.analysis_id === selectedId ? "#a78bfa" : "var(--text-secondary)", background: r.analysis_id === selectedId ? `${accent}18` : "transparent", fontWeight: r.analysis_id === selectedId ? 700 : 400, transition: "background .15s, color .15s", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                        onMouseEnter={e => { if (r.analysis_id !== selectedId) { (e.currentTarget as HTMLDivElement).style.background = `${accent}0e`; (e.currentTarget as HTMLDivElement).style.color = "var(--text-primary)"; } }}
+                        onMouseLeave={e => { if (r.analysis_id !== selectedId) { (e.currentTarget as HTMLDivElement).style.background = "transparent"; (e.currentTarget as HTMLDivElement).style.color = "var(--text-secondary)"; } }}
+                      >
+                        {r.repo_name} / {r.branch} · {dateFmt(r.completed_at)}
+                      </div>
+                    ))}
+                  </div>
+                </>}
+              </div>}
             </Card>
             <Card style={{ padding: "28px 32px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 12 }}>
               <div className="sp-label">Skill Score Engine</div>
@@ -583,6 +627,15 @@ export default function DeveloperSkills() {
           {!loading && !summary?.repos.length && <EmptyState text="Analyze a repository to populate SonarQube metrics." />}
 
           {detail && <>
+            {/* Tab Navigation */}
+            <div className="sk-tabs">
+              <button className={`sk-tab ${activeTab === "metrics" ? "active" : ""}`} onClick={() => setActiveTab("metrics")}>📊 Metrics Overview</button>
+              <button className={`sk-tab ${activeTab === "issues" ? "active" : ""}`} onClick={() => setActiveTab("issues")}>🐛 Issues Explorer</button>
+              <button className={`sk-tab ${activeTab === "summary" ? "active" : ""}`} onClick={() => setActiveTab("summary")}>✦ Analysis Summary</button>
+            </div>
+
+            {/* TAB 1: Metrics Overview */}
+            {activeTab === "metrics" && <>
             <Card style={{ padding: "24px 28px" }}>
               <SectionTitle kicker="1. Reliability" title="Bugs & Reliability" description="Bug count, severity distribution, and affected files." right={<Badge tone={severityTone(bugSeverity.critical ? "CRITICAL" : "MINOR")}>{totalBugs} bugs</Badge>} />
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 20 }}>
@@ -596,7 +649,7 @@ export default function DeveloperSkills() {
                 <Card style={{ padding: 18, boxShadow: "none" }}><Donut items={[{ label: "Critical", value: bugSeverity.critical, tone: danger }, { label: "Major", value: bugSeverity.major, tone: warning }, { label: "Minor", value: bugSeverity.minor, tone: success }]} /></Card>
                 <Card style={{ padding: 18, boxShadow: "none" }}><div style={{ display: "grid", gap: 13 }}>{[["Critical", bugSeverity.critical, danger], ["Major", bugSeverity.major, warning], ["Minor", bugSeverity.minor, success]].map(([label, value, tone]) => <div key={label as string}><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 }}><span>{label}</span><strong>{value}</strong></div><ProgressBar value={value as number} max={Math.max(visibleReliabilityIssues.length, 1)} tone={tone as string} /></div>)}</div></Card>
               </div>
-              {visibleReliabilityIssues.length ? <Table headers={["Severity", "File", "Line", "Message"]}>{visibleReliabilityIssues.slice(0, 10).map((i, idx) => <Row key={idx} onClick={() => setExpandedIssue(expandedIssue === i ? null : i)}><Cell><Badge tone={severityTone(i.severity)}>{i.severity}</Badge></Cell><Cell>{i.file || "n/a"}</Cell><Cell>{fmt(i.line)}</Cell><Cell>{i.message}</Cell></Row>)}</Table> : <EmptyState text="No reliability bugs returned." />}
+              {visibleReliabilityIssues.length ? <Table headers={[{ label: "Severity", width: "18%" }, { label: "File", width: "42%" }, { label: "Line", align: "right", width: "10%" }, { label: "Message", width: "30%" }]}>{visibleReliabilityIssues.slice(0, 10).map((i, idx) => <Row key={idx} onClick={() => setExpandedIssue(expandedIssue === i ? null : i)}><Cell><Badge tone={severityTone(i.severity)}>{i.severity}</Badge></Cell><Cell>{i.file || "n/a"}</Cell><Cell align="right">{fmt(i.line)}</Cell><Cell>{i.message}</Cell></Row>)}</Table> : <EmptyState text="No reliability bugs returned." />}
               {expandedIssue && <Card style={{ padding: 16, marginTop: 14, boxShadow: "none", background: "var(--bg-input)" }}><strong>{expandedIssue.file || "n/a"}</strong><div style={{ color: "var(--text-muted)", marginTop: 6 }}>Line {fmt(expandedIssue.line)}</div><code style={{ display: "block", marginTop: 10, color: "var(--text-secondary)" }}>{expandedIssue.message}</code></Card>}
             </Card>
 
@@ -612,7 +665,7 @@ export default function DeveloperSkills() {
                 <Card style={{ padding: 18, boxShadow: "none" }}><Donut items={[{ label: "Critical", value: smellSeverity.critical, tone: danger }, { label: "Major", value: smellSeverity.major, tone: warning }, { label: "Minor", value: smellSeverity.minor, tone: success }]} /></Card>
                 <Card style={{ padding: 18, boxShadow: "none" }}><div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 10 }}>Estimated Fix Time: {minutesFmt(detail.maintainability?.technical_debt_minutes)}</div><ProgressBar value={Math.min(detail.maintainability?.technical_debt_minutes || 0, 600)} max={600} tone={warning} /></Card>
               </div>
-              <Table headers={[{ label: "File", width: "64%" }, { label: "Smells", align: "right", width: "18%" }, { label: "Debt", align: "right", width: "18%" }]}>{topFilesByIssues(maintainabilityIssues).map(([file, count]) => <Row key={file}><Cell>{file}</Cell><Cell align="right">{count}</Cell><Cell>{minutesFmt(count * 8)}</Cell></Row>)}</Table>
+              <Table headers={[{ label: "File", width: "64%" }, { label: "Smells", align: "right", width: "18%" }, { label: "Debt", align: "right", width: "18%" }]}>{topFilesByIssues(maintainabilityIssues).map(([file, count]) => <Row key={file}><Cell>{file}</Cell><Cell align="right">{count}</Cell><Cell align="right">{minutesFmt(count * 8)}</Cell></Row>)}</Table>
             </Card>
 
             <Card style={{ padding: "24px 28px" }}>
@@ -623,7 +676,11 @@ export default function DeveloperSkills() {
                   <Metric label="Branch Coverage" value={pct(detail.coverage?.branch_coverage)} />
                   <Metric label="Uncovered Lines" value={fmt(detail.coverage?.uncovered_lines)} />
                 </div>
-                <Card style={{ padding: "22px 24px", boxShadow: "none", marginBottom: coverageSource || lowCoverage.length ? 18 : 0 }}><div style={{ fontSize: 32, fontWeight: 900, marginBottom: 12 }}>{pct(coverageValue)}</div><ProgressBar value={coverageValue} tone={scoreColor(coverageValue)} /></Card>
+                <Card style={{ padding: "22px 24px", boxShadow: "none", marginBottom: coverageSource || lowCoverage.length ? 18 : 0 }}>
+                  <div className="sp-label" style={{ marginBottom: 10 }}>Overall Line Coverage</div>
+                  <div style={{ fontSize: 32, fontWeight: 900, marginBottom: 12 }}>{pct(coverageValue)}</div>
+                  <ProgressBar value={coverageValue} tone={scoreColor(coverageValue)} />
+                </Card>
                 {coverageSource && <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: lowCoverage.length ? 14 : 0 }}>Coverage source: {coverageSource === "uploaded" ? "uploaded coverage.xml" : coverageSource === "repository" ? "coverage.xml found in repository" : coverageSource}</div>}
                 {lowCoverage.length > 0 && <Table headers={[{ label: "File", width: "78%" }, { label: "Coverage", align: "right", width: "22%" }]}>{lowCoverage.map(f => <Row key={f.file || "file"}><Cell>{f.file}</Cell><Cell align="right"><Badge tone={scoreColor(f.coverage)}>{pct(f.coverage)}</Badge></Cell></Row>)}</Table>}
                 {lowCoverage[0] && (lowCoverage[0].coverage || 0) < 60 && <div style={{ marginTop: 14, color: warning, fontWeight: 800 }}>⚠ {lowCoverage[0].file} has low coverage ({pct(lowCoverage[0].coverage)})</div>}
@@ -641,7 +698,11 @@ export default function DeveloperSkills() {
                 <Metric label="Duplicated Blocks" value={fmt(detail.duplication?.duplicated_blocks)} />
                 <Metric label="Duplicated Files" value={fmt(detail.duplication?.duplicated_files)} />
               </div>
-              <Card style={{ padding: "22px 24px", boxShadow: "none", marginBottom: duplicatedFiles.length ? 18 : 0 }}><div style={{ fontSize: 28, fontWeight: 900, marginBottom: 12 }}>{pct(detail.duplication?.percentage ?? current?.duplication_percentage)}</div><ProgressBar value={detail.duplication?.percentage ?? current?.duplication_percentage} tone={(detail.duplication?.percentage || 0) > 10 ? danger : warning} /></Card>
+              <Card style={{ padding: "22px 24px", boxShadow: "none", marginBottom: duplicatedFiles.length ? 18 : 0 }}>
+                <div className="sp-label" style={{ marginBottom: 10 }}>Duplication Rate</div>
+                <div style={{ fontSize: 28, fontWeight: 900, marginBottom: 12 }}>{pct(detail.duplication?.percentage ?? current?.duplication_percentage)}</div>
+                <ProgressBar value={detail.duplication?.percentage ?? current?.duplication_percentage} tone={(detail.duplication?.percentage || 0) > 10 ? danger : warning} />
+              </Card>
               {duplicatedFiles.length > 0 && <Table headers={[{ label: "File", width: "58%" }, { label: "Duplication %", align: "right", width: "21%" }, { label: "Duplicated Lines", align: "right", width: "21%" }]}>{duplicatedFiles.map(f => <Row key={f.file || "file"}><Cell>{f.file}</Cell><Cell align="right">{pct(f.duplication)}</Cell><Cell align="right">{fmt(f.duplicated_lines)}</Cell></Row>)}</Table>}
             </Card>
 
@@ -667,28 +728,70 @@ export default function DeveloperSkills() {
                 ["Statements", detail.project_size?.statements],
               ].map(([label, value]) => <Row key={label as string}><Cell>{label}</Cell><Cell align="right">{fmt(value as number | null | undefined)}</Cell></Row>)}</Table>
             </Card>
+            </>}
 
-            <Card style={{ padding: "24px 28px" }}>
+            {/* TAB 2: Issues Explorer */}
+            {activeTab === "issues" && <Card style={{ padding: "24px 28px" }}>
               <SectionTitle kicker="7. Issues Explorer" title="Search Issues" description="Filter SonarQube BUG and CODE_SMELL issues by type or file." right={<Badge>{filteredIssues.length} shown</Badge>} />
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
-                {[["ALL", "All"], ["BUG", "Bugs"], ["CODE_SMELL", "Code Smells"], ["RELIABILITY", "Reliability"]].map(([key, label]) => <button key={key} className={`filter-btn ${filter === key ? "active" : ""}`} onClick={() => setFilter(key as typeof filter)}>{label}</button>)}
+                {[["ALL", "All"], ["BUG", "Bugs"], ["CODE_SMELL", "Code Smells"]].map(([key, label]) => <button key={key} className={`filter-btn ${filter === key ? "active" : ""}`} onClick={() => setFilter(key as typeof filter)}>{label}</button>)}
                 <input className="sp-search" placeholder="🔍 Search file..." value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginLeft: "auto", minWidth: 240 }} />
               </div>
-              {filteredIssues.length ? <Table headers={[{ label: "Type", width: "18%" }, { label: "Severity", width: "18%" }, { label: "File", width: "50%" }, { label: "Line", align: "right", width: "14%" }]}>{filteredIssues.slice(0, 50).map((i, idx) => <Row key={idx} onClick={() => setSelectedIssue(i)}><Cell><Badge tone={i.type === "BUG" ? danger : accent}>{issueTypeLabel(i.type)}</Badge></Cell><Cell><Badge tone={severityTone(i.severity)}>{i.severity}</Badge></Cell><Cell>{i.file || "n/a"}</Cell><Cell align="right">{fmt(i.line)}</Cell></Row>)}</Table> : <EmptyState text="No issues match the current filters." />}
-            </Card>
+              {filteredIssues.length ? <Table compact headers={[{ label: "Type", width: "14%" }, { label: "Severity", width: "16%" }, { label: "File", width: "40%" }, { label: "Line", align: "right", width: "10%" }, { label: "Message", width: "20%" }]}>{filteredIssues.slice(0, 50).map((i, idx) => <Row key={idx} onClick={() => setSelectedIssue(i)}><Cell><Badge tone={i.type === "BUG" ? danger : accent}>{issueTypeLabel(i.type)}</Badge></Cell><Cell><Badge tone={severityTone(i.severity)}>{i.severity}</Badge></Cell><Cell>{i.file || "n/a"}</Cell><Cell align="right">{fmt(i.line)}</Cell><Cell>{i.message}</Cell></Row>)}</Table> : <EmptyState text="No issues match the current filters." />}
+            </Card>}
 
-            <Card style={{ padding: "24px 28px" }}>
-              <SectionTitle kicker="8. Analysis Summary" title="Repository Summary" description="Important quality signals and recommended next actions." />
-              <div style={{ display: "grid", gap: 9, fontSize: 14, marginBottom: 18 }}>
-                <div>Overall Score {fmt(skillScore)} - {skillScoreLevel}</div>
-                <div>✅ Maintainability Rating {fmt(detail.maintainability?.rating ?? current?.maintainability_rating)}</div>
-                <div>{bugSeverity.critical || bugSeverity.major ? "⚠" : "✅"} Reliability Rating {fmt(detail.reliability?.rating ?? current?.reliability_rating)}</div>
-                <div>{!coverageAvailable ? `ℹ Coverage unavailable: ${coverageReason}` : (coverageValue || 0) < 80 ? "⚠ Coverage below target" : "✅ Coverage looks healthy"}</div>
-                <div>{(detail.duplication?.percentage || 0) > 5 ? "⚠ Duplication higher than recommended" : "✅ Duplication is under control"}</div>
+            {/* TAB 3: Analysis Summary */}
+            {activeTab === "summary" && <Card style={{ padding: "28px 32px" }}>
+              <SectionTitle kicker="8. Analysis Summary" title="Repository Summary" description="Key quality signals and recommended next actions for this codebase." />
+              <div style={{ display: "grid", gap: 12, marginBottom: 28 }}>
+                <div className="summary-signal">
+                  <div className="summary-icon">{(skillScore ?? 0) >= 70 ? "🏆" : (skillScore ?? 0) >= 50 ? "📈" : "⚡"}</div>
+                  <div>
+                    <div className="summary-title">Overall Score: {fmt(skillScore)} — {skillScoreLevel}</div>
+                    <div className="summary-desc">Composite score combining SonarQube health metrics and static analysis signals.</div>
+                  </div>
+                </div>
+                <div className="summary-signal">
+                  <div className="summary-icon">{(bugSeverity.critical || bugSeverity.major) ? "🔴" : "✅"}</div>
+                  <div>
+                    <div className="summary-title">Reliability Rating: {fmt(detail.reliability?.rating ?? current?.reliability_rating)}</div>
+                    <div className="summary-desc">{bugSeverity.critical > 0 ? `${bugSeverity.critical} critical bug${bugSeverity.critical > 1 ? "s" : ""} require immediate attention.` : bugSeverity.major > 0 ? `${bugSeverity.major} major bug${bugSeverity.major > 1 ? "s" : ""} detected — review before release.` : "No critical or major bugs detected. Reliability looks solid."}</div>
+                  </div>
+                </div>
+                <div className="summary-signal">
+                  <div className="summary-icon">🧹</div>
+                  <div>
+                    <div className="summary-title">Maintainability Rating: {fmt(detail.maintainability?.rating ?? current?.maintainability_rating)}</div>
+                    <div className="summary-desc">{fmt(detail.maintainability?.code_smells ?? current?.code_smells)} code smells · {minutesFmt(detail.maintainability?.technical_debt_minutes ?? current?.technical_debt_minutes)} estimated technical debt.</div>
+                  </div>
+                </div>
+                <div className="summary-signal">
+                  <div className="summary-icon">{!coverageAvailable ? "⚠️" : (coverageValue || 0) >= 80 ? "🛡️" : (coverageValue || 0) >= 60 ? "🔶" : "🔴"}</div>
+                  <div>
+                    <div className="summary-title">{!coverageAvailable ? "Test Coverage Unavailable" : `Test Coverage: ${pct(coverageValue)}`}</div>
+                    <div className="summary-desc">{!coverageAvailable ? coverageUnavailableMessage : (coverageValue || 0) >= 80 ? "Coverage is above the 80% target — well tested." : "Coverage is below the recommended 80% threshold. Add tests for critical paths."}</div>
+                  </div>
+                </div>
+                <div className="summary-signal">
+                  <div className="summary-icon">{(detail.duplication?.percentage || 0) > 10 ? "🔴" : (detail.duplication?.percentage || 0) > 5 ? "🟡" : "✅"}</div>
+                  <div>
+                    <div className="summary-title">Code Duplication: {pct(detail.duplication?.percentage ?? current?.duplication_percentage)}</div>
+                    <div className="summary-desc">{(detail.duplication?.percentage || 0) > 5 ? "Duplication is above the recommended 5% threshold. Refactor repeated logic into shared utilities." : "Duplication is within acceptable bounds."}</div>
+                  </div>
+                </div>
               </div>
-              <div className="sp-label" style={{ marginBottom: 10 }}>Recommendations</div>
-              <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text-secondary)", lineHeight: 1.8 }}>{recommendations.map(item => <li key={item}>{item}</li>)}</ul>
-            </Card>
+              {recommendations.length > 0 && <>
+                <div className="sp-label" style={{ marginBottom: 12 }}>Recommended Actions</div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {recommendations.map(item => (
+                    <div key={item} className="rec-item">
+                      <div className="rec-bullet" />
+                      <div className="rec-text">{item}</div>
+                    </div>
+                  ))}
+                </div>
+              </>}
+            </Card>}
           </>}
         </div>
       </div>

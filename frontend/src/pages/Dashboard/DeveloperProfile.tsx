@@ -513,7 +513,7 @@ export default function DeveloperProfile() {
         fontFamily: "'Inter', sans-serif",
         background: "var(--bg-gradient)",
       }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
 
           {/* ── Header ── */}
           <div>

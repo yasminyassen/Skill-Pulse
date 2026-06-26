@@ -414,11 +414,11 @@ export default function DeveloperRequirements() {
   return (
     <DashboardLayout>
       <style>{`
-        .devreq-page{min-height:100vh;background:var(--bg-base);color:white;padding:28px clamp(18px,3vw,42px);font-family:'Inter',sans-serif}
-        .devreq-title{font-family:'Inter',sans-serif;font-size:26px;margin:0;color:white}
-        .devreq-subtitle{margin:7px 0 0;color:rgba(255,255,255,.48);font-size:13px;line-height:1.5}
-        .devreq-card{background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);border-radius:12px}
-        .rq-panel{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:14px}
+        .devreq-page{min-height:100vh;background:var(--bg-gradient);color:var(--text-primary);padding:36px 40px 80px;font-family:'Inter',sans-serif}
+        .devreq-title{font-family:'Inter',sans-serif;font-size:26px;margin:0;color:var(--text-primary)}
+        .devreq-subtitle{margin:7px 0 0;color:var(--text-muted);font-size:13px;line-height:1.5}
+        .devreq-card{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-card);transition:border-color .2s ease,background .3s ease}.devreq-card:hover{border-color:var(--border-hover);background:var(--bg-card-hover)}
+        .rq-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:14px}
         .devreq-toolbar{display:grid;grid-template-columns:minmax(220px,320px) 1fr 190px auto;gap:14px;align-items:end;padding:14px;margin:22px 0 18px}
         .devreq-label{font-size:10px;font-weight:900;color:rgba(255,255,255,.36);text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px}
         .rq-input,.rq-select{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:9px;color:white;font-family:'Inter',sans-serif;font-size:13px;outline:none;padding:8px 10px;box-sizing:border-box}
@@ -468,6 +468,15 @@ export default function DeveloperRequirements() {
       )}
 
       <main className="devreq-page">
+        <div
+          style={{
+            maxWidth: 1180,
+            margin: "0 auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 24,
+          }}
+        >
         <header>
           <h1 className="devreq-title">My Requirements</h1>
           <p className="devreq-subtitle">Track your assigned implementation work, task coverage, matched code, and evaluator reasoning.</p>
@@ -571,6 +580,7 @@ export default function DeveloperRequirements() {
             </section>
           </>
         )}
+        </div>
       </main>
     </DashboardLayout>
   );

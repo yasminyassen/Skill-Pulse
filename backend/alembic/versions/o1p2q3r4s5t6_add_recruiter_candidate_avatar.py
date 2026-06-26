@@ -1,7 +1,7 @@
 """add recruiter candidate avatar url
 
-Revision ID: o1p2q3r4s5t6
-Revises: n1o2p3q4r5s6
+Revision ID: s1t2u3v4w5x6
+Revises: r1s2t3u4v5w6
 Create Date: 2026-06-26 00:00:00.000000
 
 """
@@ -13,8 +13,8 @@ from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
-revision: str = "o1p2q3r4s5t6"
-down_revision: Union[str, None] = "n1o2p3q4r5s6"
+revision: str = "s1t2u3v4w5x6"
+down_revision: Union[str, None] = "r1s2t3u4v5w6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

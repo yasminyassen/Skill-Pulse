@@ -1,7 +1,7 @@
 """add recruiter tasks
 
-Revision ID: n1o2p3q4r5s6
-Revises: m1n2o3p4q5r6
+Revision ID: r1s2t3u4v5w6
+Revises: q1r2s3t4u5v6
 Create Date: 2026-06-26 00:00:00.000000
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 
-revision: str = "n1o2p3q4r5s6"
-down_revision: Union[str, None] = "m1n2o3p4q5r6"
+revision: str = "r1s2t3u4v5w6"
+down_revision: Union[str, None] = "q1r2s3t4u5v6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

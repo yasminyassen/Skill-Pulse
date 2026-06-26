@@ -122,6 +122,7 @@ export default function RepositoryAnalysis() {
   const [coverageFile, setCoverageFile] = useState<File | null>(null);
   const [coverageFileError, setCoverageFileError] = useState("");
   const [loading, setLoading]   = useState(false);
+  const [analysisDone, setAnalysisDone] = useState(false);
   const [runId, setRunId]       = useState<number | null>(null);
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -488,7 +489,7 @@ export default function RepositoryAnalysis() {
     if (!url) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!/^https:\/\/github\.com\/.+/.test(url)) { setUrlError("URL must start with https://github.com/…"); return; }
     const selectedBranch = (br || "main").trim() || "main";
-    setUrlError(""); setGithubAuthUrl(null); setFailedMsg(null); setCachedMsg(null); setLoading(true);
+    setUrlError(""); setGithubAuthUrl(null); setFailedMsg(null); setCachedMsg(null); setAnalysisDone(false); setLoading(true);
     if (analysisMode === "requirements") {
       setRequirementsAnalysisReady(false);
       setRequirementsAnalysisMsg("Repository analysis is starting. Existing PRD status will be loaded when the repository is identified.");
@@ -545,6 +546,7 @@ export default function RepositoryAnalysis() {
     if (!repoUrl) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!requirementsConfirmed) { showToast("Confirm requirements before analysis and coverage detection.", "error"); return; }
     const selectedBranch = (branch || "main").trim() || "main";
+    setAnalysisDone(false);
     setLoading(true);
     try {
       const res = await submitAnalysisRun(repoUrl, selectedBranch);
@@ -575,7 +577,7 @@ export default function RepositoryAnalysis() {
         const res = await api.get(`/analysis/${runId}`);
         updateHistoryRunStatus(runId, res.data);
         if (res.data.status === "completed") {
-          clearInterval(iv); setLoading(false); setRunId(null);
+          clearInterval(iv); setLoading(false); setAnalysisDone(true); setRunId(null);
           if (analysisMode === "requirements" && requirementsRepoId) {
             setRequirementsAnalysisReady(true);
             setRequirementsAnalysisMsg("Repository analysis is complete. Starting coverage detection.");
@@ -590,7 +592,7 @@ export default function RepositoryAnalysis() {
           fetchHistory(false);
         }
         else if (res.data.status === "failed") {
-          clearInterval(iv); setLoading(false); setRunId(null);
+          clearInterval(iv); setLoading(false); setAnalysisDone(false); setRunId(null);
           if (analysisMode === "requirements") {
             setRequirementsAnalysisReady(false);
             setRequirementsAnalysisMsg("Repository analysis failed. Resolve the repository issue before uploading, assigning, or confirming requirements.");
@@ -601,7 +603,7 @@ export default function RepositoryAnalysis() {
           else setFailedMsg("Analysis failed. Check the URL and branch, then try again.");
           fetchHistory(false);
         }
-      } catch { clearInterval(iv); setLoading(false); }
+      } catch { clearInterval(iv); setLoading(false); setAnalysisDone(false); }
     }, 3000);
     return () => clearInterval(iv);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -609,11 +611,11 @@ export default function RepositoryAnalysis() {
 
   const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handlePrdUpload(f); };
 
-  const card = (content: React.ReactNode, extra?: React.CSSProperties) => (
-    <div style={{
+  const card = (content: React.ReactNode, extra?: React.CSSProperties, className = "") => (
+    <div className={className} style={{
       background: "var(--bg-card)",
       border: "1px solid var(--border)",
-      borderRadius: 16, padding: "24px 28px",
+      borderRadius: 18, padding: "30px 34px",
       ...extra,
     }}>{content}</div>
   );
@@ -752,6 +754,61 @@ export default function RepositoryAnalysis() {
         .edit-textarea { width: 100%; min-height: 100px; padding: 12px 14px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; color: var(--text-primary); font-family: 'Inter', sans-serif; font-size: 14px; outline: none; transition: border-color 0.2s; resize: vertical; box-sizing: border-box; }
         .edit-textarea:focus { border-color: ${accent}80; }
         .edit-textarea::placeholder { color: var(--text-faint); }
+
+
+        .analysis-status-card {
+          position: relative;
+          overflow: hidden;
+          background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(236,72,153,0.06));
+          border: 1px solid rgba(99,102,241,0.28);
+        }
+        .analysis-progress-track {
+          position: relative;
+          height: 12px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: var(--bg-input);
+          border: 1px solid var(--border);
+          margin-top: 20px;
+        }
+        .analysis-progress-fill {
+          position: absolute;
+          top: 0;
+          left: -42%;
+          height: 100%;
+          width: 42%;
+          border-radius: 999px;
+          background: linear-gradient(135deg, ${accent}, #ec4899);
+          animation: analysisProgressMove 1.25s ease-in-out infinite;
+        }
+        .analysis-step-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 11px;
+          border-radius: 999px;
+          border: 1px solid rgba(251,191,36,0.24);
+          background: rgba(251,191,36,0.08);
+          color: #fbbf24;
+          font-size: 12px;
+          font-weight: 800;
+        }
+        .analysis-done-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 11px;
+          border-radius: 999px;
+          border: 1px solid rgba(52,211,153,0.24);
+          background: rgba(52,211,153,0.08);
+          color: #34d399;
+          font-size: 12px;
+          font-weight: 800;
+        }
+        @keyframes analysisProgressMove {
+          0% { left: -42%; }
+          100% { left: 105%; }
+        }
 
         @keyframes fadeIn  { from{opacity:0}             to{opacity:1}           }
         @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
@@ -927,8 +984,9 @@ export default function RepositoryAnalysis() {
         color: "var(--text-primary)",
         fontFamily: "'Inter', sans-serif",
         background: "var(--bg-gradient)",
+        boxSizing: "border-box",
       }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+        <div style={{ width: "100%", maxWidth: 1180, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24, boxSizing: "border-box" }}>
 
           {/* ── Header ── */}
           <div>
@@ -1212,101 +1270,72 @@ export default function RepositoryAnalysis() {
             </div>
           )}
 
-          {/* ── Recent Analyses ── */}
-          {card(
-            <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: "var(--bg-card-hover)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          {/* ── Analysis Status ── */}
+          {loading && card(
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+                  <div style={{ width: 46, height: 46, borderRadius: 14, background: `${accent}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                      <path d="M7.5 4.21l4.5 2.6 4.5-2.6" />
+                      <path d="M7.5 19.79V14.6L3 12" />
+                      <path d="M21 12l-4.5 2.6v5.19" />
+                      <path d="M12 22V12" />
+                    </svg>
                   </div>
-                  <div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Recent Analyses</div>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                      {historyError ? "History could not be loaded" : `${analyses.length} ${analyses.length === 1 ? "repository" : "repositories"} analyzed`}
-                    </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="ra-label" style={{ marginBottom: 6 }}>Analysis in progress</div>
+                    <h2 style={{ margin: 0, fontSize: 24, lineHeight: 1.2, color: "var(--text-primary)", fontFamily: "'Inter', sans-serif" }}>Analyzing repository...</h2>
+                    <p style={{ margin: "8px 0 0", color: "var(--text-muted)", fontSize: 13.5, lineHeight: 1.6 }}>
+                      SkillPulse is running code quality, security, and SonarQube checks. This may take a few minutes.
+                    </p>
                   </div>
                 </div>
-                <button className="ra-btn-ghost" style={{ fontSize: 12, padding: "7px 13px" }} onClick={() => fetchHistory()}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                  Refresh
-                </button>
+                <div className="analysis-step-pill">
+                  <span className="pulse-dot" />
+                  Running checks
+                </div>
               </div>
-
-              {historyLoading && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {[1,2,3].map(i => (
-                    <div key={i} style={{ display: "flex", gap: 14, alignItems: "center" }}>
-                      <div className="skeleton" style={{ width: 48, height: 48, borderRadius: 12, flexShrink: 0 }} />
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
-                        <div className="skeleton" style={{ height: 14, width: "45%" }} />
-                        <div className="skeleton" style={{ height: 11, width: "30%" }} />
-                      </div>
-                      <div className="skeleton" style={{ width: 50, height: 50, borderRadius: "50%" }} />
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!historyLoading && historyError && (
-                <div style={{ textAlign: "center", padding: "48px 20px" }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#f87171", marginBottom: 4 }}>Could not load analysis history</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{historyError}</div>
-                </div>
-              )}
-
-              {!historyLoading && !historyError && analyses.length === 0 && (
-                <div style={{ textAlign: "center", padding: "48px 20px" }}>
-                  <div style={{ width: 56, height: 56, borderRadius: 16, background: "var(--bg-card-hover)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/></svg>
-                  </div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 4 }}>No analyses yet</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Enter a repository URL above to get started</div>
-                </div>
-              )}
-
-              {!historyLoading && analyses.map(a => {
-                const st = statusConfig[a.status] || statusConfig.pending;
-                const sc = a.skill_score;
-                const sColor = scoreColor(sc);
-                return (
-                  <div key={a.analysis_id} className="ra-row">
-                    <div style={{ width: 44, height: 44, borderRadius: 12, flexShrink: 0, background: "var(--bg-card-hover)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/></svg>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{a.repo_name}</span>
-                        <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 20, background: "rgba(99,102,241,0.15)", color: "#818cf8", flexShrink: 0 }}>Python</span>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{a.branch} · {timeAgo(a.triggered_at)}</span>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 500, padding: "2px 8px", borderRadius: 20, background: st.bg, color: st.color, flexShrink: 0 }}>
-                          <span style={{ width: 5, height: 5, borderRadius: "50%", background: st.dot, animation: a.status === "running" ? "pulse 1.4s ease-in-out infinite" : "none" }} />
-                          {st.label}
-                        </span>
-                      </div>
-                      {role === "manager" && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const, marginTop: 7 }}>
-                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Sonar {formatScore(a.sonar_health_score)}</span>
-                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Gate {a.quality_gate || "N/A"}</span>
-                          <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "capitalize" as const }}>{formatState(a.sonar_state)}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ textAlign: "right" as const, flexShrink: 0 }}>
-                      {sc !== null ? (
-                        <>
-                          <div style={{ fontSize: 22, fontWeight: 800, color: sColor, lineHeight: 1 }}>{sc}</div>
-                          <div style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 2 }}>{a.skill_score_level || scoreLabel(sc)}</div>
-                        </>
-                      ) : <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Score unavailable</div>}
-                    </div>
-                  </div>
-                );
-              })}
-            </>
+              <div className="analysis-progress-track">
+                <div className="analysis-progress-fill" />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 12, color: "var(--text-muted)", fontSize: 12.5, flexWrap: "wrap" }}>
+                <span>Do not close this page while the analysis is running.</span>
+                {runId && <span>Run #{runId}</span>}
+              </div>
+            </div>,
+            {
+              padding: "30px 34px",
+              background: "linear-gradient(135deg, rgba(99,102,241,0.12), rgba(236,72,153,0.06))",
+              border: "1px solid rgba(99,102,241,0.28)",
+            },
+            "analysis-status-card"
           )}
+
+          {analysisDone && !loading && card(
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+                <div style={{ width: 46, height: 46, borderRadius: 14, background: "rgba(52,211,153,0.12)", color: "#34d399", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="ra-label" style={{ marginBottom: 6, color: "rgba(52,211,153,0.9)" }}>Analysis completed</div>
+                  <h2 style={{ margin: 0, fontSize: 24, lineHeight: 1.2, color: "var(--text-primary)", fontFamily: "'Inter', sans-serif" }}>Analysis Done</h2>
+                  <p style={{ margin: "8px 0 0", color: "var(--text-muted)", fontSize: 13.5, lineHeight: 1.6 }}>
+                    Your repository analysis has completed successfully. You can review the generated results from the Skills dashboard.
+                  </p>
+                </div>
+              </div>
+              <div className="analysis-done-pill">
+                Completed
+              </div>
+            </div>,
+            { padding: "30px 34px", borderColor: "rgba(52,211,153,0.28)", background: "linear-gradient(135deg, rgba(52,211,153,0.10), rgba(99,102,241,0.05))" }
+          )}
+
 
         </div>
       </div>

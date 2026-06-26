@@ -3004,20 +3004,18 @@ async def get_sonar_results(
         )
         .first()
     )
-    summary = (
-        db.query(SonarAnalysisSummary)
-        .filter(SonarAnalysisSummary.analysis_run_id == run.id)
-        .first()
-    )
-    file_rows = (
-        db.query(SonarFileMeasure)
-        .filter(SonarFileMeasure.analysis_run_id == run.id)
-        .order_by(SonarFileMeasure.file_path.asc())
-        .all()
-    )
+    summary_query = db.query(SonarAnalysisSummary).filter(SonarAnalysisSummary.analysis_run_id == run.id)
+    file_query = db.query(SonarFileMeasure).filter(SonarFileMeasure.analysis_run_id == run.id)
+    issue_query = db.query(SonarIssue).filter(SonarIssue.analysis_run_id == run.id)
+    if run.analysis_scope == "contribution":
+        summary_query = summary_query.filter(SonarAnalysisSummary.user_id == current_user.id)
+        file_query = file_query.filter(SonarFileMeasure.user_id == current_user.id)
+        issue_query = issue_query.filter(SonarIssue.user_id == current_user.id)
+
+    summary = summary_query.first()
+    file_rows = file_query.order_by(SonarFileMeasure.file_path.asc()).all()
     issue_rows = (
-        db.query(SonarIssue)
-        .filter(SonarIssue.analysis_run_id == run.id)
+        issue_query
         .filter(or_(SonarIssue.status.is_(None), func.upper(SonarIssue.status) != "CLOSED"))
         .order_by(SonarIssue.severity.asc(), SonarIssue.file_path.asc())
         .all()

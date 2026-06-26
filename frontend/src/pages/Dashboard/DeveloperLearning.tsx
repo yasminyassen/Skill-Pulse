@@ -159,7 +159,7 @@ export default function DeveloperLearning() {
           font-family: 'Inter', system-ui, sans-serif;
           background: var(--bg-gradient);
         }
-        .learning-shell { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+        .learning-shell { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
         .learning-eyebrow {
           display: inline-flex; align-items: center; gap: 8px;
           padding: 5px 14px; border-radius: 999px;

@@ -208,6 +208,7 @@ export default function DeveloperSecurity() {
   const [aggregateBreakdownDeltas, setAggregateBreakdownDeltas] = useState<{
     code_security: number; dependency_security: number;
   } | null>(null);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -325,9 +326,6 @@ export default function DeveloperSecurity() {
         @keyframes shimmer { 0%{background-position:100% 50%} 100%{background-position:0% 50%} }
         .dim-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 24px 28px; transition: border-color 0.2s, background 0.3s ease; }
         .dim-card:hover { border-color: var(--border-hover); }
-        .skl-select { background: var(--bg-input); border: 1px solid rgba(99,102,241,0.25); border-radius: 12px; color: var(--text-primary); font-family: 'Inter', sans-serif; font-size: 13.5px; padding: 10px 14px; outline: none; cursor: pointer; transition: border-color 0.2s; min-width: 220px; }
-        .skl-select:focus { border-color: ${accent}80; }
-        .skl-select option { background: var(--bg-base); color: var(--text-primary); }
         .skl-label { font-size: 12px; font-weight: 700; color: rgba(167,139,250,0.8); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; display: block; }
         .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 32px; margin-top: 18px; }
         .skl-btn-primary { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; background: linear-gradient(135deg, ${accent}, #ec4899); border: none; border-radius: 10px; color: white; font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 16px ${accent}30; }
@@ -336,7 +334,7 @@ export default function DeveloperSecurity() {
       `}</style>
 
       <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'Inter', sans-serif", background: "var(--bg-gradient)", transition: "background 0.3s ease" }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
 
           {/* ── Header ── */}
           <div>
@@ -450,18 +448,70 @@ export default function DeveloperSecurity() {
             {loadingRepos ? (
               <div className="sk" style={{ width: 220, height: 36, borderRadius: 10 }} />
             ) : (
-              <select
-                className="skl-select"
-                value={selectedId ?? ""}
-                onChange={e => setSelectedId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">Select a repository…</option>
-                {repos.map(repo => (
-                  <option key={repo.analysis_id} value={repo.analysis_id}>
-                    {repo.repo_name} ({repo.branch}) - {repo.completed_at ? new Date(repo.completed_at).toLocaleDateString() : "latest"}
-                  </option>
-                ))}
-              </select>
+              <div style={{ position: "relative", minWidth: 220 }}>
+                <button
+                  onClick={() => setIsDropdownOpen(o => !o)}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                    width: "100%", background: "var(--bg-input)",
+                    border: `1px solid rgba(99,102,241,${isDropdownOpen ? ".6" : ".3"})`,
+                    borderRadius: 12, color: selectedId ? "var(--text-primary)" : "var(--text-muted)",
+                    fontFamily: "'Inter', sans-serif", fontSize: 13.5, padding: "10px 14px",
+                    outline: "none", cursor: "pointer", transition: "border-color .2s, box-shadow .2s",
+                    boxShadow: isDropdownOpen ? `0 0 0 3px ${accent}22` : "none", textAlign: "left",
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {selectedId
+                      ? (() => { const r = repos.find(r => r.analysis_id === selectedId); return r ? `${r.repo_name} (${r.branch}) — ${r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "latest"}` : "Select a repository…"; })()
+                      : "Select a repository…"}
+                  </span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: isDropdownOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s" }}>
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                {isDropdownOpen && <>
+                  <div onClick={() => setIsDropdownOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 90 }} />
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: "100%",
+                    maxHeight: 280, overflowY: "auto",
+                    background: "var(--bg-card)", border: "1px solid rgba(99,102,241,.35)",
+                    borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,.45)", zIndex: 100, padding: "5px",
+                  }}>
+                    <div
+                      onClick={() => { setSelectedId(null); setIsDropdownOpen(false); }}
+                      style={{
+                        padding: "9px 12px", borderRadius: 8, cursor: "pointer", fontSize: 13.5,
+                        color: !selectedId ? "#a78bfa" : "var(--text-muted)",
+                        background: !selectedId ? `${accent}18` : "transparent",
+                        fontWeight: !selectedId ? 700 : 400, transition: "background .15s, color .15s",
+                      }}
+                      onMouseEnter={e => { if (selectedId) { (e.currentTarget as HTMLDivElement).style.background = `${accent}0e`; (e.currentTarget as HTMLDivElement).style.color = "var(--text-primary)"; } }}
+                      onMouseLeave={e => { if (selectedId) { (e.currentTarget as HTMLDivElement).style.background = "transparent"; (e.currentTarget as HTMLDivElement).style.color = "var(--text-muted)"; } }}
+                    >
+                      Select a repository…
+                    </div>
+                    {repos.map(repo => (
+                      <div
+                        key={repo.analysis_id}
+                        onClick={() => { setSelectedId(repo.analysis_id); setIsDropdownOpen(false); }}
+                        style={{
+                          padding: "9px 12px", borderRadius: 8, cursor: "pointer", fontSize: 13.5,
+                          color: repo.analysis_id === selectedId ? "#a78bfa" : "var(--text-secondary)",
+                          background: repo.analysis_id === selectedId ? `${accent}18` : "transparent",
+                          fontWeight: repo.analysis_id === selectedId ? 700 : 400,
+                          transition: "background .15s, color .15s",
+                          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        }}
+                        onMouseEnter={e => { if (repo.analysis_id !== selectedId) { (e.currentTarget as HTMLDivElement).style.background = `${accent}0e`; (e.currentTarget as HTMLDivElement).style.color = "var(--text-primary)"; } }}
+                        onMouseLeave={e => { if (repo.analysis_id !== selectedId) { (e.currentTarget as HTMLDivElement).style.background = "transparent"; (e.currentTarget as HTMLDivElement).style.color = "var(--text-secondary)"; } }}
+                      >
+                        {repo.repo_name} ({repo.branch}) — {repo.completed_at ? new Date(repo.completed_at).toLocaleDateString() : "latest"}
+                      </div>
+                    ))}
+                  </div>
+                </>}
+              </div>
             )}
             {!selectedId && !loadingRepos && repos.length > 0 && (
               <span style={{ fontSize: 12, color: "var(--text-faint)", width: "100%" }}>
