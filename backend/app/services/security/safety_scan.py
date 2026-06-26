@@ -9,6 +9,34 @@ from app.core.security_mapping import CWE_TO_OWASP
 CWE = "CWE-1104"
 
 
+def _requirement_line(file_path: str, package_name: str | None) -> int | None:
+    if not package_name:
+        return None
+    normalized_package = package_name.lower().replace("_", "-")
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+            for idx, line in enumerate(fh, start=1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                candidate = stripped.split("#", 1)[0].strip()
+                for separator in ("==", ">=", "<=", "~=", "!=", ">", "<", "["):
+                    candidate = candidate.split(separator, 1)[0].strip()
+                if candidate.lower().replace("_", "-") == normalized_package:
+                    return idx
+    except OSError:
+        return None
+    return None
+
+
+def _first_present(data: dict, keys: tuple[str, ...]):
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _get_safety_version() -> int:
     # Detect installed safety major version
     try:
@@ -28,7 +56,7 @@ def _get_safety_version() -> int:
     return 3  # default fallback
 
 
-def _parse_v2(output: str, file_path: str) -> list:
+def _parse_v2(output: str, file_path: str, abs_file_path: str) -> list:
     findings = []
 
     try:
@@ -42,15 +70,24 @@ def _parse_v2(output: str, file_path: str) -> list:
                 if isinstance(obj, list):
                     for vuln in obj:
                         if isinstance(vuln, list) and len(vuln) >= 5:
+                            package_name = str(vuln[0]) if len(vuln) > 0 and vuln[0] else None
+                            package_version = str(vuln[2]) if len(vuln) > 2 and vuln[2] else None
+                            vulnerability_id = str(vuln[4]) if len(vuln) > 4 and vuln[4] else ""
+                            line_number = _requirement_line(abs_file_path, package_name)
                             findings.append({
                                 "tool": "safety",
-                                "rule": str(vuln[4]),
+                                "rule": vulnerability_id,
                                 "file_path": file_path,
                                 "severity": "HIGH",
                                 "description": vuln[3],
-                                "line_number": 0,
+                                "line_number": line_number or 0,
                                 "cwe": CWE,
                                 "owasp_category": CWE_TO_OWASP.get(CWE),
+                                "package_name": package_name,
+                                "package_version": package_version,
+                                "manifest_file": file_path,
+                                "vulnerability_id": vulnerability_id,
+                                "raw_metadata": {"safety_entry": vuln},
                             })
 
                 idx += end
@@ -63,7 +100,7 @@ def _parse_v2(output: str, file_path: str) -> list:
     return findings
 
 
-def _parse_v3(output: str, file_path: str) -> list:
+def _parse_v3(output: str, file_path: str, abs_file_path: str) -> list:
     findings = []
 
     try:
@@ -88,15 +125,32 @@ def _parse_v3(output: str, file_path: str) -> list:
         )
 
         for vuln in vulns:
+            package_name = _first_present(
+                vuln,
+                ("package_name", "package", "name", "dependency_name"),
+            )
+            package_version = _first_present(
+                vuln,
+                ("analyzed_version", "installed_version", "package_version", "version"),
+            )
+            vulnerability_id = str(vuln.get("vulnerability_id") or vuln.get("id") or "")
+            advisory_id = _first_present(vuln, ("advisory_id", "CVE", "cve", "cve_id"))
+            line_number = _requirement_line(abs_file_path, str(package_name) if package_name else None)
             findings.append({
                 "tool": "safety",
-                "rule": str(vuln.get("vulnerability_id") or vuln.get("id") or ""),
+                "rule": vulnerability_id,
                 "file_path": file_path,
                 "severity": "HIGH",
                 "description": vuln.get("advisory") or vuln.get("description") or "",
-                "line_number": 0,
+                "line_number": line_number or 0,
                 "cwe": CWE,
                 "owasp_category": CWE_TO_OWASP.get(CWE),
+                "package_name": str(package_name) if package_name else None,
+                "package_version": str(package_version) if package_version else None,
+                "manifest_file": file_path,
+                "vulnerability_id": vulnerability_id,
+                "advisory_id": str(advisory_id) if advisory_id else None,
+                "raw_metadata": vuln,
             })
 
     except Exception as e:
@@ -230,9 +284,9 @@ def run_safety(repo_path: str) -> list:
             if output.strip():
                 print(f"safety: parsing output (v{version}) for {rel_path}")
                 # try v3 first, fallback to v2
-                parsed_for_file = _parse_v3(output, rel_path)
+                parsed_for_file = _parse_v3(output, rel_path, req_file)
                 if not parsed_for_file:
-                    parsed_for_file = _parse_v2(output, rel_path)
+                    parsed_for_file = _parse_v2(output, rel_path, req_file)
                 break
 
             print("safety: no stdout, trying next command...")

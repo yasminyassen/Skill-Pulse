@@ -53,6 +53,7 @@ from app.core.auth_utils import decrypt_github_token
 from app.services.security_service import compute_security_score_breakdown, group_findings_by_severity_and_file
 from app.services.sonarqube_service import run_sonar_analysis
 from app.services.sonarqube_score_service import compute_skill_score_engine, compute_sonar_health_score
+from app.services.result_attribution import attribute_location, result_matches_contributor
 
 
 logging.basicConfig(level=logging.INFO)
@@ -144,23 +145,126 @@ class FindingModel(BaseModel):
     severity: str
     description: str
     line_number: int
+    start_line: int | None = None
+    end_line: int | None = None
+    start_column: int | None = None
+    end_column: int | None = None
     cwe: str
     owasp_category: str
+    package_name: str | None = None
+    package_version: str | None = None
+    manifest_file: str | None = None
+    vulnerability_id: str | None = None
+    advisory_id: str | None = None
+    raw_metadata: dict | None = None
+
+
+def _security_finding_to_pipeline_item(finding: SecurityFinding) -> dict:
+    return {
+        "tool": finding.tool,
+        "rule": finding.rule,
+        "file_path": finding.file_path,
+        "severity": finding.severity,
+        "description": finding.description,
+        "line_number": finding.line_number or 0,
+        "start_line": finding.start_line,
+        "end_line": finding.end_line,
+        "start_column": finding.start_column,
+        "end_column": finding.end_column,
+        "cwe": finding.cwe,
+        "owasp_category": finding.owasp_category,
+        "package_name": finding.package_name,
+        "package_version": finding.package_version,
+        "manifest_file": finding.manifest_file,
+        "vulnerability_id": finding.vulnerability_id,
+        "advisory_id": finding.advisory_id,
+        "raw_metadata": finding.raw_metadata,
+        "_attribution": {
+            "source": finding.attribution_source,
+            "contributors": finding.attributed_contributors or [],
+        },
+    }
+
+
+def _repository_security_failed_tools(run: AnalysisRun) -> list[str] | None:
+    ai_insights = run.ai_insights if isinstance(run.ai_insights, dict) else {}
+    failed_tools = ai_insights.get("failed_tools")
+    if failed_tools is None and isinstance(ai_insights.get("security_report"), dict):
+        failed_tools = ai_insights["security_report"].get("failed_tools")
+    if failed_tools is None:
+        return None
+    if not isinstance(failed_tools, list):
+        return ["unknown"]
+    return [str(tool) for tool in failed_tools if tool]
+
+
+def _repository_security_findings_for_contributor_run(db: Session, run: AnalysisRun) -> list[SecurityFinding] | None:
+    ai_insights = run.ai_insights if isinstance(run.ai_insights, dict) else {}
+    commit_candidates = {
+        str(value)
+        for value in (
+            run.commit_sha,
+            ai_insights.get("repository_commit_sha"),
+        )
+        if value
+    }
+    repository_query = (
+        db.query(AnalysisRun)
+        .filter(
+            AnalysisRun.repository_id == run.repository_id,
+            AnalysisRun.branch == run.branch,
+            AnalysisRun.analysis_scope == "repository",
+            AnalysisRun.status == "completed",
+        )
+    )
+    if commit_candidates:
+        repository_query = repository_query.filter(AnalysisRun.commit_sha.in_(commit_candidates))
+    repository_runs = repository_query.order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc()).all()
+    if not repository_runs:
+        return None
+
+    missing_metadata_runs: list[int] = []
+    failed_security_runs: list[tuple[int, list[str]]] = []
+    for repository_run in repository_runs:
+        failed_tools = _repository_security_failed_tools(repository_run)
+        if failed_tools is None:
+            missing_metadata_runs.append(repository_run.id)
+            continue
+        if failed_tools:
+            failed_security_runs.append((repository_run.id, failed_tools))
+            continue
+        return (
+            db.query(SecurityFinding)
+            .filter(SecurityFinding.analysis_run_id == repository_run.id)
+            .all()
+        )
+
+    if failed_security_runs:
+        logger.info(
+            "[run=%s] Repository security findings not reused because matching repository security scans failed failed_runs=%s",
+            run.id,
+            failed_security_runs,
+        )
+    elif missing_metadata_runs:
+        logger.info(
+            "[run=%s] Repository security findings unavailable for reuse: security completion metadata missing repository_runs=%s",
+            run.id,
+            missing_metadata_runs,
+        )
+    return None
 
 
 def _normalize_repo_path(path: str) -> str:
     return str(path or "").replace("\\", "/").lstrip("/").strip()
 
 
-def _existing_python_contribution_files(repo_path: str, touched_files: list[str] | None) -> list[str]:
+def _existing_contribution_files(repo_path: str, touched_files: list[str] | None) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     repo_root = os.path.abspath(repo_path)
 
     for path in touched_files or []:
         normalized = _normalize_repo_path(path)
-        if not normalized.endswith(".py"):
-            continue
         absolute = os.path.abspath(os.path.join(repo_path, normalized))
         try:
             if os.path.commonpath([repo_root, absolute]) != repo_root:
@@ -174,6 +278,14 @@ def _existing_python_contribution_files(repo_path: str, touched_files: list[str]
             result.append(normalized)
 
     return sorted(result)
+
+
+def _existing_python_contribution_files(repo_path: str, touched_files: list[str] | None) -> list[str]:
+    return [
+        path
+        for path in _existing_contribution_files(repo_path, touched_files)
+        if path.endswith(".py")
+    ]
 
 
 def _normalise_identity(value: object) -> str | None:
@@ -211,6 +323,7 @@ def _build_manager_contributor_scopes(
 
     for developer in developers:
         touched_files: set[str] = set()
+        python_touched_files: set[str] = set()
         matched_login: str | None = None
         matched_email: str | None = None
 
@@ -225,9 +338,11 @@ def _build_manager_contributor_scopes(
 
             for file_path in record.get("touched_files") or []:
                 if file_path:
-                    touched_files.add(str(file_path).replace("\\", "/"))
+                    normalized_path = str(file_path).replace("\\", "/")
+                    touched_files.add(normalized_path)
+                    if normalized_path.endswith(".py"):
+                        python_touched_files.add(normalized_path)
 
-        python_touched_files = sorted(path for path in touched_files if path.endswith(".py"))
         if not python_touched_files:
             continue
 
@@ -235,7 +350,7 @@ def _build_manager_contributor_scopes(
             "user_id": developer.id,
             "contributor_login": matched_login or developer.username or matched_email,
             "touched_files": sorted(touched_files),
-            "python_touched_files": python_touched_files,
+            "python_touched_files": sorted(python_touched_files),
         })
 
     return contributor_scopes
@@ -461,6 +576,10 @@ def _persist_sonar_results(
             issue_key=issue.get("key"),
             file_path=_extract_file_path_from_component_or_issue(issue.get("component")),
             line=issue.get("line") or text_range.get("startLine"),
+            start_line=text_range.get("startLine") or issue.get("line"),
+            end_line=text_range.get("endLine") or issue.get("line"),
+            start_column=text_range.get("startOffset"),
+            end_column=text_range.get("endOffset"),
             type=issue.get("type"),
             severity=issue.get("severity"),
             rule=issue.get("rule"),
@@ -475,6 +594,10 @@ def _persist_contributor_sonar_detail_rows(
     run: AnalysisRun,
     user_id: int,
     sonar_result: dict,
+    repo_path: str,
+    contributor_login: str | None,
+    touched_files: list[str] | None,
+    user: User | None,
 ) -> None:
     sonar_payload = sonar_result.get("sonar") if isinstance(sonar_result, dict) else None
     if not isinstance(sonar_payload, dict) or sonar_payload.get("error"):
@@ -522,18 +645,40 @@ def _persist_contributor_sonar_detail_rows(
         if str(issue.get("status") or "").upper() == "CLOSED":
             continue
         text_range = issue.get("textRange") or {}
+        file_path = _extract_file_path_from_component_or_issue(issue.get("component"))
+        attribution = attribute_location(
+            repo_path,
+            file_path,
+            line_number=issue.get("line") or text_range.get("startLine"),
+            start_line=text_range.get("startLine"),
+            end_line=text_range.get("endLine"),
+        )
+        if user and not result_matches_contributor(
+            file_path,
+            attribution,
+            user,
+            contributor_login,
+            {p.replace("\\", "/") for p in (touched_files or [])},
+        ):
+            continue
+        raw_issue = dict(issue)
+        raw_issue["_attribution"] = attribution
         db.add(SonarIssue(
             analysis_run_id=run.id,
             user_id=user_id,
             issue_key=issue.get("key"),
-            file_path=_extract_file_path_from_component_or_issue(issue.get("component")),
+            file_path=file_path,
             line=issue.get("line") or text_range.get("startLine"),
+            start_line=text_range.get("startLine") or issue.get("line"),
+            end_line=text_range.get("endLine") or issue.get("line"),
+            start_column=text_range.get("startOffset"),
+            end_column=text_range.get("endOffset"),
             type=issue.get("type"),
             severity=issue.get("severity"),
             rule=issue.get("rule"),
             message=issue.get("message"),
             status=issue.get("status"),
-            raw_issue=issue,
+            raw_issue=raw_issue,
         ))
 
 
@@ -634,11 +779,20 @@ def _prepare_repo_checkout(
         if os.path.isdir(os.path.join(clone_path, ".git")):
             subprocess.run(["git", "remote", "set-url", "origin", auth_repo_url], cwd=clone_path, check=True, timeout=300)
             subprocess.run(["git", "fetch", "--prune", "origin"], cwd=clone_path, check=True, timeout=300)
+            shallow = subprocess.run(
+                ["git", "rev-parse", "--is-shallow-repository"],
+                cwd=clone_path,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if (shallow.stdout or "").strip().lower() == "true":
+                subprocess.run(["git", "fetch", "--unshallow", "origin"], cwd=clone_path, check=True, timeout=300)
             subprocess.run(["git", "checkout", branch], cwd=clone_path, check=True, timeout=300)
             subprocess.run(["git", "reset", "--hard", f"origin/{branch}"], cwd=clone_path, check=True, timeout=300)
         else:
             clone_cmd = [
-                "git", "clone", "--depth", "1", "--no-tags", "--filter=blob:none",
+                "git", "clone", "--no-tags",
                 "--branch", branch, "--single-branch", auth_repo_url, clone_path,
             ]
             subprocess.run(clone_cmd, check=True, timeout=300)
@@ -648,7 +802,7 @@ def _prepare_repo_checkout(
     temp_dir = tempfile.TemporaryDirectory(prefix="repo_")
     clone_path = os.path.join(temp_dir.name, f"{repo_name}_{uuid.uuid4().hex}")
     clone_cmd = [
-        "git", "clone", "--depth", "1", "--no-tags", "--filter=blob:none",
+        "git", "clone", "--no-tags",
         "--branch", branch, "--single-branch", auth_repo_url, clone_path,
     ]
     subprocess.run(clone_cmd, check=True, timeout=300)
@@ -753,12 +907,14 @@ async def _background_analysis_task_async(
         if not run:
             logger.warning("[run=%s] Background analysis aborted: run not found", run_id)
             return
+        current_user = db.query(User).filter(User.id == current_user_id).first()
 
         clone_path = ""
         repo_context: tempfile.TemporaryDirectory | None = None
         sonar_result: dict = {}
         sonar_health_score: float | None = None
         included_sonar_files: list[str] | None = None
+        security_include_files: list[str] | None = None
         try:
             logger.info("[run=%s] Git checkout started branch=%s private=%s", run_id, branch, is_private)
             clone_path, repo_context = _prepare_repo_checkout(
@@ -775,10 +931,16 @@ async def _background_analysis_task_async(
                 included_sonar_files = _existing_python_contribution_files(clone_path, touched_files)
                 if not included_sonar_files:
                     raise Exception("No existing Python contribution files were found for this repository branch.")
+                security_include_files = _existing_contribution_files(clone_path, touched_files)
                 logger.info(
-                    "[run=%s] Contribution Sonar file scope resolved count=%d",
+                    "[run=%s] Contribution Python Sonar file scope resolved count=%d",
                     run_id,
                     len(included_sonar_files),
+                )
+                logger.info(
+                    "[run=%s] Contribution security file scope resolved count=%d",
+                    run_id,
+                    len(security_include_files),
                 )
 
             run_sonar_for_scope = finalize_run or analysis_scope == "contribution"
@@ -804,6 +966,10 @@ async def _background_analysis_task_async(
                             run,
                             current_user_id,
                             sonar_result,
+                            clone_path,
+                            contributor_login,
+                            touched_files,
+                            current_user,
                         )
                     else:
                         _persist_sonar_results(
@@ -833,7 +999,10 @@ async def _background_analysis_task_async(
                     if f.get("path", "").replace("\\", "/") in touched_set
                 ]
                 if not python_files:
-                    raise Exception("No Python files were found in your contributions for this repository.")
+                    logger.info(
+                        "[run=%s] No Python files found in contribution scope; continuing with Sonar/security results",
+                        run_id,
+                    )
 
             total_source_chars = sum(len(file_obj.get("content", "") or "") for file_obj in python_files)
             llm_payload_chars = sum(
@@ -847,22 +1016,43 @@ async def _background_analysis_task_async(
                 total_source_chars,
                 llm_payload_chars,
             )
-            if not python_files:
+            if not python_files and analysis_scope != "contribution":
                 raise Exception("No Python files were found for analysis.")
 
-            logger.info("[run=%s] Security analysis started", run_id)
-            pipeline_result = run_security_analysis(clone_path)
-            logger.info(
-                "[run=%s] Security analysis finished findings=%d failed_tools=%s",
-                run_id,
-                len(pipeline_result.get("findings", [])),
-                pipeline_result.get("failed_tools", []),
-            )
+            repository_security_findings: list[SecurityFinding] | None = None
+            if analysis_scope == "contribution":
+                repository_security_findings = _repository_security_findings_for_contributor_run(db, run)
+
+            if repository_security_findings is not None:
+                pipeline_result = {
+                    "findings": [
+                        _security_finding_to_pipeline_item(finding)
+                        for finding in repository_security_findings
+                    ],
+                    "failed_tools": [],
+                }
+                logger.info(
+                    "[run=%s] Reusing repository security findings for contributor scope findings=%d",
+                    run_id,
+                    len(pipeline_result["findings"]),
+                )
+            else:
+                logger.info("[run=%s] Security analysis started", run_id)
+                pipeline_result = run_security_analysis(
+                    clone_path,
+                    include_files=security_include_files if analysis_scope == "contribution" else None,
+                )
+                logger.info(
+                    "[run=%s] Security analysis finished findings=%d failed_tools=%s",
+                    run_id,
+                    len(pipeline_result.get("findings", [])),
+                    pipeline_result.get("failed_tools", []),
+                )
 
             llm_result = {}
 
             logger.info("[run=%s] Repository metrics extraction started", run_id)
-            analysis_result = analyze_python_files(python_files)
+            analysis_result = analyze_python_files(python_files) if python_files else {"files": [], "aggregate_metrics": {}}
             logger.info(
                 "[run=%s] Repository metrics extraction finished files=%d",
                 run_id,
@@ -881,19 +1071,35 @@ async def _background_analysis_task_async(
             findings = pipeline_result.get("findings", [])
             failed_tools = pipeline_result.get("failed_tools", [])
         finally:
-            if repo_context:
-                repo_context.cleanup()
+            pass
 
         ignored = ["venv", ".venv", "__pycache__", "migrations"]
         findings = [
             f for f in findings
             if not any(p in f.get("file_path", "") for p in ignored)
         ]
+        for finding in findings:
+            attribution_file = finding.get("file_path") or finding.get("manifest_file")
+            finding["_attribution"] = attribute_location(
+                clone_path,
+                attribution_file,
+                line_number=finding.get("line_number"),
+                start_line=finding.get("start_line"),
+                end_line=finding.get("end_line"),
+            ) if clone_path else {"source": "none", "contributors": []}
+
         if analysis_scope == "contribution":
             touched_set = {p.replace("\\", "/") for p in (touched_files or [])}
             findings = [
                 f for f in findings
-                if f.get("file_path", "").replace("\\", "/") in touched_set
+                if current_user
+                and result_matches_contributor(
+                    f.get("file_path") or f.get("manifest_file"),
+                    f.get("_attribution") or {},
+                    current_user,
+                    contributor_login,
+                    touched_set,
+                )
             ]
 
         for finding in findings:
@@ -912,7 +1118,19 @@ async def _background_analysis_task_async(
                 severity=validated.severity,
                 description=validated.description,
                 line_number=validated.line_number,
+                start_line=validated.start_line,
+                end_line=validated.end_line,
+                start_column=validated.start_column,
+                end_column=validated.end_column,
                 owasp_category=validated.owasp_category,
+                package_name=validated.package_name,
+                package_version=validated.package_version,
+                manifest_file=validated.manifest_file,
+                vulnerability_id=validated.vulnerability_id,
+                advisory_id=validated.advisory_id,
+                raw_metadata=validated.raw_metadata,
+                attribution_source=(finding.get("_attribution") or {}).get("source"),
+                attributed_contributors=(finding.get("_attribution") or {}).get("contributors"),
             ))
 
         for file_report in code_intelligence_result.get("files", []):
@@ -1189,6 +1407,8 @@ async def _background_analysis_task_async(
             "error_message": error_text,
         }
     finally:
+        if repo_context:
+            repo_context.cleanup()
         db.close()
 
 
@@ -1417,6 +1637,7 @@ async def _run_manager_contributor_analysis_after_repository(
     token: str | None,
     is_private: bool,
     manager_user_id: int,
+    manager_contributors: list[dict] | None = None,
 ):
     db = SessionLocal()
     try:
@@ -1462,27 +1683,28 @@ async def _run_manager_contributor_analysis_after_repository(
             db.query(User)
             .filter(User.role == UserRole.developer)
             .all()
-        )
+        ) if manager_contributors is None else []
     finally:
         db.close()
 
-    try:
-        commit_records = await fetch_repository_commit_contributions(
-            token,
-            full_name,
-            branch,
-        )
-    except Exception:
-        logger.exception(
-            "[run=%s] Manager contributor discovery failed; repository analysis remains completed",
-            repository_run_id,
-        )
-        return
+    if manager_contributors is None:
+        try:
+            commit_records = await fetch_repository_commit_contributions(
+                token,
+                full_name,
+                branch,
+            )
+        except Exception:
+            logger.exception(
+                "[run=%s] Manager contributor discovery failed; repository analysis remains completed",
+                repository_run_id,
+            )
+            return
 
-    manager_contributors = _build_manager_contributor_scopes(
-        registered_developers,
-        commit_records,
-    )
+        manager_contributors = _build_manager_contributor_scopes(
+            registered_developers,
+            commit_records,
+        )
     if not manager_contributors:
         logger.info(
             "[run=%s] Manager contributor analysis skipped: no registered developers with Python contributions",
@@ -1554,6 +1776,7 @@ async def _background_manager_repository_analysis_task_async(
     is_private: bool,
     manager_user_id: int,
     coverage_report_path: str | None = None,
+    manager_contributors: list[dict] | None = None,
 ):
     result = await _background_analysis_task_async(
         run_id=run_id,
@@ -1584,6 +1807,7 @@ async def _background_manager_repository_analysis_task_async(
             token=token,
             is_private=is_private,
             manager_user_id=manager_user_id,
+            manager_contributors=manager_contributors,
         )
     return result
 

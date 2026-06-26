@@ -137,6 +137,7 @@ class DocumentUploadResponse(BaseModel):
 
 class ExtractionResultResponse(BaseModel):
     document_id: int
+    repository_id: int
     status: str
     stories_extracted: int
     processed_at: Optional[datetime]

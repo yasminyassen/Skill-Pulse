@@ -6,7 +6,7 @@ from typing import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -75,6 +75,7 @@ OVERVIEW_RECOMMENDATION_KEYS = (
     "team_strengths",
     "recommended_priorities",
 )
+OVERVIEW_RECOMMENDATION_CACHE_VERSION = "manager_overview_recommendations_v1"
 DEFAULT_TREND_RANGE = "6m"
 
 SONAR_METRIC_KEYS = (
@@ -791,11 +792,22 @@ def _team_security_score_for_runs(db: Session, run_ids: list[int]) -> float | No
 
 
 def _repository_security_score(db: Session, run: AnalysisRun | None, manager_id: int) -> float | None:
-    """Return the same repo-level security score shown by Team Security Health."""
+    """Return the repository run's persisted security score.
+
+    Team security health remains contributor-specific, but repository dashboard
+    security should describe the repository analysis itself.
+    """
+    if run is None:
+        return None
+    repository_score = _score_for_run(db, run.id, manager_id)
+    repository_security = _number_or_none(getattr(repository_score, "security_awareness_score", None))
+    if repository_security is not None:
+        return repository_security
+
     team_security_run = _latest_team_security_run_for_repo(
         db,
         manager_id,
-        getattr(run, "repository_id", None),
+        run.repository_id,
     )
     if team_security_run is None:
         return None
@@ -807,8 +819,16 @@ def _latest_repository_runs(
     manager_id: int,
     repo_id: int | None = None,
 ) -> list[AnalysisRun]:
-    query = (
-        db.query(AnalysisRun)
+    row_number = func.row_number().over(
+        partition_by=AnalysisRun.repository_id,
+        order_by=(
+            AnalysisRun.completed_at.desc(),
+            AnalysisRun.triggered_at.desc(),
+            AnalysisRun.id.desc(),
+        ),
+    ).label("row_number")
+    ranked_runs = (
+        db.query(AnalysisRun.id.label("analysis_run_id"), row_number)
         .filter(
             AnalysisRun.user_id == manager_id,
             AnalysisRun.status == "completed",
@@ -816,14 +836,16 @@ def _latest_repository_runs(
         )
     )
     if repo_id is not None:
-        query = query.filter(AnalysisRun.repository_id == repo_id)
+        ranked_runs = ranked_runs.filter(AnalysisRun.repository_id == repo_id)
 
-    runs = query.order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc()).all()
-    latest: dict[int, AnalysisRun] = {}
-    for run in runs:
-        if run.repository_id not in latest:
-            latest[run.repository_id] = run
-    return sorted(latest.values(), key=_run_time, reverse=True)
+    ranked_subquery = ranked_runs.subquery()
+    return (
+        db.query(AnalysisRun)
+        .join(ranked_subquery, AnalysisRun.id == ranked_subquery.c.analysis_run_id)
+        .filter(ranked_subquery.c.row_number == 1)
+        .order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc(), AnalysisRun.id.desc())
+        .all()
+    )
 
 
 def _latest_repository_run(db: Session, manager_id: int, repo_id: int | None = None) -> AnalysisRun | None:
@@ -832,31 +854,54 @@ def _latest_repository_run(db: Session, manager_id: int, repo_id: int | None = N
 
 
 def _overview_repositories(db: Session, manager_id: int) -> list[ManagerDashboardRepo]:
-    repos: list[ManagerDashboardRepo] = []
-    for run in _latest_repository_runs(db, manager_id):
-        contributor_rows = _latest_contributor_summaries(db, manager_id, run.repository_id)
-        repos.append(
-            ManagerDashboardRepo(
-                id=run.repository.id,
-                name=run.repository.name,
-                full_name=run.repository.full_name,
-                is_private=bool(run.repository.is_private),
-                last_analyzed_at=run.completed_at,
-                analysis_count=1,
-                member_count=len({user.id for _, _, _, user in contributor_rows}),
+    latest_runs = _latest_repository_runs(db, manager_id)
+    repo_ids = [run.repository_id for run in latest_runs]
+    member_counts: dict[int, int] = {}
+    if repo_ids:
+        member_counts = {
+            int(repo_id): int(count or 0)
+            for repo_id, count in (
+                db.query(
+                    AnalysisRun.repository_id,
+                    func.count(func.distinct(ContributorAnalysisSummary.user_id)),
+                )
+                .join(ContributorAnalysisSummary, ContributorAnalysisSummary.analysis_run_id == AnalysisRun.id)
+                .join(User, ContributorAnalysisSummary.user_id == User.id)
+                .filter(
+                    AnalysisRun.user_id == manager_id,
+                    AnalysisRun.status == "completed",
+                    AnalysisRun.analysis_scope == "team_contributions",
+                    AnalysisRun.repository_id.in_(repo_ids),
+                    User.role == UserRole.developer,
+                )
+                .group_by(AnalysisRun.repository_id)
+                .all()
             )
+        }
+
+    return [
+        ManagerDashboardRepo(
+            id=run.repository.id,
+            name=run.repository.name,
+            full_name=run.repository.full_name,
+            is_private=bool(run.repository.is_private),
+            last_analyzed_at=run.completed_at,
+            analysis_count=1,
+            member_count=member_counts.get(run.repository_id, 0),
         )
-    return repos
+        for run in latest_runs
+    ]
 
 
 def _repository_summary(
     db: Session,
     run: AnalysisRun | None,
     manager_id: int,
+    score: SkillScore | None = None,
 ) -> ManagerDashboardRepositorySummary:
     if run is None:
         return ManagerDashboardRepositorySummary()
-    score = _score_for_run(db, run.id, manager_id)
+    score = score if score is not None else _score_for_run(db, run.id, manager_id)
     overall = _number_or_none(getattr(score, "overall_score", None))
     return ManagerDashboardRepositorySummary(
         analysis_run_id=run.id,
@@ -875,12 +920,15 @@ def _repository_metric_cards(
     db: Session,
     run: AnalysisRun | None,
     manager_id: int,
+    score: SkillScore | None = None,
+    summary: SonarAnalysisSummary | None = None,
+    security_score: float | None = None,
 ) -> list[ManagerDashboardMetricCard]:
-    score = _score_for_run(db, run.id, manager_id) if run else None
-    summary = _summary_for_run(db, run.id, manager_id) if run else None
+    score = score if score is not None else (_score_for_run(db, run.id, manager_id) if run else None)
+    summary = summary if summary is not None else (_summary_for_run(db, run.id, manager_id) if run else None)
     overall = _number_or_none(getattr(score, "overall_score", None))
     health = _summary_sonar_health(summary, score)
-    security = _repository_security_score(db, run, manager_id)
+    security = security_score if security_score is not None else _repository_security_score(db, run, manager_id)
     coverage = _metric_value(summary, "coverage")
     bugs = _metric_value(summary, "bugs")
     smells = _metric_value(summary, "code_smells")
@@ -1059,16 +1107,25 @@ def _build_issue_file_risks(
     return sorted(items, key=lambda item: item.count or 0, reverse=True)[:5]
 
 
-def _risk_groups(db: Session, run: AnalysisRun | None) -> ManagerDashboardRiskGroups:
+def _sonar_issue_rows(db: Session, run: AnalysisRun | None) -> list[SonarIssue]:
     if run is None:
-        return ManagerDashboardRiskGroups()
-
-    issue_rows = (
+        return []
+    return (
         db.query(SonarIssue)
         .filter(SonarIssue.analysis_run_id == run.id)
         .all()
     )
 
+
+def _risk_groups(
+    db: Session,
+    run: AnalysisRun | None,
+    issue_rows: list[SonarIssue] | None = None,
+) -> ManagerDashboardRiskGroups:
+    if run is None:
+        return ManagerDashboardRiskGroups()
+
+    issue_rows = issue_rows if issue_rows is not None else _sonar_issue_rows(db, run)
     code_smell_issues = [
         issue for issue in issue_rows
         if str(issue.type or "").upper() == "CODE_SMELL"
@@ -1118,11 +1175,38 @@ def _repository_trend_data(
     if repo_id is not None:
         repository_query = repository_query.filter(AnalysisRun.repository_id == repo_id)
     repository_runs = repository_query.order_by(AnalysisRun.completed_at.asc(), AnalysisRun.triggered_at.asc()).all()
+    repository_run_ids = [run.id for run in repository_runs]
+    summaries_by_run = {
+        summary.analysis_run_id: summary
+        for summary in (
+            db.query(SonarAnalysisSummary)
+            .filter(
+                SonarAnalysisSummary.analysis_run_id.in_(repository_run_ids),
+                SonarAnalysisSummary.user_id == manager_id,
+            )
+            .all()
+            if repository_run_ids
+            else []
+        )
+    }
+    scores_by_run = {
+        score.analysis_run_id: score
+        for score in (
+            db.query(SkillScore)
+            .filter(
+                SkillScore.analysis_run_id.in_(repository_run_ids),
+                SkillScore.user_id == manager_id,
+            )
+            .all()
+            if repository_run_ids
+            else []
+        )
+    }
 
     for run in repository_runs:
         period, label = _overview_trend_bucket(_run_time(run), granularity)
-        summary = _summary_for_run(db, run.id, manager_id)
-        score = _score_for_run(db, run.id, manager_id)
+        summary = summaries_by_run.get(run.id)
+        score = scores_by_run.get(run.id)
         health = _summary_sonar_health(summary, score)
         grouped[period]["_label"] = [label]  # type: ignore[assignment]
         if health is not None:
@@ -1139,10 +1223,28 @@ def _repository_trend_data(
     if repo_id is not None:
         security_query = security_query.filter(AnalysisRun.repository_id == repo_id)
     security_runs = security_query.order_by(AnalysisRun.completed_at.asc(), AnalysisRun.triggered_at.asc()).all()
+    security_run_ids = [run.id for run in security_runs]
+    security_by_run: dict[int, float | None] = {run_id: None for run_id in security_run_ids}
+    if security_run_ids:
+        grouped_scores: dict[int, list[float]] = defaultdict(list)
+        for run_id, score in (
+            db.query(SkillScore.analysis_run_id, SkillScore.security_awareness_score)
+            .join(User, SkillScore.user_id == User.id)
+            .filter(
+                SkillScore.analysis_run_id.in_(security_run_ids),
+                User.role == UserRole.developer,
+            )
+            .all()
+        ):
+            grouped_scores[int(run_id)].append(float(score or 0.0))
+        security_by_run = {
+            run_id: _round_score(_avg(values)) if values else None
+            for run_id, values in grouped_scores.items()
+        }
 
     for run in security_runs:
         period, label = _overview_trend_bucket(_run_time(run), granularity)
-        security = _team_security_score_for_runs(db, [run.id])
+        security = security_by_run.get(run.id)
         grouped[period]["_label"] = grouped[period].get("_label") or [label]  # type: ignore[assignment]
         if security is not None:
             grouped[period]["security_score"].append(float(security))
@@ -1207,6 +1309,55 @@ def _normalise_overview_recommendations(raw: object) -> ManagerDashboardRecommen
     return recommendations
 
 
+def _overview_recommendation_cache_key(
+    repository_run: AnalysisRun | None,
+    contributor_rows: list[ScoreRow],
+) -> dict:
+    contributor_run_ids = sorted({int(row[1].id) for row in contributor_rows if row[1] is not None})
+    return {
+        "version": OVERVIEW_RECOMMENDATION_CACHE_VERSION,
+        "repository_analysis_run_id": int(repository_run.id) if repository_run else None,
+        "contributor_analysis_run_ids": contributor_run_ids,
+    }
+
+
+def _cached_overview_recommendations(
+    repository_run: AnalysisRun | None,
+    cache_key: dict,
+) -> ManagerDashboardRecommendations | None:
+    if repository_run is None or not isinstance(repository_run.ai_insights, dict):
+        return None
+    cached = repository_run.ai_insights.get("manager_overview_recommendations")
+    if not isinstance(cached, dict) or cached.get("cache_key") != cache_key:
+        return None
+    data = cached.get("data")
+    if not isinstance(data, dict):
+        return None
+    try:
+        return ManagerDashboardRecommendations(**data)
+    except Exception:
+        return None
+
+
+def _store_overview_recommendations(
+    db: Session,
+    repository_run: AnalysisRun | None,
+    cache_key: dict,
+    recommendations: ManagerDashboardRecommendations,
+) -> None:
+    if repository_run is None:
+        return
+    ai_insights = dict(repository_run.ai_insights) if isinstance(repository_run.ai_insights, dict) else {}
+    ai_insights["manager_overview_recommendations"] = {
+        "cache_key": cache_key,
+        "data": _model_to_dict(recommendations),
+    }
+    repository_run.ai_insights = ai_insights
+    flag_modified(repository_run, "ai_insights")
+    db.add(repository_run)
+    db.commit()
+
+
 def _sonar_summary_payload(summary: SonarAnalysisSummary | None, score: SkillScore | None, security_score: float | None) -> dict:
     if summary is None and score is None:
         return {}
@@ -1237,12 +1388,23 @@ def _file_measure_risk_score(row: SonarFileMeasure) -> float:
 
 
 def _top_risky_files_payload(db: Session, run: AnalysisRun) -> list[dict]:
+    risk_score = (
+        func.coalesce(SonarFileMeasure.cognitive_complexity, 0.0)
+        + func.coalesce(SonarFileMeasure.complexity, 0.0)
+        + func.coalesce(SonarFileMeasure.duplicated_lines_density, 0.0)
+        + case(
+            (SonarFileMeasure.coverage.is_not(None), (100.0 - SonarFileMeasure.coverage) / 2.0),
+            else_=0.0,
+        )
+    )
     rows = (
         db.query(SonarFileMeasure)
         .filter(SonarFileMeasure.analysis_run_id == run.id)
+        .filter(risk_score > 0)
+        .order_by(risk_score.desc())
+        .limit(10)
         .all()
     )
-    ranked = sorted(rows, key=_file_measure_risk_score, reverse=True)
     return [
         {
             "file_path": row.file_path,
@@ -1255,17 +1417,31 @@ def _top_risky_files_payload(db: Session, run: AnalysisRun) -> list[dict]:
             "functions": _number_or_none(row.functions),
             "classes": _number_or_none(row.classes),
         }
-        for row in ranked[:10]
-        if _file_measure_risk_score(row) > 0
+        for row in rows
     ]
 
 
-def _top_sonar_issues_payload(db: Session, run: AnalysisRun) -> list[dict]:
-    rows = (
-        db.query(SonarIssue)
-        .filter(SonarIssue.analysis_run_id == run.id)
-        .all()
-    )
+def _top_sonar_issues_payload(
+    db: Session,
+    run: AnalysisRun,
+    issue_rows: list[SonarIssue] | None = None,
+) -> list[dict]:
+    rows = issue_rows
+    if rows is None:
+        severity_rank = case(
+            (func.upper(SonarIssue.severity) == "CRITICAL", 3),
+            (func.upper(SonarIssue.severity) == "HIGH", 3),
+            (func.upper(SonarIssue.severity) == "MEDIUM", 2),
+            (func.upper(SonarIssue.severity) == "LOW", 1),
+            else_=2,
+        )
+        rows = (
+            db.query(SonarIssue)
+            .filter(SonarIssue.analysis_run_id == run.id)
+            .order_by(severity_rank.desc(), SonarIssue.type.desc())
+            .limit(15)
+            .all()
+        )
     ranked = sorted(rows, key=lambda issue: (_severity_rank(issue.severity), str(issue.type or "")), reverse=True)
     return [
         {
@@ -1286,9 +1462,18 @@ def _top_security_findings_payload(db: Session, run: AnalysisRun) -> list[dict]:
     rows = (
         db.query(SecurityFinding)
         .filter(SecurityFinding.analysis_run_id == run.id)
+        .order_by(
+            case(
+                (func.upper(SecurityFinding.severity) == "CRITICAL", 3),
+                (func.upper(SecurityFinding.severity) == "HIGH", 3),
+                (func.upper(SecurityFinding.severity) == "MEDIUM", 2),
+                (func.upper(SecurityFinding.severity) == "LOW", 1),
+                else_=2,
+            ).desc()
+        )
+        .limit(15)
         .all()
     )
-    ranked = sorted(rows, key=lambda finding: _severity_rank(finding.severity), reverse=True)
     return [
         {
             "tool": finding.tool,
@@ -1300,7 +1485,7 @@ def _top_security_findings_payload(db: Session, run: AnalysisRun) -> list[dict]:
             "line_number": finding.line_number,
             "owasp_category": finding.owasp_category,
         }
-        for finding in ranked[:15]
+        for finding in rows
     ]
 
 
@@ -1331,12 +1516,16 @@ def _repository_manager_recommendation_payload(
     manager_id: int,
     contributor_rows: list[ScoreRow],
     risks: ManagerDashboardRiskGroups,
+    score: SkillScore | None = None,
+    summary: SonarAnalysisSummary | None = None,
+    security_score: float | None = None,
+    issue_rows: list[SonarIssue] | None = None,
 ) -> dict:
     if run is None:
         return {}
-    score = _score_for_run(db, run.id, manager_id)
-    summary = _summary_for_run(db, run.id, manager_id)
-    security_score = _repository_security_score(db, run, manager_id)
+    score = score if score is not None else _score_for_run(db, run.id, manager_id)
+    summary = summary if summary is not None else _summary_for_run(db, run.id, manager_id)
+    security_score = security_score if security_score is not None else _repository_security_score(db, run, manager_id)
     return {
         "repository": {
             "id": run.repository.id,
@@ -1347,7 +1536,7 @@ def _repository_manager_recommendation_payload(
         },
         "scores": _sonar_summary_payload(summary, score, security_score),
         "top_risky_files": _top_risky_files_payload(db, run),
-        "top_sonar_issues": _top_sonar_issues_payload(db, run),
+        "top_sonar_issues": _top_sonar_issues_payload(db, run, issue_rows=issue_rows),
         "top_security_findings": _top_security_findings_payload(db, run),
         "contributors": _contributor_recommendation_payload(contributor_rows, run.repository_id),
         "risk_groups": _model_to_dict(risks),
@@ -1360,16 +1549,31 @@ async def _overview_recommendations(
     manager_id: int,
     contributor_rows: list[ScoreRow],
     risks: ManagerDashboardRiskGroups,
+    score: SkillScore | None = None,
+    summary: SonarAnalysisSummary | None = None,
+    security_score: float | None = None,
+    issue_rows: list[SonarIssue] | None = None,
 ) -> ManagerDashboardRecommendations:
+    cache_key = _overview_recommendation_cache_key(repository_run, contributor_rows)
+    cached = _cached_overview_recommendations(repository_run, cache_key)
+    if cached is not None:
+        return cached
+
     payload = _repository_manager_recommendation_payload(
         db=db,
         run=repository_run,
         manager_id=manager_id,
         contributor_rows=contributor_rows,
         risks=risks,
+        score=score,
+        summary=summary,
+        security_score=security_score,
+        issue_rows=issue_rows,
     )
     raw = await run_in_threadpool(generate_repository_manager_recommendations, payload)
-    return _normalise_overview_recommendations(raw)
+    recommendations = _normalise_overview_recommendations(raw)
+    _store_overview_recommendations(db, repository_run, cache_key, recommendations)
+    return recommendations
 
 
 @router.get("/overview", response_model=ManagerDashboardOverview)
@@ -1388,14 +1592,31 @@ async def get_manager_dashboard_overview(
     team_rows = _query_manager_score_rows(db, current_user.id, effective_repo_id)
     contributors = _contributor_rows(db, team_rows)
     team_performance = _team_performance(contributors)
-    repository_metrics = _repository_metric_cards(db, repository_run, current_user.id)
-    risks = _risk_groups(db, repository_run)
+    repository_score = _score_for_run(db, repository_run.id, current_user.id) if repository_run else None
+    repository_summary_row = _summary_for_run(db, repository_run.id, current_user.id) if repository_run else None
+    repository_security_score = _number_or_none(getattr(repository_score, "security_awareness_score", None))
+    if repository_security_score is None:
+        repository_security_score = _repository_security_score(db, repository_run, current_user.id)
+    issue_rows = _sonar_issue_rows(db, repository_run)
+    repository_metrics = _repository_metric_cards(
+        db,
+        repository_run,
+        current_user.id,
+        score=repository_score,
+        summary=repository_summary_row,
+        security_score=repository_security_score,
+    )
+    risks = _risk_groups(db, repository_run, issue_rows=issue_rows)
     recommendations = await _overview_recommendations(
         db=db,
         repository_run=repository_run,
         manager_id=current_user.id,
         contributor_rows=team_rows,
         risks=risks,
+        score=repository_score,
+        summary=repository_summary_row,
+        security_score=repository_security_score,
+        issue_rows=issue_rows,
     )
 
     if team_performance.best_contributor and recommendations.best_contributor_reasoning:
@@ -1405,7 +1626,7 @@ async def get_manager_dashboard_overview(
 
     return ManagerDashboardOverview(
         repositories=repositories,
-        repository_summary=_repository_summary(db, repository_run, current_user.id),
+        repository_summary=_repository_summary(db, repository_run, current_user.id, score=repository_score),
         repository_metrics=repository_metrics,
         team_performance=team_performance,
         contributors=contributors,

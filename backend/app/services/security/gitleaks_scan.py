@@ -111,8 +111,22 @@ def run_gitleaks(repo_path):
             "severity": "HIGH",
             "description": issue.get("Description"),
             "line_number": issue.get("StartLine"),
+            "start_line": issue.get("StartLine"),
+            "end_line": issue.get("EndLine"),
+            "start_column": issue.get("StartColumn"),
+            "end_column": issue.get("EndColumn"),
             "cwe": cwe,
-            "owasp_category": owasp
+            "owasp_category": owasp,
+            "raw_metadata": {
+                "fingerprint": issue.get("Fingerprint"),
+                "commit": issue.get("Commit"),
+                "author": issue.get("Author"),
+                "email": issue.get("Email"),
+                "date": issue.get("Date"),
+                "entropy": issue.get("Entropy"),
+                "match": issue.get("Match"),
+                "secret": issue.get("Secret"),
+            },
         })
 
     return findings

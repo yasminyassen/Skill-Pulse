@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.auth_utils import require_role
@@ -61,6 +62,47 @@ def _latest_manager_runs_by_repo(db: Session, manager_id: int) -> list[AnalysisR
         if run.repository_id not in latest:
             latest[run.repository_id] = run
     return list(latest.values())
+
+
+def _latest_repository_runs_by_repo(db: Session, manager_id: int) -> list[AnalysisRun]:
+    row_number = func.row_number().over(
+        partition_by=AnalysisRun.repository_id,
+        order_by=(
+            AnalysisRun.completed_at.desc(),
+            AnalysisRun.triggered_at.desc(),
+            AnalysisRun.id.desc(),
+        ),
+    ).label("row_number")
+    ranked_runs = (
+        db.query(AnalysisRun.id.label("analysis_run_id"), row_number)
+        .filter(
+            AnalysisRun.user_id == manager_id,
+            AnalysisRun.analysis_scope == "repository",
+            AnalysisRun.status == "completed",
+        )
+        .subquery()
+    )
+    return (
+        db.query(AnalysisRun)
+        .join(ranked_runs, AnalysisRun.id == ranked_runs.c.analysis_run_id)
+        .filter(ranked_runs.c.row_number == 1)
+        .order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc(), AnalysisRun.id.desc())
+        .all()
+    )
+
+
+def _latest_repository_run_for_repo(db: Session, manager_id: int, repo_id: int) -> AnalysisRun | None:
+    return (
+        db.query(AnalysisRun)
+        .filter(
+            AnalysisRun.user_id == manager_id,
+            AnalysisRun.repository_id == repo_id,
+            AnalysisRun.analysis_scope == "repository",
+            AnalysisRun.status == "completed",
+        )
+        .order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc(), AnalysisRun.id.desc())
+        .first()
+    )
 
 
 def _latest_manager_run_for_repo(db: Session, manager_id: int, repo_id: int) -> AnalysisRun | None:
@@ -173,19 +215,33 @@ def _risk_breakdown(findings: list[SecurityFinding]) -> SecurityRiskBreakdown:
     return SecurityRiskBreakdown(high=high, medium=medium, low=low, total=high + medium + low)
 
 
-def _security_score_for_runs(db: Session, run_ids: list[int]) -> float:
+def _repository_security_scores_for_runs(db: Session, run_ids: list[int], manager_id: int) -> dict[int, float]:
     if not run_ids:
-        return 0.0
+        return {}
     rows = (
-        db.query(SkillScore.security_awareness_score)
-        .join(User, SkillScore.user_id == User.id)
+        db.query(SkillScore.analysis_run_id, SkillScore.security_awareness_score)
         .filter(
             SkillScore.analysis_run_id.in_(run_ids),
-            User.role == UserRole.developer,
+            SkillScore.user_id == manager_id,
         )
         .all()
     )
-    return _round_score(_avg([float(row[0] or 0.0) for row in rows]))
+    return {
+        int(run_id): _round_score(float(score or 0.0))
+        for run_id, score in rows
+    }
+
+
+def _repository_security_score_for_run(db: Session, run: AnalysisRun | None, manager_id: int) -> float:
+    if run is None:
+        return 0.0
+    scores = _repository_security_scores_for_runs(db, [run.id], manager_id)
+    return scores.get(run.id, 0.0)
+
+
+def _average_repository_security_score(db: Session, runs: list[AnalysisRun], manager_id: int) -> float:
+    scores = _repository_security_scores_for_runs(db, [run.id for run in runs], manager_id)
+    return _round_score(_avg([scores.get(run.id, 0.0) for run in runs]))
 
 
 def _issue_title(finding: SecurityFinding) -> str:
@@ -443,7 +499,8 @@ def get_manager_security_repos(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["manager"])),
 ):
-    latest_runs = _latest_manager_runs_by_repo(db, current_user.id)
+    latest_runs = _latest_repository_runs_by_repo(db, current_user.id)
+    scores = _repository_security_scores_for_runs(db, [run.id for run in latest_runs], current_user.id)
     result: list[ManagerSecurityRepo] = []
     for run in sorted(latest_runs, key=_run_time, reverse=True):
         findings = _dedupe_findings(_findings_for_runs(db, [run.id]))
@@ -454,7 +511,7 @@ def get_manager_security_repos(
                 full_name=run.repository.full_name,
                 is_private=bool(run.repository.is_private),
                 last_analyzed_at=run.completed_at,
-                security_score=_security_score_for_runs(db, [run.id]),
+                security_score=scores.get(run.id, 0.0),
                 total_issues=len(findings),
             )
         )
@@ -466,23 +523,25 @@ def get_team_security_overview(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["manager"])),
 ):
-    latest_runs = _latest_manager_runs_by_repo(db, current_user.id)
-    run_ids = [run.id for run in latest_runs]
-    run_repo_ids = {run.id: run.repository_id for run in latest_runs}
-    findings = _dedupe_findings(_findings_for_runs(db, run_ids))
+    latest_repository_runs = _latest_repository_runs_by_repo(db, current_user.id)
+    latest_team_runs = _latest_manager_runs_by_repo(db, current_user.id)
+    repository_run_ids = [run.id for run in latest_repository_runs]
+    team_run_ids = [run.id for run in latest_team_runs]
+    run_repo_ids = {run.id: run.repository_id for run in latest_repository_runs}
+    findings = _dedupe_findings(_findings_for_runs(db, repository_run_ids))
     breakdown = _risk_breakdown(findings)
     common = _common_issues(findings, run_repo_ids)
-    members = _member_scores(db, run_ids)
+    members = _member_scores(db, team_run_ids)
 
     return TeamSecurityOverview(
-        overall_score=_security_score_for_runs(db, run_ids),
-        repository_count=len(latest_runs),
+        overall_score=_average_repository_security_score(db, latest_repository_runs, current_user.id),
+        repository_count=len(latest_repository_runs),
         total_issues=breakdown.total,
         team_members=len(members),
         risk_breakdown=breakdown,
         trend=_trend(db, current_user.id),
         common_issues=common,
-        systemic_risk_analysis=_systemic_analysis(common, len(latest_runs)),
+        systemic_risk_analysis=_systemic_analysis(common, len(latest_repository_runs)),
         why_this_matters=_why_this_matters(),
         members=members,
     )
@@ -494,21 +553,27 @@ def get_repository_security_detail(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["manager"])),
 ):
-    run = _latest_manager_run_for_repo(db, current_user.id, repo_id)
+    run = _latest_repository_run_for_repo(db, current_user.id, repo_id)
     if not run:
         raise HTTPException(status_code=404, detail="Repository security analysis not found")
 
     findings = _dedupe_findings(_findings_for_runs(db, [run.id]))
-    previous_run = _previous_manager_run_for_repo(db, current_user.id, repo_id, run.id)
-    previous_findings = _dedupe_findings(_findings_for_runs(db, [previous_run.id])) if previous_run else []
     breakdown = _risk_breakdown(findings)
-    score = _security_score_for_runs(db, [run.id])
+    score = _repository_security_score_for_run(db, run, current_user.id)
+    team_run = _latest_manager_run_for_repo(db, current_user.id, repo_id)
+    team_findings = _dedupe_findings(_findings_for_runs(db, [team_run.id])) if team_run else []
+    previous_team_run = (
+        _previous_manager_run_for_repo(db, current_user.id, repo_id, team_run.id)
+        if team_run
+        else None
+    )
+    previous_team_findings = _dedupe_findings(_findings_for_runs(db, [previous_team_run.id])) if previous_team_run else []
     users_by_id = {
         user.id: user
         for user in (
             db.query(User)
             .join(SkillScore, SkillScore.user_id == User.id)
-            .filter(SkillScore.analysis_run_id == run.id)
+            .filter(SkillScore.analysis_run_id == (team_run.id if team_run else run.id))
             .all()
         )
     }
@@ -539,6 +604,10 @@ def get_repository_security_detail(
         release_readiness=_release_readiness(run.repository.name, breakdown),
         detected_vulnerabilities=vulnerabilities[:10],
         recommended_actions=_recommended_actions(breakdown, common),
-        contributor_impacts=_contributor_impacts(db, run.id, findings, previous_findings),
+        contributor_impacts=(
+            _contributor_impacts(db, team_run.id, team_findings, previous_team_findings)
+            if team_run
+            else []
+        ),
         issues_by_contributor=grouped_by_severity,
     )

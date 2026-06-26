@@ -35,7 +35,7 @@ def run_semgrep(repo_path):
         )
 
     print(f"semgrep: using executable => {semgrep_path}")
-    print("semgrep: config=p/security-audit, include=*.py, exclude=tests")
+    print("semgrep: config=p/security-audit, exclude=tests")
 
     result = subprocess.run(
         [
@@ -45,8 +45,6 @@ def run_semgrep(repo_path):
             "--json",
             "--exclude",
             "tests",
-            "--include",
-            "*.py",
             repo_path
         ],
         capture_output=True,
@@ -81,7 +79,10 @@ def run_semgrep(repo_path):
 
     for issue in raw_results:
 
-        metadata = issue.get("extra", {}).get("metadata", {}) or {}
+        extra = issue.get("extra", {}) or {}
+        metadata = extra.get("metadata", {}) or {}
+        start = issue.get("start", {}) or {}
+        end = issue.get("end", {}) or {}
 
         cwe = metadata.get("cwe")
 
@@ -109,11 +110,22 @@ def run_semgrep(repo_path):
             "tool": "semgrep",
             "rule": issue["check_id"],
             "file_path": file_path,
-            "severity": issue["extra"]["severity"],
-            "description": issue["extra"]["message"],
-            "line_number": issue["start"]["line"],
+            "severity": extra.get("severity"),
+            "description": extra.get("message"),
+            "line_number": start.get("line"),
+            "start_line": start.get("line"),
+            "end_line": end.get("line"),
+            "start_column": start.get("col"),
+            "end_column": end.get("col"),
             "cwe": cwe,
-            "owasp_category": owasp
+            "owasp_category": owasp,
+            "raw_metadata": {
+                "metadata": metadata,
+                "fingerprint": extra.get("fingerprint"),
+                "lines": extra.get("lines"),
+                "start": start,
+                "end": end,
+            },
         })
 
     return findings
