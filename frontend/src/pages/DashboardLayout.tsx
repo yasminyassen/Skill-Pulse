@@ -127,7 +127,7 @@ const navByRole: Record<string, NavItem[]> = {
     { label: "Team Dashboard",      path: "/dashboard/manager/team",           icon: icons.team         },
   ],
   recruiter: [
-    { label: "Repository Analysis", path: "/dashboard/recruiter/analysis",    icon: icons.repo         },
+    { label: "Repository Analysis", path: "/dashboard/recruiter",    icon: icons.repo         },
     { label: "Profile",             path: "/dashboard/recruiter/profile",      icon: icons.profile      },
     { label: "Candidate View",      path: "/dashboard/recruiter/candidates",   icon: icons.candidate    },
   ],

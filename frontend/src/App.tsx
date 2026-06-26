@@ -71,7 +71,6 @@ function App() {
 
           {/* ── Recruiter routes ── */}
           <Route path="/dashboard/recruiter" element={<RecruiterDashboard />} />
-          <Route path="/dashboard/recruiter/analysis" element={<RecruiterDashboard />} />
           <Route path="/dashboard/recruiter/profile" element={<RecruiterProfile />} />
           <Route path="/dashboard/recruiter/account-settings" element={<RecruiterAccountSettings />} />
           <Route path="/dashboard/recruiter/candidates" element={<CandidateEvaluation />} />

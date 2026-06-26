@@ -137,11 +137,6 @@ const qualityGateColor = (gate?: string | null) => {
   return "#94a3b8";
 };
 
-const sonarStateLabel = (state?: string | null) => {
-  if (!state) return "Unavailable";
-  return state.replace(/_/g, " ");
-};
-
 const CheckIcon = () => (
   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="20 6 9 17 4 12" />

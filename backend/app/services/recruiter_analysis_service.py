@@ -26,6 +26,7 @@ async def schedule_recruiter_repo_analysis(
     repo_name: str,
     branch: str,
     force_reanalyze: bool,
+    task_id: int | None = None,
 ) -> dict[str, Any]:
     analysis_version = settings.analysis_version
 
@@ -110,6 +111,14 @@ async def schedule_recruiter_repo_analysis(
         if existing_analysis.last_run_id:
             existing_run = db.query(AnalysisRun).filter(AnalysisRun.id == existing_analysis.last_run_id).first()
             if existing_run:
+                existing_candidate = (
+                    db.query(RecruiterCandidate)
+                    .filter(RecruiterCandidate.analysis_run_id == existing_run.id)
+                    .first()
+                )
+                if existing_candidate and task_id and existing_candidate.task_id is None:
+                    existing_candidate.task_id = task_id
+                    db.commit()
                 sonar_summary = build_sonar_repo_summary(existing_run)
                 score_row = (
                     db.query(SkillScore)
@@ -189,6 +198,7 @@ async def schedule_recruiter_repo_analysis(
 
     db.add(RecruiterCandidate(
         analysis_run_id=run.id,
+        task_id=task_id,
         candidate_name=candidate_name,
         github_login=None,
     ))
