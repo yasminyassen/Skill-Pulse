@@ -102,6 +102,12 @@ def run_bandit(repo_path):
 
         raw_path = issue.get("filename") or ""
         file_path = _relative_path(raw_path, repo_path) if raw_path else "unknown"
+        line_range = issue.get("line_range")
+        start_line = None
+        end_line = None
+        if isinstance(line_range, list) and len(line_range) >= 2:
+            start_line = line_range[0]
+            end_line = line_range[-1]
 
         findings.append({
             "tool": "bandit",
@@ -110,8 +116,21 @@ def run_bandit(repo_path):
             "severity": issue.get("issue_severity"),
             "description": issue.get("issue_text"),
             "line_number": issue.get("line_number"),
+            "start_line": start_line,
+            "end_line": end_line,
+            "start_column": issue.get("col_offset"),
+            "end_column": issue.get("end_col_offset"),
             "cwe": cwe,
             "owasp_category": owasp,
+            "raw_metadata": {
+                "test_name": issue.get("test_name"),
+                "issue_confidence": issue.get("issue_confidence"),
+                "code": issue.get("code"),
+                "more_info": issue.get("more_info"),
+                "line_range": issue.get("line_range"),
+                "col_offset": issue.get("col_offset"),
+                "end_col_offset": issue.get("end_col_offset"),
+            },
         })
 
     return findings

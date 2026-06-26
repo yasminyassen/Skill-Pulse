@@ -1,7 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 import api from "../api/auth";
 import DashboardLayout from "./DashboardLayout";
-import { ExtractedRequirementsReviewModal, PrdUploadDropZone } from "../components/requirements/PrdWorkflow";
+import {
+  ExtractedRequirementsReviewModal,
+  fingerprintPrdFile,
+  isKnownSamePrd,
+  PrdUploadDropZone,
+  readStoredPrdFingerprint,
+  rememberPrdFingerprint,
+  requirementsStateFromUpload,
+} from "../components/requirements/PrdWorkflow";
+import type { PrdFingerprint, RequirementsState } from "../components/requirements/PrdWorkflow";
 
 interface Analysis {
   analysis_id: number;
@@ -128,6 +137,8 @@ export default function RepositoryAnalysis() {
   const [prdDocId, setPrdDocId]             = useState<number | null>(null);
   const [prdStories, setPrdStories]         = useState<UserStory[]>([]);
   const [showPrdModal, setShowPrdModal]     = useState(false);
+  const [openingPrdReview, setOpeningPrdReview] = useState(false);
+  const [currentPrdFingerprint, setCurrentPrdFingerprint] = useState<PrdFingerprint | null>(null);
   const [selectedRepoForPrd, setSelectedRepoForPrd] = useState<number | "">("");
   const [analysisMode, setAnalysisMode] = useState<"analyze" | "requirements">("analyze");
   const [requirementsRepoId, setRequirementsRepoId] = useState<number | null>(null);
@@ -135,6 +146,7 @@ export default function RepositoryAnalysis() {
   const [requirementsAnalysisMsg, setRequirementsAnalysisMsg] = useState("");
   const [reviewContributors, setReviewContributors] = useState<Contributor[]>([]);
   const [requirementsConfirmed, setRequirementsConfirmed] = useState(false);
+  const [requirementsState, setRequirementsState] = useState<RequirementsState | null>(null);
 
   const [editModal, setEditModal]   = useState<EditState>({ isOpen: false, type: 'story', storyId: 0, text: "", title: "" });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -217,6 +229,57 @@ export default function RepositoryAnalysis() {
     }
   };
 
+  const fetchRequirementsState = async (repoId: number) => {
+    try {
+      const res = await api.get(`/requirements/repositories/${repoId}/requirements-state`);
+      setRequirementsState(res.data);
+      setRequirementsConfirmed(Boolean(res.data?.requirements_confirmed));
+      if (res.data?.document_id) {
+        setPrdDocId(res.data.document_id);
+      }
+      setCurrentPrdFingerprint(readStoredPrdFingerprint(res.data?.repository_id, res.data?.document_id));
+      if (res.data?.requirements_confirmed) {
+        setRequirementsAnalysisMsg(`Requirements confirmed for ${res.data.original_filename || "uploaded PRD"}.`);
+      } else if (res.data?.requirements_extracted) {
+        setRequirementsAnalysisMsg(`Requirements extracted from ${res.data.original_filename || "uploaded PRD"}. Review and confirm to continue.`);
+      }
+      return res.data;
+    } catch {
+      setRequirementsState(null);
+      return null;
+    }
+  };
+
+  const openExtractedRequirementsReview = async () => {
+    const docId = prdDocId || requirementsState?.document_id;
+    if (!docId) {
+      showToast("No extracted requirements are available to review.", "error");
+      return;
+    }
+    setOpeningPrdReview(true);
+    try {
+      if (!prdStories.length || prdDocId !== docId) {
+        const storiesRes = await api.get(`/requirements/${docId}/stories`);
+        setPrdStories(storiesRes.data);
+        setPrdDocId(docId);
+      }
+      const repoId = requirementsRepoId || requirementsState?.repository_id;
+      if (repoId && !reviewContributors.length) {
+        fetchReviewContributors(repoId);
+      }
+      setShowPrdModal(true);
+    } catch (err) {
+      console.error(err);
+      const repoId = requirementsRepoId || requirementsState?.repository_id;
+      if (repoId) {
+        await fetchRequirementsState(repoId);
+      }
+      showToast("Could not reopen extracted requirements.", "error");
+    } finally {
+      setOpeningPrdReview(false);
+    }
+  };
+
   const handleReviewTaskPatch = async (taskId: number, patch: Partial<TechnicalTask>) => {
     try {
       const res = await api.patch(`/requirements/tasks/${taskId}`, patch);
@@ -234,7 +297,31 @@ export default function RepositoryAnalysis() {
 
   const handlePrdUpload = async (f: File) => {
     if (analysisMode === "requirements" && !repoUrl.trim()) { alert("Enter a GitHub repository URL before uploading the PRD."); return; }
-    setFile(f); setUploadingPrd(true);
+    const nextFingerprint = await fingerprintPrdFile(f);
+    const activeRequirementsState = requirementsState;
+    if (isKnownSamePrd(f, activeRequirementsState, currentPrdFingerprint, nextFingerprint)) {
+      setFile(f);
+      showToast(activeRequirementsState?.requirements_confirmed ? "This PRD is already confirmed for this repository." : "This PRD is already extracted. Use Review Requirements to continue.", "success");
+      if (!activeRequirementsState?.requirements_confirmed) {
+        openExtractedRequirementsReview();
+      }
+      return;
+    }
+    const previousRequirementsState = activeRequirementsState;
+    const previousPrdDocId = prdDocId;
+    const previousPrdStories = prdStories;
+    const previousRequirementsConfirmed = requirementsConfirmed;
+    const previousRequirementsAnalysisReady = requirementsAnalysisReady;
+    const previousRequirementsAnalysisMsg = requirementsAnalysisMsg;
+    setFile(f);
+    setUploadingPrd(true);
+    setPrdDocId(null);
+    setPrdStories([]);
+    setShowPrdModal(false);
+    setRequirementsConfirmed(false);
+    setRequirementsState(prev => prev ? { ...prev, has_prd: false, requirements_extracted: false, requirements_confirmed: false, original_filename: f.name } : null);
+    setRequirementsAnalysisReady(false);
+    setRequirementsAnalysisMsg(`Extracting requirements from ${f.name}...`);
     try {
       const formData = new FormData();
       formData.append("file", f);
@@ -242,6 +329,12 @@ export default function RepositoryAnalysis() {
       else formData.append("repo_url", repoUrl.trim());
       const uploadRes = await api.post("/requirements/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
       const docId = uploadRes.data.document_id;
+      if (uploadRes.data.repository_id) {
+        setRequirementsRepoId(uploadRes.data.repository_id);
+      }
+      const repoIdForFingerprint = uploadRes.data.repository_id || requirementsRepoId;
+      setRequirementsState(requirementsStateFromUpload(uploadRes.data, repoIdForFingerprint || 0, f.name));
+      setCurrentPrdFingerprint(rememberPrdFingerprint(repoIdForFingerprint, docId, nextFingerprint));
       setPrdDocId(docId);
       const storiesRes = await api.get(`/requirements/${docId}/stories`);
       setPrdStories(storiesRes.data);
@@ -251,7 +344,29 @@ export default function RepositoryAnalysis() {
         setRequirementsAnalysisMsg("Requirements extracted. Review and confirm, then analyze repository and detect coverage.");
       }
       setShowPrdModal(true);
-    } catch (err) { console.error(err); alert("Failed to upload and extract PRD."); setFile(null); }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to upload and extract PRD.");
+      setFile(null);
+      const repoId = requirementsRepoId || previousRequirementsState?.repository_id;
+      if (repoId) {
+        const state = await fetchRequirementsState(repoId);
+        if (!state?.has_prd) {
+          setPrdDocId(null);
+          setPrdStories([]);
+          setRequirementsConfirmed(false);
+          setRequirementsAnalysisReady(false);
+          setRequirementsAnalysisMsg("PRD extraction failed. Choose a PRD file and try again.");
+        }
+      } else {
+        setRequirementsState(previousRequirementsState);
+        setPrdDocId(previousPrdDocId);
+        setPrdStories(previousPrdStories);
+        setRequirementsConfirmed(previousRequirementsConfirmed);
+        setRequirementsAnalysisReady(previousRequirementsAnalysisReady);
+        setRequirementsAnalysisMsg(previousRequirementsAnalysisMsg || "PRD extraction failed. Choose a PRD file and try again.");
+      }
+    }
     finally { setUploadingPrd(false); }
   };
 
@@ -288,9 +403,14 @@ export default function RepositoryAnalysis() {
   const confirmPRD = async () => {
     if (!prdDocId) return;
     try {
-      await api.post(`/requirements/${prdDocId}/confirm`);
+      const res = await api.post(`/requirements/${prdDocId}/confirm`);
       setShowPrdModal(false); setFile(null); setSelectedRepoForPrd("");
       setRequirementsConfirmed(true);
+      const repoId = res.data?.repository_id || requirementsRepoId;
+      if (repoId) {
+        setRequirementsRepoId(repoId);
+        setRequirementsState(res.data?.requirements_state || await fetchRequirementsState(repoId));
+      }
       showToast("Requirements confirmed. You can now analyze the repository and detect coverage.", "success");
     } catch (err: any) { showToast(`Failed to confirm: ${err.response?.data?.detail || err.message}`, "error"); }
   };
@@ -371,8 +491,10 @@ export default function RepositoryAnalysis() {
     setUrlError(""); setGithubAuthUrl(null); setFailedMsg(null); setCachedMsg(null); setLoading(true);
     if (analysisMode === "requirements") {
       setRequirementsAnalysisReady(false);
-      setRequirementsAnalysisMsg("Analyzing repository before requirements can be uploaded.");
+      setRequirementsAnalysisMsg("Repository analysis is starting. Existing PRD status will be loaded when the repository is identified.");
       setRequirementsRepoId(null);
+      setRequirementsState(null);
+      setRequirementsConfirmed(false);
       setReviewContributors([]);
     }
     try {
@@ -384,13 +506,15 @@ export default function RepositoryAnalysis() {
         if (analysisMode === "requirements" && res.data.repo_id) {
           setRequirementsRepoId(res.data.repo_id);
           setRequirementsAnalysisReady(true);
-          setRequirementsAnalysisMsg("Repository analysis is ready. Upload a PRD to extract requirements.");
+          const state = await fetchRequirementsState(res.data.repo_id);
+          if (!state?.has_prd) setRequirementsAnalysisMsg("Repository analysis is ready. Upload a PRD to extract requirements.");
           fetchReviewContributors(res.data.repo_id);
         }
         fetchHistory(false); return;
       }
       if (analysisMode === "requirements" && res.data.repo_id) {
         setRequirementsRepoId(res.data.repo_id);
+        fetchRequirementsState(res.data.repo_id);
       }
       setRunId(res.data.analysis_run_id);
       fetchHistory(false);
@@ -406,7 +530,8 @@ export default function RepositoryAnalysis() {
       if (status === 403 && (detail?.recruiter_private_repo || role === "recruiter")) { setUrlError("Private repositories are not supported for Recruiter accounts."); return; }
       if (needsAuth) { const authUrl = (typeof detail === "object" ? detail?.auth_url : null) ?? err.response?.data?.auth_url; localStorage.setItem("pending_repo", JSON.stringify({ repoUrl: url, branch: selectedBranch, programmingLanguage })); setGithubAuthUrl(authUrl); return; }
       if (status === 403 && detail?.no_developer_contributions) { setUrlError(detail.message || "No commits found."); return; }
-      if (status === 400 && detail?.no_python_contributions)   { setUrlError(detail.message || "No Python files found."); return; }
+      if (detail?.no_registered_developer_contributions) { setUrlError(detail.message || "No registered developers with Python contributions were found for this repository."); return; }
+      if (status === 400 && (detail?.no_python_contributions || detail?.no_contribution_files))   { setUrlError(detail.message || "No contribution files found."); return; }
       if (status === 404 && detail?.branch_not_found)          { setUrlError("Repository found, but this branch does not exist."); return; }
       if (status === 404) { setUrlError("Repository or branch not found."); return; }
       if (status === 400) { setUrlError("Invalid GitHub repository URL."); return; }
@@ -426,6 +551,7 @@ export default function RepositoryAnalysis() {
       const repoId = res.data.repo_id || requirementsRepoId;
       if (!repoId) throw new Error("Repository id was not returned.");
       setRequirementsRepoId(repoId);
+      fetchRequirementsState(repoId);
       if (!res.data.cached && res.data.analysis_run_id) {
         setRunId(res.data.analysis_run_id);
         setRequirementsAnalysisMsg("Repository analysis is running. Coverage detection will be available when analysis completes.");
@@ -491,6 +617,14 @@ export default function RepositoryAnalysis() {
       ...extra,
     }}>{content}</div>
   );
+
+  const requirementsBannerConfirmed = Boolean(requirementsState?.requirements_confirmed);
+  const requirementsBannerReady = Boolean(requirementsAnalysisReady || requirementsBannerConfirmed);
+  const requirementsBannerText = requirementsState?.requirements_confirmed
+    ? `Requirements confirmed for ${requirementsState.original_filename || "uploaded PRD"}. You can now analyze the repository and detect coverage.`
+    : requirementsState?.requirements_extracted
+      ? `Requirements extracted from ${requirementsState.original_filename || "uploaded PRD"}. Review and confirm to continue.`
+      : requirementsAnalysisMsg || "Upload a PRD to extract requirements. Repository analysis and coverage run after confirmation.";
 
   return (
     <DashboardLayout>
@@ -987,16 +1121,37 @@ export default function RepositoryAnalysis() {
                   <div style={{
                     padding: "12px 14px",
                     borderRadius: 10,
-                    background: requirementsAnalysisReady ? "rgba(52,211,153,0.08)" : "rgba(251,191,36,0.08)",
-                    border: `1px solid ${requirementsAnalysisReady ? "rgba(52,211,153,0.22)" : "rgba(251,191,36,0.22)"}`,
-                    color: requirementsAnalysisReady ? "#34d399" : "#fbbf24",
+                    background: requirementsBannerReady ? "rgba(52,211,153,0.08)" : "rgba(251,191,36,0.08)",
+                    border: `1px solid ${requirementsBannerReady ? "rgba(52,211,153,0.22)" : "rgba(251,191,36,0.22)"}`,
+                    color: requirementsBannerReady ? "#34d399" : "#fbbf24",
                     fontSize: 12.5,
                     fontWeight: 600,
                   }}>
-                    {requirementsAnalysisMsg || "Upload a PRD to extract requirements. Repository analysis and coverage run after confirmation."}
+                    {requirementsBannerText}
                   </div>
 
-                  <PrdUploadDropZone accent={accent} uploading={uploadingPrd} onFile={handlePrdUpload} disabledMessage={!repoUrl.trim() ? "Enter a GitHub repository URL first." : undefined} />
+                  {requirementsState?.has_prd ? (
+                    <div style={{ padding: "14px 16px", borderRadius: 12, background: requirementsState.requirements_confirmed ? "rgba(52,211,153,0.08)" : "rgba(251,191,36,0.08)", border: `1px solid ${requirementsState.requirements_confirmed ? "rgba(52,211,153,0.22)" : "rgba(251,191,36,0.22)"}` }}>
+                      <div style={{ color: requirementsState.requirements_confirmed ? "#34d399" : "#fbbf24", fontSize: 12, fontWeight: 900, textTransform: "uppercase", letterSpacing: ".7px", marginBottom: 5 }}>
+                        {requirementsState.requirements_confirmed ? "Requirements confirmed" : "Requirements extracted"}
+                      </div>
+                      <div style={{ color: "var(--text-primary)", fontSize: 14, fontWeight: 800 }}>{requirementsState.original_filename || "Uploaded PRD"}</div>
+                      <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 4 }}>
+                        {requirementsState.stories_count || 0} stories linked to this repository.
+                      </div>
+                      <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                        {!requirementsState.requirements_confirmed && (
+                          <button className="ra-btn-primary" onClick={openExtractedRequirementsReview} disabled={openingPrdReview}>
+                            {openingPrdReview ? "Opening..." : "Review Requirements"}
+                          </button>
+                        )}
+                        <button className="ra-btn-ghost" onClick={() => { if (fileInputRef.current) fileInputRef.current.value = ""; fileInputRef.current?.click(); }}>Replace PRD</button>
+                        <input ref={fileInputRef} type="file" accept=".pdf,.xlsx,.xls,.md,.txt,.csv" style={{ display: "none" }} onChange={e => { const selected = e.target.files?.[0]; e.currentTarget.value = ""; if (selected) handlePrdUpload(selected); }} />
+                      </div>
+                    </div>
+                  ) : (
+                    <PrdUploadDropZone accent={accent} uploading={uploadingPrd} onFile={handlePrdUpload} disabledMessage={!repoUrl.trim() ? "Enter a GitHub repository URL first." : undefined} />
+                  )}
                   <button className="ra-btn-primary" disabled={!requirementsConfirmed || loading} onClick={analyzeAndDetectCoverage}>
                     {loading ? <><div className="pulse-dot" />Analyzing…</> : "Analyze Repository & Detect Coverage"}
                   </button>

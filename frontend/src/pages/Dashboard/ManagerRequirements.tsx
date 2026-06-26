@@ -2,7 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Eye, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import DashboardLayout from "../DashboardLayout";
 import api from "../../api/auth";
-import { ExtractedRequirementsReviewModal, PrdUploadDropZone } from "../../components/requirements/PrdWorkflow";
+import {
+  ExtractedRequirementsReviewModal,
+  fingerprintPrdFile,
+  isKnownSamePrd,
+  PrdUploadDropZone,
+  readStoredPrdFingerprint,
+  rememberPrdFingerprint,
+  requirementsStateFromUpload,
+} from "../../components/requirements/PrdWorkflow";
+import type { PrdFingerprint, RequirementsState } from "../../components/requirements/PrdWorkflow";
 
 const role = localStorage.getItem("role") || "developer";
 const accent = role === "manager" ? "#8b5cf6" : role === "recruiter" ? "#a855f7" : "#6366f1";
@@ -489,6 +498,7 @@ export default function RequirementsPage() {
   const [selectedRepo, setSelectedRepo] = useState("");
   const [stories, setStories] = useState<Story[]>([]);
   const [coverage, setCoverage] = useState<any>(null);
+  const [requirementsState, setRequirementsState] = useState<RequirementsState | null>(null);
   const [contributors, setContributors] = useState<Contributor[]>([]);
   const [loading, setLoading] = useState(false);
   const [coverageRunning, setCoverageRunning] = useState(false);
@@ -497,12 +507,15 @@ export default function RequirementsPage() {
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [uploadingPrd, setUploadingPrd] = useState(false);
+  const [currentPrdFingerprint, setCurrentPrdFingerprint] = useState<PrdFingerprint | null>(null);
+  const [openingPrdReview, setOpeningPrdReview] = useState(false);
   const [reviewStories, setReviewStories] = useState<Story[]>([]);
   const [reviewDocId, setReviewDocId] = useState<number | null>(null);
   const [reviewSelectedTaskIds, setReviewSelectedTaskIds] = useState<number[]>([]);
   const [showAddRequirement, setShowAddRequirement] = useState(false);
   const [requirementDraft, setRequirementDraft] = useState<DraftStory>(emptyDraftStory());
   const [savingRequirement, setSavingRequirement] = useState(false);
+  const prdFileInputRef = useRef<HTMLInputElement>(null);
   const dirtyRequirementIdsRef = useRef<number[]>([]);
   const dirtyTaskIdsRef = useRef<number[]>([]);
 
@@ -567,11 +580,15 @@ export default function RequirementsPage() {
     setLoading(true);
     try {
       try { await api.post(`/requirements/repositories/${repoId}/sync-contributors`); } catch {}
-      const [storiesRes, contributorsRes, coverageRes] = await Promise.all([
-        api.get(`/requirements/repositories/${repoId}/stories`),
-        api.get(`/requirements/repositories/${repoId}/contributors`),
+      const [stateRes, storiesRes, contributorsRes, coverageRes] = await Promise.all([
+        api.get(`/requirements/repositories/${repoId}/requirements-state`).catch(() => ({ data: null })),
+        api.get(`/requirements/repositories/${repoId}/stories`).catch(() => ({ data: [] })),
+        api.get(`/requirements/repositories/${repoId}/contributors`).catch(() => ({ data: [] })),
         api.get(`/requirements/coverage/repositories/${repoId}`).catch(() => ({ data: null })),
       ]);
+      setRequirementsState(stateRes.data);
+      setReviewDocId(stateRes.data?.document_id || null);
+      setCurrentPrdFingerprint(readStoredPrdFingerprint(stateRes.data?.repository_id, stateRes.data?.document_id));
       setStories(storiesRes.data || []);
       setContributors(contributorsRes.data || []);
       setCoverage(coverageRes.data);
@@ -599,6 +616,11 @@ export default function RequirementsPage() {
     if (!selectedRepo) {
       setStories([]);
       setCoverage(null);
+      setRequirementsState(null);
+      setCurrentPrdFingerprint(null);
+      setReviewDocId(null);
+      setReviewStories([]);
+      setReviewSelectedTaskIds([]);
       return;
     }
     if (role === "manager") loadManagerData(selectedRepo);
@@ -831,15 +853,67 @@ export default function RequirementsPage() {
     }
   };
 
+  const openExtractedRequirementsReview = async () => {
+    const docId = reviewDocId || requirementsState?.document_id;
+    if (!docId) {
+      showToast("No extracted requirements are available to review.", false);
+      return;
+    }
+    setOpeningPrdReview(true);
+    try {
+      if (!reviewStories.length || reviewDocId !== docId) {
+        const storiesRes = await api.get(`/requirements/${docId}/stories`);
+        setReviewStories(storiesRes.data || []);
+        setReviewDocId(docId);
+      }
+      if (selectedRepo && !contributors.length) {
+        try { await api.post(`/requirements/repositories/${selectedRepo}/sync-contributors`); } catch {}
+        const contributorsRes = await api.get(`/requirements/repositories/${selectedRepo}/contributors`).catch(() => ({ data: [] }));
+        setContributors(contributorsRes.data || []);
+      }
+    } catch (err: any) {
+      if (selectedRepo) {
+        await loadManagerData(selectedRepo);
+      }
+      showToast(err.response?.data?.detail || "Could not reopen extracted requirements.", false);
+    } finally {
+      setOpeningPrdReview(false);
+    }
+  };
+
   const uploadPrd = async (file: File) => {
     if (!selectedRepo || !file) return;
+    const nextFingerprint = await fingerprintPrdFile(file);
+    const activeRequirementsState = requirementsState;
+    if (isKnownSamePrd(file, activeRequirementsState, currentPrdFingerprint, nextFingerprint)) {
+      showToast(activeRequirementsState?.requirements_confirmed ? "This PRD is already confirmed for this repository." : "This PRD is already extracted. Use Review Requirements to continue.");
+      if (!activeRequirementsState?.requirements_confirmed) {
+        openExtractedRequirementsReview();
+      }
+      return;
+    }
+    const previousRequirementsState = activeRequirementsState;
+    const previousReviewDocId = reviewDocId;
+    const previousReviewStories = reviewStories;
     setUploadingPrd(true);
+    setReviewDocId(null);
+    setReviewStories([]);
+    setReviewSelectedTaskIds([]);
+    setRequirementsState(prev => prev ? {
+      ...prev,
+      has_prd: false,
+      requirements_extracted: false,
+      requirements_confirmed: false,
+      original_filename: file.name,
+    } : null);
     try {
       const form = new FormData();
       form.append("file", file);
       form.append("repository_id", selectedRepo);
       const uploaded = await api.post("/requirements/upload", form, { headers: { "Content-Type": "multipart/form-data" } });
       setReviewDocId(uploaded.data.document_id);
+      setRequirementsState(requirementsStateFromUpload(uploaded.data, Number(selectedRepo), file.name));
+      setCurrentPrdFingerprint(rememberPrdFingerprint(Number(selectedRepo), uploaded.data.document_id, nextFingerprint));
       const storiesRes = await api.get(`/requirements/${uploaded.data.document_id}/stories`);
       setReviewStories(storiesRes.data || []);
       try { await api.post(`/requirements/repositories/${selectedRepo}/sync-contributors`); } catch {}
@@ -847,6 +921,13 @@ export default function RequirementsPage() {
       setContributors(contributorsRes.data || []);
       showToast("Requirements extracted");
     } catch (err: any) {
+      if (selectedRepo) {
+        await loadManagerData(selectedRepo);
+      } else {
+        setRequirementsState(previousRequirementsState);
+        setReviewDocId(previousReviewDocId);
+        setReviewStories(previousReviewStories);
+      }
       showToast(err.response?.data?.detail || "PRD extraction failed", false);
     } finally {
       setUploadingPrd(false);
@@ -924,6 +1005,9 @@ export default function RequirementsPage() {
     if (!reviewDocId) return;
     try {
       await api.post(`/requirements/${reviewDocId}/confirm`);
+      const stateRes = await api.get(`/requirements/repositories/${selectedRepo}/requirements-state`).catch(() => ({ data: null }));
+      setRequirementsState(stateRes.data);
+      setCurrentPrdFingerprint(readStoredPrdFingerprint(stateRes.data?.repository_id, stateRes.data?.document_id));
       setReviewStories([]);
       setReviewDocId(null);
       setReviewSelectedTaskIds([]);
@@ -962,9 +1046,18 @@ export default function RequirementsPage() {
     if (filterCoverage !== "all" && story.status !== filterCoverage) return false;
     return true;
   });
-  const hasRequirements = mergedStories.length > 0;
   const isReviewingPrd = role === "manager" && reviewStories.length > 0;
-  const hasConfirmedRequirements = hasRequirements && !isReviewingPrd;
+  const hasRequirements = role === "manager"
+    ? Boolean(requirementsState?.has_prd || isReviewingPrd)
+    : Boolean(mergedStories.length > 0);
+  const hasConfirmedRequirements = role === "manager"
+    ? Boolean(requirementsState?.requirements_confirmed && !isReviewingPrd)
+    : Boolean(mergedStories.length > 0);
+  const requirementsStatusText = requirementsState?.requirements_confirmed
+    ? `Requirements confirmed for ${requirementsState.original_filename || "uploaded PRD"}.`
+    : requirementsState?.requirements_extracted
+      ? `Requirements extracted from ${requirementsState.original_filename || "uploaded PRD"}. Review and confirm to continue.`
+      : "Upload a PRD to extract requirements.";
 
   const allTasks = filteredStories.flatMap(story => (story.technical_tasks || story.tasks || []).map(task => ({ ...task, story })));
   const assignedCount = allTasks.filter(t => t.assigned_to).length;
@@ -1246,6 +1339,31 @@ export default function RequirementsPage() {
             onMerge={mergeReviewTasks}
             onTaskUpdate={updateReviewTask}
           />
+        )}
+
+        {!loading && selectedRepo && role === "manager" && hasRequirements && !isReviewingPrd && (
+          <div className="rq-panel" style={{ marginBottom: 18, borderColor: requirementsState?.requirements_confirmed ? "rgba(52,211,153,0.22)" : "rgba(251,191,36,0.22)", background: requirementsState?.requirements_confirmed ? "rgba(52,211,153,0.08)" : "rgba(251,191,36,0.08)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ color: requirementsState?.requirements_confirmed ? "#34d399" : "#fbbf24", fontSize: 11, fontWeight: 900, letterSpacing: ".8px", textTransform: "uppercase", marginBottom: 6 }}>
+                  {requirementsState?.requirements_confirmed ? "Requirements confirmed" : "Requirements extracted"}
+                </div>
+                <h2 style={{ color: "white", margin: "0 0 5px", fontSize: 18 }}>{requirementsState?.original_filename || "Uploaded PRD"}</h2>
+                <p style={{ color: "rgba(255,255,255,0.48)", margin: 0, fontSize: 13 }}>
+                  {requirementsStatusText} {requirementsState?.stories_count || 0} stories linked to this repository.
+                </p>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {!requirementsState?.requirements_confirmed && (
+                  <button className="rq-btn-primary" onClick={openExtractedRequirementsReview} disabled={openingPrdReview}>
+                    {openingPrdReview ? "Opening..." : "Review Requirements"}
+                  </button>
+                )}
+                <button className="rq-btn-ghost" onClick={() => { if (prdFileInputRef.current) prdFileInputRef.current.value = ""; prdFileInputRef.current?.click(); }}>Replace PRD</button>
+                <input ref={prdFileInputRef} type="file" accept=".pdf,.xlsx,.xls,.md,.txt,.csv" style={{ display: "none" }} onChange={e => { const selected = e.target.files?.[0]; e.currentTarget.value = ""; if (selected) uploadPrd(selected); }} />
+              </div>
+            </div>
+          </div>
         )}
 
         {!loading && selectedRepo && role === "manager" && !hasRequirements && !isReviewingPrd && (

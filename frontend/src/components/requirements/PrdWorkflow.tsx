@@ -11,6 +11,94 @@ type Story = {
   technical_tasks: Task[];
 };
 
+export type RequirementsState = {
+  repository_id: number;
+  document_id: number | null;
+  status: string | null;
+  has_prd: boolean;
+  requirements_extracted: boolean;
+  requirements_confirmed: boolean;
+  latest_confirmed_document_id?: number | null;
+  original_filename?: string | null;
+  uploaded_at?: string | null;
+  processed_at?: string | null;
+  stories_count?: number;
+  error_message?: string | null;
+};
+
+export type PrdFingerprint = {
+  documentId?: number;
+  name: string;
+  size: number;
+  hash: string;
+};
+
+export const fingerprintPrdFile = async (file: File): Promise<PrdFingerprint> => {
+  const buffer = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  const hash = Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
+  return { name: file.name, size: file.size, hash };
+};
+
+export const prdFingerprintKey = (repoId: number) => `skillpulse_prd_fingerprint_${repoId}`;
+
+export const readStoredPrdFingerprint = (repoId?: number | null, documentId?: number | null): PrdFingerprint | null => {
+  if (!repoId || !documentId) return null;
+  try {
+    const stored = localStorage.getItem(prdFingerprintKey(repoId));
+    const parsed = stored ? JSON.parse(stored) as PrdFingerprint : null;
+    return parsed?.documentId === documentId ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+export const rememberPrdFingerprint = (repoId: number | null | undefined, documentId: number | null | undefined, fingerprint: PrdFingerprint): PrdFingerprint | null => {
+  if (!repoId || !documentId) return null;
+  const storedFingerprint = { ...fingerprint, documentId };
+  localStorage.setItem(prdFingerprintKey(repoId), JSON.stringify(storedFingerprint));
+  return storedFingerprint;
+};
+
+export const isKnownSamePrd = (
+  file: File,
+  state: RequirementsState | null | undefined,
+  storedFingerprint: PrdFingerprint | null | undefined,
+  nextFingerprint: PrdFingerprint
+) => {
+  if (!state?.has_prd) return false;
+  if (state.stories_count === 0) return false;
+  if (
+    storedFingerprint &&
+    storedFingerprint.hash === nextFingerprint.hash &&
+    storedFingerprint.size === nextFingerprint.size
+  ) {
+    return true;
+  }
+  return Boolean(
+    !storedFingerprint &&
+    state.requirements_confirmed &&
+    state.original_filename &&
+    state.original_filename.trim().toLowerCase() === file.name.trim().toLowerCase()
+  );
+};
+
+export const requirementsStateFromUpload = (
+  uploadData: any,
+  repositoryId: number,
+  filename: string
+): RequirementsState => ({
+  repository_id: uploadData.repository_id || repositoryId,
+  document_id: uploadData.document_id,
+  status: uploadData.status,
+  has_prd: true,
+  requirements_extracted: uploadData.status === "extracted" || uploadData.status === "confirmed",
+  requirements_confirmed: uploadData.status === "confirmed",
+  original_filename: filename,
+  processed_at: uploadData.processed_at,
+  stories_count: uploadData.stories_extracted,
+});
+
 const WorkflowStyles = ({ accent }: { accent: string }) => (
   <style>{`
     .ra-upload-drop-zone{border:1.5px dashed var(--border-hover);border-radius:12px;padding:32px 20px;text-align:center;cursor:pointer;transition:all .2s}
@@ -51,6 +139,7 @@ export function PrdUploadDropZone({
       alert(disabledMessage);
       return;
     }
+    if (inputRef.current) inputRef.current.value = "";
     inputRef.current?.click();
   };
   return (
@@ -83,7 +172,7 @@ export function PrdUploadDropZone({
           </>
         )}
       </div>
-      <input ref={inputRef} type="file" accept=".pdf,.xlsx,.xls,.md,.txt,.csv" style={{ display: "none" }} onChange={e => { const file = e.target.files?.[0]; if (file) onFile(file); }} />
+      <input ref={inputRef} type="file" accept=".pdf,.xlsx,.xls,.md,.txt,.csv" style={{ display: "none" }} onChange={e => { const file = e.target.files?.[0]; e.currentTarget.value = ""; if (file) onFile(file); }} />
     </>
   );
 }

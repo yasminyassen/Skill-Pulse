@@ -48,6 +48,7 @@ from app.services.github_client import (
     get_branch_head_sha,
     get_files_fingerprint,
     fetch_user_repo_contribution_summary,
+    fetch_repository_commit_contributions,
 )
 from app.services.analysis_orchestrator import (
     background_analysis_task,
@@ -356,6 +357,94 @@ def _analysis_has_sonar_dashboard(run: AnalysisRun) -> bool:
         return False
     sonar_payload = ai_insights.get("sonar")
     return isinstance(sonar_payload, dict) and bool(sonar_payload) and not bool(sonar_payload.get("error"))
+
+
+def _register_existing_analysis_for_user(
+    db: Session,
+    run: AnalysisRun,
+    user_id: int,
+    analysis_version: str = "sonarqube-v1",
+) -> RepositoryAnalysis:
+    existing = (
+        db.query(RepositoryAnalysis)
+        .filter(
+            RepositoryAnalysis.repository_id == run.repository_id,
+            RepositoryAnalysis.user_id == user_id,
+            RepositoryAnalysis.last_run_id == run.id,
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    existing_for_repo = (
+        db.query(RepositoryAnalysis)
+        .filter(
+            RepositoryAnalysis.repository_id == run.repository_id,
+            RepositoryAnalysis.user_id == user_id,
+        )
+        .order_by(RepositoryAnalysis.id.desc())
+        .first()
+    )
+    if existing_for_repo:
+        existing_for_repo.latest_commit_sha = run.commit_sha
+        existing_for_repo.analysis_version = existing_for_repo.analysis_version or analysis_version
+        existing_for_repo.analysis_status = run.status
+        existing_for_repo.analyzed_at = run.completed_at
+        existing_for_repo.last_run_id = run.id
+        db.commit()
+        db.refresh(existing_for_repo)
+        return existing_for_repo
+
+    registration = RepositoryAnalysis(
+        repository_id=run.repository_id,
+        user_id=user_id,
+        latest_commit_sha=run.commit_sha,
+        analysis_version=analysis_version,
+        analyzed_at=run.completed_at,
+        analysis_status=run.status,
+        results_path=None,
+        force_reanalyzed=False,
+        last_run_id=run.id,
+    )
+    db.add(registration)
+    db.commit()
+    db.refresh(registration)
+    return registration
+
+
+def _repository_commit_sha_for_run(run: AnalysisRun) -> str | None:
+    ai_insights = run.ai_insights if isinstance(run.ai_insights, dict) else {}
+    value = ai_insights.get("repository_commit_sha")
+    return str(value) if value else None
+
+
+def _find_developer_contribution_for_repository_run(
+    db: Session,
+    repository_run: AnalysisRun,
+    user_id: int,
+    contribution_fingerprint: str | None,
+) -> AnalysisRun | None:
+    query = (
+        db.query(AnalysisRun)
+        .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
+        .filter(
+            SkillScore.user_id == user_id,
+            AnalysisRun.repository_id == repository_run.repository_id,
+            AnalysisRun.branch == repository_run.branch,
+            AnalysisRun.status == "completed",
+            AnalysisRun.analysis_scope == "contribution",
+        )
+    )
+    candidates = query.order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc()).all()
+    for candidate in candidates:
+        if _repository_commit_sha_for_run(candidate) == repository_run.commit_sha:
+            return candidate
+    if contribution_fingerprint:
+        for candidate in candidates:
+            if candidate.commit_sha == contribution_fingerprint:
+                return candidate
+    return None
 
 
 def _safe_number(value):
@@ -975,6 +1064,7 @@ def _build_manager_contributor_scopes(
 
     for developer in developers:
         touched_files: set[str] = set()
+        python_touched_files: set[str] = set()
         matched_login: str | None = None
         matched_email: str | None = None
 
@@ -989,9 +1079,11 @@ def _build_manager_contributor_scopes(
 
             for file_path in record.get("touched_files") or []:
                 if file_path:
-                    touched_files.add(str(file_path).replace("\\", "/"))
+                    normalized_path = str(file_path).replace("\\", "/")
+                    touched_files.add(normalized_path)
+                    if normalized_path.endswith(".py"):
+                        python_touched_files.add(normalized_path)
 
-        python_touched_files = sorted(path for path in touched_files if path.endswith(".py"))
         if not python_touched_files:
             continue
 
@@ -999,7 +1091,7 @@ def _build_manager_contributor_scopes(
             "user_id": developer.id,
             "contributor_login": matched_login or developer.username or matched_email,
             "touched_files": sorted(touched_files),
-            "python_touched_files": python_touched_files,
+            "python_touched_files": sorted(python_touched_files),
         })
 
     return contributor_scopes
@@ -1244,6 +1336,7 @@ async def _run_analysis_impl(
     contribution_context = None
     analysis_scope = "repository"
     touched_files: list[str] = []
+    manager_contributors: list[dict] = []
     cache_sha = head_sha
 
     if is_developer:
@@ -1266,8 +1359,11 @@ async def _run_analysis_impl(
                 )
             raise
         touched_files = contribution_context.get("touched_files", [])
-        python_touched_files = [p for p in touched_files if p.endswith(".py")]
-
+        python_touched_files = [
+            str(path).replace("\\", "/")
+            for path in touched_files
+            if str(path).replace("\\", "/").endswith(".py")
+        ]
         if not contribution_context.get("user_contributed"):
             raise HTTPException(
                 status_code=403,
@@ -1287,13 +1383,13 @@ async def _run_analysis_impl(
             )
 
         analysis_scope = "contribution"
-        python_contribution_fingerprint = await get_files_fingerprint(
+        contribution_fingerprint = await get_files_fingerprint(
             token,
             full_name,
             data.branch,
             python_touched_files,
         )
-        if not python_contribution_fingerprint:
+        if not contribution_fingerprint:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1301,27 +1397,71 @@ async def _run_analysis_impl(
                     "message": "We found your commits, but none of the touched Python files are present on this branch anymore.",
                 },
             )
-        contribution_fingerprint = await get_files_fingerprint(
-            token,
-            full_name,
-            data.branch,
-            touched_files,
-        ) or python_contribution_fingerprint
         cache_sha = contribution_fingerprint
+
+    if is_manager:
+        try:
+            commit_records = await fetch_repository_commit_contributions(
+                token,
+                full_name,
+                data.branch,
+            )
+        except HTTPException as e:
+            if e.status_code in {404, 422, 502}:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "branch_not_found": True,
+                        "message": "Repository found, but this branch does not exist or is not accessible.",
+                    },
+                )
+            raise
+
+        registered_developers = (
+            db.query(User)
+            .filter(User.role == UserRole.developer)
+            .all()
+        )
+        manager_contributors = _build_manager_contributor_scopes(
+            registered_developers,
+            commit_records,
+        )
+        if not manager_contributors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "no_registered_developer_contributions": True,
+                    "message": "No registered developers with Python contributions were found for this repository.",
+                },
+            )
 
     # Get or Create Repo
     repo = db.query(Repository).filter(Repository.github_repo_id == str(repo_data["id"])).first()
     if not repo:
-        repo = Repository(
-            name=repo_name,
-            full_name=full_name,
-            url=data.repo_url,
-            github_repo_id=str(repo_data["id"]) if repo_data else None,
-            is_private=is_private,
+        repo = (
+            db.query(Repository)
+            .filter(
+                (Repository.full_name == full_name)
+                | (Repository.url == data.repo_url)
+            )
+            .first()
         )
-        db.add(repo)
-        db.commit()
-        db.refresh(repo)
+        if repo:
+            repo.github_repo_id = str(repo_data["id"]) if repo_data else None
+            repo.is_private = is_private
+            db.commit()
+            db.refresh(repo)
+        else:
+            repo = Repository(
+                name=repo_name,
+                full_name=full_name,
+                url=data.repo_url,
+                github_repo_id=str(repo_data["id"]) if repo_data else None,
+                is_private=is_private,
+            )
+            db.add(repo)
+            db.commit()
+            db.refresh(repo)
 
     # ── Incremental analysis: skip re-analysis if the relevant snapshot has not changed ──
     if cache_sha and not coverage_report_path:
@@ -1336,6 +1476,8 @@ async def _run_analysis_impl(
             )
         )
         if is_manager:
+            existing_run_query = existing_run_query.filter(AnalysisRun.user_id == current_user.id)
+        elif is_developer:
             existing_run_query = existing_run_query.filter(AnalysisRun.user_id == current_user.id)
 
         existing_run = existing_run_query.order_by(AnalysisRun.triggered_at.desc()).first()
@@ -1390,6 +1532,7 @@ async def _run_analysis_impl(
         if existing_run and not is_manager:
             cached_for_current_user = score_belongs_to_user(db, existing_run.id, current_user.id)
             if link_existing_run_to_user(db, existing_run, current_user.id):
+                _register_existing_analysis_for_user(db, existing_run, current_user.id)
                 return {
                     "message": (
                         "Your contribution scope is up to date. Returning cached results."
@@ -1407,6 +1550,59 @@ async def _run_analysis_impl(
                     "cached_for_current_user": cached_for_current_user,
                 }
 
+        if is_developer:
+            existing_repository_run = (
+                db.query(AnalysisRun)
+                .filter(
+                    AnalysisRun.repository_id == repo.id,
+                    AnalysisRun.branch == data.branch,
+                    AnalysisRun.commit_sha == head_sha,
+                    AnalysisRun.status == "completed",
+                    AnalysisRun.analysis_scope == "repository",
+                )
+                .order_by(AnalysisRun.completed_at.desc(), AnalysisRun.triggered_at.desc())
+                .first()
+            )
+            if existing_repository_run and _analysis_has_sonar_dashboard(existing_repository_run):
+                existing_contribution_run = _find_developer_contribution_for_repository_run(
+                    db,
+                    existing_repository_run,
+                    current_user.id,
+                    cache_sha,
+                )
+                if existing_contribution_run:
+                    _register_existing_analysis_for_user(db, existing_contribution_run, current_user.id)
+                    sonar_summary = build_sonar_repo_summary(existing_contribution_run)
+                    score_row = (
+                        db.query(SkillScore)
+                        .filter(
+                            SkillScore.analysis_run_id == existing_contribution_run.id,
+                            SkillScore.user_id == current_user.id,
+                        )
+                        .first()
+                    )
+                    skill_fields = _skill_score_fields(
+                        score_row,
+                        sonar_health_score=sonar_summary["sonar_health_score"],
+                        security_score=getattr(score_row, "security_awareness_score", None),
+                    )
+                    return {
+                        "message": "Your contributor analysis is already available for this analyzed repository.",
+                        "run_id": existing_contribution_run.id,
+                        "analysis_run_id": existing_contribution_run.id,
+                        "repo_id": repo.id,
+                        "repo_name": repo.name,
+                        "branch": existing_contribution_run.branch,
+                        "status": "completed",
+                        "cached": True,
+                        "cached_scope": existing_contribution_run.analysis_scope,
+                        "cached_for_current_user": True,
+                        **skill_fields,
+                        "sonar_health_score": sonar_summary["sonar_health_score"],
+                        "sonar_state": sonar_summary["sonar_state"],
+                        "quality_gate": sonar_summary["quality_gate"],
+                    }
+
     # Create Analysis Run (Pending/Running)
     run = AnalysisRun(
         repository_id=repo.id,
@@ -1416,6 +1612,7 @@ async def _run_analysis_impl(
         commit_sha=cache_sha,
         analysis_scope=analysis_scope,
         contributor_login=None if is_manager else contributor_login,
+        ai_insights={"repository_commit_sha": head_sha} if analysis_scope == "contribution" else None,
         triggered_at=datetime.now(timezone.utc)
     )
     db.add(run)
@@ -1436,6 +1633,7 @@ async def _run_analysis_impl(
             is_private=is_private,
             manager_user_id=current_user.id,
             coverage_report_path=coverage_report_path,
+            manager_contributors=manager_contributors,
         )
     else:
         background_tasks.add_task(
@@ -1467,7 +1665,7 @@ async def _run_analysis_impl(
         "status": "running",
         "cached": False,
         "analysis_scope": analysis_scope,
-        "contributors_matched": None,
+        "contributors_matched": len(manager_contributors) if is_manager else None,
     }
     
 @router.get("/history")
@@ -1497,10 +1695,12 @@ async def get_analysis_history(
         .join(SkillScore, SkillScore.analysis_run_id == AnalysisRun.id)
         .filter(
             SkillScore.user_id == current_user.id,
-            AnalysisRun.user_id == current_user.id,
+            AnalysisRun.status == "completed",
         )
-        .all()
     )
+    if current_user.role and current_user.role.value == "developer":
+        linked_runs = linked_runs.filter(AnalysisRun.analysis_scope == "contribution")
+    linked_runs = linked_runs.all()
     own_runs_query = (
         db.query(AnalysisRun)
         .filter(AnalysisRun.user_id == current_user.id)

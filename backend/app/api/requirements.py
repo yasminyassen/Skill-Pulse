@@ -18,6 +18,84 @@ from app.services.requirement_coverage_service import ensure_repository_ready_fo
 router = APIRouter(prefix="/requirements", tags=["Requirements & User Stories"])
 
 
+def _latest_requirement_document(db: Session, repo_id: int) -> RequirementDocument | None:
+    return (
+        db.query(RequirementDocument)
+        .filter(RequirementDocument.repository_id == repo_id)
+        .order_by(
+            RequirementDocument.processed_at.desc().nullslast(),
+            RequirementDocument.uploaded_at.desc().nullslast(),
+            RequirementDocument.id.desc(),
+        )
+        .first()
+    )
+
+
+def _latest_confirmed_requirement_document(db: Session, repo_id: int) -> RequirementDocument | None:
+    return (
+        db.query(RequirementDocument)
+        .filter(
+            RequirementDocument.repository_id == repo_id,
+            RequirementDocument.status == DocumentStatus.confirmed,
+        )
+        .order_by(
+            RequirementDocument.processed_at.desc().nullslast(),
+            RequirementDocument.uploaded_at.desc().nullslast(),
+            RequirementDocument.id.desc(),
+        )
+        .first()
+    )
+
+
+def _latest_active_requirement_document(db: Session, repo_id: int) -> RequirementDocument | None:
+    documents = (
+        db.query(RequirementDocument)
+        .filter(
+            RequirementDocument.repository_id == repo_id,
+            RequirementDocument.status.in_([DocumentStatus.extracted, DocumentStatus.confirmed]),
+        )
+        .order_by(
+            RequirementDocument.processed_at.desc().nullslast(),
+            RequirementDocument.uploaded_at.desc().nullslast(),
+            RequirementDocument.id.desc(),
+        )
+        .all()
+    )
+    for document in documents:
+        story_count = db.query(UserStory).filter(UserStory.document_id == document.id).count()
+        if story_count > 0:
+            return document
+        if document.status == DocumentStatus.extracted:
+            document.status = DocumentStatus.failed
+            document.error_message = document.error_message or "No stories were extracted from this PRD."
+    db.commit()
+    return None
+
+
+def _requirements_state_payload(db: Session, repo_id: int) -> dict:
+    latest_document = _latest_requirement_document(db, repo_id)
+    active_document = _latest_active_requirement_document(db, repo_id)
+    confirmed_document = _latest_confirmed_requirement_document(db, repo_id)
+    story_count = 0
+    if active_document:
+        story_count = db.query(UserStory).filter(UserStory.document_id == active_document.id).count()
+    status_value = getattr(active_document.status, "value", active_document.status) if active_document else None
+    return {
+        "repository_id": repo_id,
+        "document_id": active_document.id if active_document else None,
+        "status": status_value,
+        "has_prd": bool(active_document),
+        "requirements_extracted": bool(active_document and active_document.status in {DocumentStatus.extracted, DocumentStatus.confirmed}),
+        "requirements_confirmed": bool(active_document and active_document.status == DocumentStatus.confirmed),
+        "latest_confirmed_document_id": confirmed_document.id if confirmed_document else None,
+        "original_filename": active_document.original_filename if active_document else None,
+        "uploaded_at": active_document.uploaded_at if active_document else None,
+        "processed_at": active_document.processed_at if active_document else None,
+        "stories_count": story_count,
+        "error_message": active_document.error_message if active_document else latest_document.error_message if latest_document else None,
+    }
+
+
 def _repo_full_name(repo: Repository) -> str:
     full_name = (repo.full_name or "").strip()
     if not full_name:
@@ -125,6 +203,7 @@ async def upload_and_extract_prd(
     db.commit()
     db.refresh(db_doc)
 
+    temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
             content = await file.read()
@@ -132,8 +211,9 @@ async def upload_and_extract_prd(
             temp_path = temp_file.name
 
         extracted_stories = await parse_prd_to_stories(temp_path)
-        
-        os.remove(temp_path)
+
+        if not extracted_stories:
+            raise ValueError("No stories were extracted from this PRD. Check the PRD content or AI provider configuration and try again.")
 
         db_stories = []
         for story_data in extracted_stories:
@@ -170,6 +250,7 @@ async def upload_and_extract_prd(
 
         return ExtractionResultResponse(
             document_id=db_doc.id,
+            repository_id=db_doc.repository_id,
             status=db_doc.status,
             stories_extracted=len(db_stories),
             processed_at=db_doc.processed_at
@@ -180,6 +261,9 @@ async def upload_and_extract_prd(
         db_doc.error_message = str(e)
         db.commit()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 @router.get("/{doc_id}/stories", response_model=List[UserStoryResponse])
 def get_document_stories(
@@ -364,16 +448,29 @@ async def sync_contributors_endpoint(
         "warnings": sync_warnings,
     }
 
+
+@router.get("/repositories/{repo_id}/requirements-state")
+def get_repository_requirements_state(
+    repo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _requirements_state_payload(db, repo_id)
+
+
 @router.get("/repositories/{repo_id}/stories", response_model=List[UserStoryResponse])
 def get_stories_by_repository(
     repo_id: int, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    document = _latest_confirmed_requirement_document(db, repo_id)
+    if not document:
+        return []
+
     stories = db.query(UserStory)\
-        .join(RequirementDocument, UserStory.document_id == RequirementDocument.id)\
         .options(joinedload(UserStory.technical_tasks))\
-        .filter(RequirementDocument.repository_id == repo_id)\
+        .filter(UserStory.document_id == document.id)\
         .all()
         
     return stories    
@@ -544,10 +641,16 @@ def confirm_requirement_document(
     if not doc.repository_id:
         raise HTTPException(status_code=400, detail="Requirement document is not linked to a repository.")
 
-    doc.status = DocumentStatus.confirmed 
+    doc.status = DocumentStatus.confirmed
+    doc.processed_at = datetime.now(timezone.utc)
     db.commit()
     
-    return {"message": "Requirements confirmed and published successfully."}
+    return {
+        "message": "Requirements confirmed and published successfully.",
+        "repository_id": doc.repository_id,
+        "document_id": doc.id,
+        "requirements_state": _requirements_state_payload(db, doc.repository_id),
+    }
 
 
 @router.get("/repositories/{repo_id}/analysis-readiness")
