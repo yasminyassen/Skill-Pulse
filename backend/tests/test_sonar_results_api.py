@@ -188,6 +188,99 @@ def test_get_sonar_results_returns_available_false_without_sonar_rows():
         db.close()
 
 
+def test_get_sonar_results_uses_attributed_issue_effort_for_contribution_debt():
+    db = _db_session()
+    try:
+        user = _user(db)
+        run = _run(db, user.id)
+        db.add(SkillScore(analysis_run_id=run.id, user_id=user.id))
+        db.add(SonarAnalysisSummary(
+            analysis_run_id=run.id,
+            user_id=user.id,
+            project_key="skill-pulse:acme_repo:main",
+            quality_gate="OK",
+            sonar_health_score=80,
+            measures={
+                "code_smells": "5",
+                "sqale_index": "21",
+                "sqale_debt_ratio": "4.4",
+            },
+            coverage={"status": "ready"},
+        ))
+        db.commit()
+
+        payload = asyncio.run(get_sonar_results(run.id, False, db, user))
+
+        assert payload["summary"]["code_smells_count"] == 0
+        assert payload["sonar"]["measures"]["sqale_index"] == 0
+        assert payload["sonar"]["measures"]["sqale_debt_ratio"] == 4.4
+    finally:
+        db.close()
+
+
+def test_get_sonar_results_sums_attributed_code_smell_effort_for_contribution_debt():
+    db = _db_session()
+    try:
+        user = _user(db)
+        run = _run(db, user.id)
+        db.add(SkillScore(analysis_run_id=run.id, user_id=user.id))
+        db.add(SonarAnalysisSummary(
+            analysis_run_id=run.id,
+            user_id=user.id,
+            project_key="skill-pulse:acme_repo:main",
+            quality_gate="OK",
+            sonar_health_score=80,
+            measures={
+                "code_smells": "5",
+                "sqale_index": "21",
+                "sqale_debt_ratio": "4.4",
+            },
+            coverage={"status": "ready"},
+        ))
+        db.add(SonarIssue(
+            analysis_run_id=run.id,
+            user_id=user.id,
+            issue_key="SMELL-1",
+            file_path="app.py",
+            line=1,
+            type="CODE_SMELL",
+            severity="MAJOR",
+            status="OPEN",
+            raw_issue={"effort": "5min"},
+        ))
+        db.add(SonarIssue(
+            analysis_run_id=run.id,
+            user_id=user.id,
+            issue_key="SMELL-2",
+            file_path="app.py",
+            line=2,
+            type="CODE_SMELL",
+            severity="MAJOR",
+            status="OPEN",
+            raw_issue={"debt": "1h"},
+        ))
+        db.add(SonarIssue(
+            analysis_run_id=run.id,
+            user_id=user.id,
+            issue_key="BUG-1",
+            file_path="app.py",
+            line=3,
+            type="BUG",
+            severity="MAJOR",
+            status="OPEN",
+            raw_issue={"effort": "3h"},
+        ))
+        db.commit()
+
+        payload = asyncio.run(get_sonar_results(run.id, False, db, user))
+
+        assert payload["summary"]["code_smells_count"] == 2
+        assert payload["sonar"]["measures"]["sqale_index"] == 65
+        assert payload["sonar"]["measures"]["sqale_debt_ratio"] == 4.4
+    finally:
+        db.close()
+
+
 def test_get_sonar_results_returns_404_for_inaccessible_run():
     db = _db_session()
     try:

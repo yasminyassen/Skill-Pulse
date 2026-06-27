@@ -933,6 +933,7 @@ async def _background_analysis_task_async(
         sonar_health_score: float | None = None
         included_sonar_files: list[str] | None = None
         security_include_files: list[str] | None = None
+        generated_security_artifacts: list[str] = []
         try:
             logger.info("[run=%s] Git checkout started branch=%s private=%s", run_id, branch, is_private)
             clone_path, repo_context = _prepare_repo_checkout(
@@ -976,6 +977,9 @@ async def _background_analysis_task_async(
                         branch=branch,
                         coverage_report_path=coverage_report_path,
                         included_files=included_sonar_files,
+                    )
+                    generated_security_artifacts = list(
+                        (sonar_result.get("sonar") or {}).get("generated_artifacts") or []
                     )
                     sonar_health_score = compute_sonar_health_score(sonar_result.get("sonar"))
                     if analysis_scope == "contribution":
@@ -1059,6 +1063,7 @@ async def _background_analysis_task_async(
                 pipeline_result = run_security_analysis(
                     clone_path,
                     include_files=security_include_files if analysis_scope == "contribution" else None,
+                    generated_artifacts=generated_security_artifacts,
                 )
                 logger.info(
                     "[run=%s] Security analysis finished findings=%d failed_tools=%s",
@@ -1657,6 +1662,8 @@ async def _run_manager_contributor_analysis_after_repository(
     manager_user_id: int,
     manager_contributors: list[dict] | None = None,
 ):
+    existing_team_run_id: int | None = None
+    existing_team_run_status: str | None = None
     db = SessionLocal()
     try:
         repository_run = (
@@ -1689,13 +1696,8 @@ async def _run_manager_contributor_analysis_after_repository(
             .first()
         )
         if existing_team_run:
-            logger.info(
-                "[run=%s] Skipping manager contributor analysis because team run %s already exists with status=%s",
-                repository_run_id,
-                existing_team_run.id,
-                existing_team_run.status,
-            )
-            return
+            existing_team_run_id = existing_team_run.id
+            existing_team_run_status = existing_team_run.status
 
         registered_developers = (
             db.query(User)
@@ -1733,24 +1735,81 @@ async def _run_manager_contributor_analysis_after_repository(
     db = SessionLocal()
     try:
         _link_repository_contributors(db, repo_id, manager_contributors)
-        team_run = AnalysisRun(
-            repository_id=repo_id,
-            user_id=manager_user_id,
-            branch=branch,
-            commit_sha=(
-                db.query(AnalysisRun.commit_sha)
-                .filter(AnalysisRun.id == repository_run_id)
-                .scalar()
-            ),
-            analysis_scope="team_contributions",
-            contributor_login=None,
-            status="running",
-            triggered_at=datetime.now(timezone.utc),
-        )
-        db.add(team_run)
-        db.commit()
-        db.refresh(team_run)
-        team_run_id = team_run.id
+        contributors_to_analyze = manager_contributors
+
+        if existing_team_run_id:
+            if existing_team_run_status == "running":
+                logger.info(
+                    "[run=%s] Skipping manager contributor analysis because team run %s is already running",
+                    repository_run_id,
+                    existing_team_run_id,
+                )
+                return
+
+            existing_user_ids = {
+                int(user_id)
+                for (user_id,) in (
+                    db.query(ContributorAnalysisSummary.user_id)
+                    .filter(ContributorAnalysisSummary.analysis_run_id == existing_team_run_id)
+                    .all()
+                )
+                if user_id is not None
+            }
+            contributors_to_analyze = [
+                contributor
+                for contributor in manager_contributors
+                if contributor.get("user_id") is not None
+                and int(contributor["user_id"]) not in existing_user_ids
+            ]
+            if not contributors_to_analyze:
+                logger.info(
+                    "[run=%s] Skipping manager contributor analysis because completed team run %s already covers all %d Python contributors",
+                    repository_run_id,
+                    existing_team_run_id,
+                    len(manager_contributors),
+                )
+                return
+
+            team_run = (
+                db.query(AnalysisRun)
+                .filter(AnalysisRun.id == existing_team_run_id)
+                .first()
+            )
+            if not team_run:
+                logger.warning(
+                    "[run=%s] Existing team run %s disappeared before contributor recovery",
+                    repository_run_id,
+                    existing_team_run_id,
+                )
+                return
+            team_run.status = "running"
+            db.commit()
+            team_run_id = team_run.id
+            logger.info(
+                "[run=%s] Reusing incomplete team run %s; analyzing missing Python contributors=%s",
+                repository_run_id,
+                team_run_id,
+                [contributor.get("user_id") for contributor in contributors_to_analyze],
+            )
+        else:
+            team_run = AnalysisRun(
+                repository_id=repo_id,
+                user_id=manager_user_id,
+                branch=branch,
+                commit_sha=(
+                    db.query(AnalysisRun.commit_sha)
+                    .filter(AnalysisRun.id == repository_run_id)
+                    .scalar()
+                ),
+                analysis_scope="team_contributions",
+                contributor_login=None,
+                status="running",
+                triggered_at=datetime.now(timezone.utc),
+            )
+            db.add(team_run)
+            db.commit()
+            db.refresh(team_run)
+            team_run_id = team_run.id
     finally:
         db.close()
 
@@ -1765,7 +1824,7 @@ async def _run_manager_contributor_analysis_after_repository(
             token=token,
             is_private=is_private,
             manager_user_id=manager_user_id,
-            manager_contributors=manager_contributors,
+            manager_contributors=contributors_to_analyze,
         )
     except Exception:
         logger.exception(

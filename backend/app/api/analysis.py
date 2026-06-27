@@ -607,6 +607,58 @@ def _count_issues_by_type(issues) -> dict[str, int]:
     return counts
 
 
+def _sonar_work_duration_minutes(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().lower()
+    if not text:
+        return None
+
+    total = 0.0
+    matched = False
+    for amount, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(d|day|days|h|hr|hrs|hour|hours|min|m|minute|minutes)", text):
+        matched = True
+        number = float(amount)
+        if unit in {"d", "day", "days"}:
+            total += number * 8 * 60
+        elif unit in {"h", "hr", "hrs", "hour", "hours"}:
+            total += number * 60
+        else:
+            total += number
+    if matched:
+        return total
+
+    numeric = _safe_number(text)
+    return float(numeric) if numeric is not None else None
+
+
+def _attributed_technical_debt_minutes(issues: list[SonarIssue]) -> float | None:
+    code_smell_issues = [
+        issue for issue in issues
+        if str(getattr(issue, "type", "") or "").upper() == "CODE_SMELL"
+    ]
+    if not code_smell_issues:
+        return 0.0
+
+    total = 0.0
+    found_duration = False
+    for issue in code_smell_issues:
+        raw_issue = issue.raw_issue if isinstance(issue.raw_issue, dict) else {}
+        minutes = _sonar_work_duration_minutes(
+            raw_issue.get("effort")
+            or raw_issue.get("debt")
+            or raw_issue.get("remediationEffort")
+        )
+        if minutes is None:
+            continue
+        found_duration = True
+        total += minutes
+
+    return total if found_duration else None
+
+
 def _skill_score_fields(
     score_row: SkillScore | None,
     sonar_health_score: object | None = None,
@@ -3083,12 +3135,17 @@ async def get_sonar_results(
         for row in issue_rows
     ]
     issue_counts = _count_issues_by_type(issue_rows)
+    measures = _numeric_measure_map(summary.measures)
+    if run.analysis_scope == "contribution":
+        attributed_debt = _attributed_technical_debt_minutes(issue_rows)
+        if attributed_debt is not None:
+            measures["sqale_index"] = attributed_debt
     sonar_block = {
         "available": True,
         "project_key": summary.project_key,
         "quality_gate": summary.quality_gate,
         "sonar_health_score": _safe_number(summary.sonar_health_score),
-        "measures": _numeric_measure_map(summary.measures),
+        "measures": measures,
         "coverage": summary.coverage if isinstance(summary.coverage, dict) else {},
     }
     if include_raw:

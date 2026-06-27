@@ -20,6 +20,37 @@ SCANNER_TIMEOUT_SECONDS = {
     "gitleaks": 180,
 }
 
+ALWAYS_GENERATED_SECURITY_ARTIFACTS = {
+    "gitleaks-report.json",
+}
+
+
+def _normalize_generated_artifacts(generated_artifacts: list[str] | None = None) -> set[str]:
+    return {
+        str(path or "").replace("\\", "/").strip().lstrip("/")
+        for path in (generated_artifacts or [])
+        if str(path or "").strip()
+    }
+
+
+def _is_generated_security_artifact(
+    path: str | None,
+    generated_artifacts: list[str] | set[str] | None = None,
+) -> bool:
+    normalized = (path or "").replace("\\", "/").strip().lstrip("/")
+    if not normalized:
+        return False
+    explicit_artifacts = (
+        generated_artifacts
+        if isinstance(generated_artifacts, set)
+        else _normalize_generated_artifacts(generated_artifacts)
+    )
+    return (
+        normalized in ALWAYS_GENERATED_SECURITY_ARTIFACTS
+        or normalized in explicit_artifacts
+        or normalized.startswith(".scannerwork/")
+    )
+
 
 def _scanner_worker(scanner, repo_path, result_path):
     try:
@@ -92,7 +123,11 @@ def _safe_relative_file(path: str) -> str | None:
     return normalized
 
 
-def _build_scoped_scan_root(repo_path: str, include_files: list[str] | None):
+def _build_scoped_scan_root(
+    repo_path: str,
+    include_files: list[str] | None,
+    generated_artifacts: set[str] | None = None,
+):
     if include_files is None:
         return repo_path, None, None
 
@@ -103,6 +138,8 @@ def _build_scoped_scan_root(repo_path: str, include_files: list[str] | None):
     for item in include_files:
         rel_path = _safe_relative_file(item)
         if not rel_path:
+            continue
+        if _is_generated_security_artifact(rel_path, generated_artifacts):
             continue
         source = os.path.join(repo_path, rel_path.replace("/", os.sep))
         if not os.path.isfile(source):
@@ -115,8 +152,17 @@ def _build_scoped_scan_root(repo_path: str, include_files: list[str] | None):
     return scan_root, temp_dir, copied_files
 
 
-def run_security_analysis(repo_path, include_files: list[str] | None = None):
-    scan_root, scoped_context, copied_files = _build_scoped_scan_root(repo_path, include_files)
+def run_security_analysis(
+    repo_path,
+    include_files: list[str] | None = None,
+    generated_artifacts: list[str] | None = None,
+):
+    generated_artifact_set = _normalize_generated_artifacts(generated_artifacts)
+    scan_root, scoped_context, copied_files = _build_scoped_scan_root(
+        repo_path,
+        include_files,
+        generated_artifact_set,
+    )
     if copied_files is not None:
         print(
             "security pipeline scoped scan: "
@@ -215,11 +261,19 @@ def run_security_analysis(repo_path, include_files: list[str] | None = None):
         if running:
             time.sleep(0.5)
 
+    before_artifact_filter = len(findings)
+    findings = [
+        finding for finding in findings
+        if not _is_generated_security_artifact(finding.get("file_path"), generated_artifact_set)
+        and not _is_generated_security_artifact(finding.get("manifest_file"), generated_artifact_set)
+    ]
+    filtered_artifacts = before_artifact_filter - len(findings)
     before_dedup = len(findings)
     findings = deduplicate_findings(findings)
     print(
         "security pipeline summary: "
         f"raw_counts={raw_counts}, normalized_total={before_dedup}, "
+        f"generated_artifacts_filtered={filtered_artifacts}, "
         f"deduped_total={len(findings)}, failed_tools={failed_tools}"
     )
 

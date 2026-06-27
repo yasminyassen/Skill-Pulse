@@ -6,7 +6,7 @@ from typing import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -26,7 +26,7 @@ from app.db.models import (
     UserRole,
 )
 from app.services.security_service import normalize_severity
-from app.services.sonarqube_score_service import classify_skill_score
+from app.services.sonarqube_score_service import classify_skill_score, compute_skill_score_engine, compute_sonar_health_score
 from app.services.llm_client import generate_repository_manager_recommendations
 from app.schemas.manager_schemas import (
     ManagerActionableRecommendations,
@@ -242,6 +242,100 @@ def _contributor_metric_payload_from_summary(summary: ContributorAnalysisSummary
         "duplication_percentage": _number_or_none(summary.duplicated_lines_density),
         "quality_gate": summary.quality_gate,
     }
+
+
+def _attributed_sonar_issue_counts(
+    db: Session,
+    rows: list[ScoreRow],
+) -> dict[tuple[int, int], dict[str, int]]:
+    run_user_pairs = {
+        (int(run.id), int(user.id))
+        for _, run, _, user in rows
+        if run is not None and user is not None
+    }
+    if not run_user_pairs:
+        return {}
+
+    run_ids = sorted({run_id for run_id, _ in run_user_pairs})
+    user_ids = sorted({user_id for _, user_id in run_user_pairs})
+    counts: dict[tuple[int, int], dict[str, int]] = {
+        pair: {"BUG": 0, "CODE_SMELL": 0}
+        for pair in run_user_pairs
+    }
+    query_rows = (
+        db.query(
+            SonarIssue.analysis_run_id,
+            SonarIssue.user_id,
+            func.upper(SonarIssue.type).label("issue_type"),
+            func.count(SonarIssue.id).label("issue_count"),
+        )
+        .filter(
+            SonarIssue.analysis_run_id.in_(run_ids),
+            SonarIssue.user_id.in_(user_ids),
+            or_(SonarIssue.status.is_(None), func.upper(SonarIssue.status) != "CLOSED"),
+            func.upper(SonarIssue.type).in_(["BUG", "CODE_SMELL"]),
+        )
+        .group_by(SonarIssue.analysis_run_id, SonarIssue.user_id, func.upper(SonarIssue.type))
+        .all()
+    )
+    for run_id, user_id, issue_type, issue_count in query_rows:
+        key = (int(run_id), int(user_id))
+        if key not in counts:
+            continue
+        counts[key][str(issue_type).upper()] = int(issue_count or 0)
+    return counts
+
+
+def _sonar_payload_with_attributed_issue_counts(
+    summary: ContributorAnalysisSummary,
+    counts: dict[str, int],
+) -> dict | None:
+    measures = summary.measures if isinstance(summary.measures, dict) else {}
+    if not measures:
+        return None
+    adjusted_measures = dict(measures)
+    adjusted_measures["bugs"] = int(counts.get("BUG", 0) or 0)
+    adjusted_measures["code_smells"] = int(counts.get("CODE_SMELL", 0) or 0)
+
+    raw_payload = summary.raw_payload if isinstance(summary.raw_payload, dict) else {}
+    payload = dict(raw_payload)
+    payload["measures"] = {
+        "component": {
+            "measures": [
+                {"metric": key, "value": str(value)}
+                for key, value in adjusted_measures.items()
+                if value is not None
+            ]
+        }
+    }
+    if summary.quality_gate and "quality_gate" not in payload:
+        payload["quality_gate"] = {"projectStatus": {"status": summary.quality_gate}}
+    return payload
+
+
+def _apply_attributed_issue_counts(
+    payload: dict,
+    counts: dict[str, int] | None,
+    summary: ContributorAnalysisSummary | None = None,
+) -> dict:
+    if counts is None:
+        return payload
+    result = dict(payload)
+    result["bugs"] = int(counts.get("BUG", 0) or 0)
+    result["code_smells"] = int(counts.get("CODE_SMELL", 0) or 0)
+    if summary is not None:
+        adjusted_sonar_payload = _sonar_payload_with_attributed_issue_counts(summary, counts)
+        adjusted_health = compute_sonar_health_score(adjusted_sonar_payload)
+        if adjusted_health is not None:
+            result["sonar_health_score"] = adjusted_health
+            result["health_score"] = adjusted_health
+            adjusted_skill = compute_skill_score_engine(
+                sonar_health_score=adjusted_health,
+                security_score=result.get("security_score"),
+            )
+            if adjusted_skill is not None:
+                result["skill_score"] = adjusted_skill
+    return result
 
 
 def _avg_optional(values: Iterable[object]) -> float | None:
@@ -990,9 +1084,15 @@ def _contributor_metric_payload(row: ScoreRow) -> dict:
 
 def _contributor_rows(db: Session, score_rows: list[ScoreRow]) -> list[ManagerDashboardContributorRow]:
     contributors: list[ManagerDashboardContributorRow] = []
-    for row in _latest_contributor_score_rows(score_rows):
-        _, _, _, user = row
-        metrics = _contributor_metric_payload(row)
+    latest_rows = _latest_contributor_score_rows(score_rows)
+    issue_counts = _attributed_sonar_issue_counts(db, latest_rows)
+    for row in latest_rows:
+        summary, run, _, user = row
+        metrics = _apply_attributed_issue_counts(
+            _contributor_metric_payload(row),
+            issue_counts.get((int(run.id), int(user.id))),
+            summary,
+        )
         contributors.append(
             ManagerDashboardContributorRow(
                 id=user.id,
@@ -1489,11 +1589,18 @@ def _top_security_findings_payload(db: Session, run: AnalysisRun) -> list[dict]:
     ]
 
 
-def _contributor_recommendation_payload(rows: list[ScoreRow], repository_id: int) -> list[dict]:
+def _contributor_recommendation_payload(db: Session, rows: list[ScoreRow], repository_id: int) -> list[dict]:
     contributors: list[dict] = []
     repository_rows = [row for row in rows if row[2].id == repository_id]
-    for row in _latest_contributor_score_rows(repository_rows):
+    latest_rows = _latest_contributor_score_rows(repository_rows)
+    issue_counts = _attributed_sonar_issue_counts(db, latest_rows)
+    for row in latest_rows:
         summary, run, repository, user = row
+        metrics = _apply_attributed_issue_counts(
+            _contributor_metric_payload_from_summary(summary),
+            issue_counts.get((int(run.id), int(user.id))),
+            summary,
+        )
         contributors.append(
             {
                 "repository_id": repository.id,
@@ -1504,7 +1611,7 @@ def _contributor_recommendation_payload(rows: list[ScoreRow], repository_id: int
                 "contributor_login": summary.contributor_login,
                 "files_count": summary.files_count,
                 "touched_files": summary.touched_files if isinstance(summary.touched_files, list) else [],
-                **_contributor_metric_payload_from_summary(summary),
+                **metrics,
             }
         )
     return contributors
@@ -1538,7 +1645,7 @@ def _repository_manager_recommendation_payload(
         "top_risky_files": _top_risky_files_payload(db, run),
         "top_sonar_issues": _top_sonar_issues_payload(db, run, issue_rows=issue_rows),
         "top_security_findings": _top_security_findings_payload(db, run),
-        "contributors": _contributor_recommendation_payload(contributor_rows, run.repository_id),
+        "contributors": _contributor_recommendation_payload(db, contributor_rows, run.repository_id),
         "risk_groups": _model_to_dict(risks),
     }
 

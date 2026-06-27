@@ -390,12 +390,6 @@ async def sync_contributors_endpoint(
     try:
         collaborators_data = await fetch_repo_collaborators(manager_token, full_name)
     except HTTPException as exc:
-        (
-            db.query(RepositoryContributor)
-            .filter(RepositoryContributor.repository_id == repo.id)
-            .delete(synchronize_session=False)
-        )
-        db.commit()
         raise HTTPException(status_code=exc.status_code, detail=f"Unable to verify repository access for assignment candidates: {exc.detail}")
 
     added_count = 0

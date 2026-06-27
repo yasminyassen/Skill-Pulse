@@ -50,6 +50,48 @@ def test_write_sonar_properties_adds_normalized_python_inclusions(tmp_path, monk
     assert "frontend/src/App.tsx" not in content
 
 
+def test_run_sonar_analysis_restores_repository_owned_properties(tmp_path, monkeypatch):
+    monkeypatch.delenv("SONAR_TOKEN", raising=False)
+    original_content = "sonar.projectKey=repo-owned\nsonar.login=real-secret\n"
+    (tmp_path / "sonar-project.properties").write_text(original_content, encoding="utf-8")
+
+    monkeypatch.setattr(sonarqube_service, "run_sonar_scanner", lambda repo_path: {"report_task": {}})
+    monkeypatch.setattr(sonarqube_service, "_wait_for_completion", lambda scanner: {"task": {"status": "SUCCESS"}})
+    monkeypatch.setattr(sonarqube_service, "get_quality_gate", lambda project_key: {"projectStatus": {"status": "OK"}})
+    monkeypatch.setattr(sonarqube_service, "get_measures", lambda project_key: {"component": {"measures": []}})
+    monkeypatch.setattr(sonarqube_service, "safe_get_file_measures", lambda project_key: {"components": []})
+    monkeypatch.setattr(sonarqube_service, "get_issues", lambda project_key: {"issues": []})
+
+    result = sonarqube_service.run_sonar_analysis(
+        repo_path=str(tmp_path),
+        full_name="acme/repo",
+        branch="main",
+    )
+
+    assert result["sonar"]["generated_artifacts"] == []
+    assert (tmp_path / "sonar-project.properties").read_text(encoding="utf-8") == original_content
+
+
+def test_run_sonar_analysis_marks_created_properties_as_generated(tmp_path, monkeypatch):
+    monkeypatch.delenv("SONAR_TOKEN", raising=False)
+
+    monkeypatch.setattr(sonarqube_service, "run_sonar_scanner", lambda repo_path: {"report_task": {}})
+    monkeypatch.setattr(sonarqube_service, "_wait_for_completion", lambda scanner: {"task": {"status": "SUCCESS"}})
+    monkeypatch.setattr(sonarqube_service, "get_quality_gate", lambda project_key: {"projectStatus": {"status": "OK"}})
+    monkeypatch.setattr(sonarqube_service, "get_measures", lambda project_key: {"component": {"measures": []}})
+    monkeypatch.setattr(sonarqube_service, "safe_get_file_measures", lambda project_key: {"components": []})
+    monkeypatch.setattr(sonarqube_service, "get_issues", lambda project_key: {"issues": []})
+
+    result = sonarqube_service.run_sonar_analysis(
+        repo_path=str(tmp_path),
+        full_name="acme/repo",
+        branch="main",
+    )
+
+    assert result["sonar"]["generated_artifacts"] == ["sonar-project.properties"]
+    assert not (tmp_path / "sonar-project.properties").exists()
+
+
 def test_existing_python_contribution_files_filters_to_existing_repo_python_files(tmp_path):
     repo_root = tmp_path
     (repo_root / "app" / "api").mkdir(parents=True)

@@ -215,7 +215,7 @@ export default function RepositoryAnalysis() {
     }));
   };
 
-  const fetchReviewContributors = async (repoId: number) => {
+  const fetchReviewContributors = async (repoId: number): Promise<Contributor[]> => {
     try {
       await api.post(`/requirements/repositories/${repoId}/sync-contributors`);
     } catch (err) {
@@ -224,9 +224,11 @@ export default function RepositoryAnalysis() {
     try {
       const res = await api.get(`/requirements/repositories/${repoId}/contributors`);
       setReviewContributors(res.data || []);
+      return res.data || [];
     } catch (err) {
       console.warn("Could not load contributors:", err);
       setReviewContributors([]);
+      return [];
     }
   };
 
@@ -266,7 +268,7 @@ export default function RepositoryAnalysis() {
       }
       const repoId = requirementsRepoId || requirementsState?.repository_id;
       if (repoId && !reviewContributors.length) {
-        fetchReviewContributors(repoId);
+        await fetchReviewContributors(repoId);
       }
       setShowPrdModal(true);
     } catch (err) {
@@ -339,9 +341,11 @@ export default function RepositoryAnalysis() {
       setPrdDocId(docId);
       const storiesRes = await api.get(`/requirements/${docId}/stories`);
       setPrdStories(storiesRes.data);
+      if (repoIdForFingerprint) {
+        await fetchReviewContributors(Number(repoIdForFingerprint));
+      }
       const firstStory = storiesRes.data?.[0];
       if (firstStory?.document_id) {
-        // Repository id is returned indirectly by the selected workflow after upload; contributors may be empty until analysis.
         setRequirementsAnalysisMsg("Requirements extracted. Review and confirm, then analyze repository and detect coverage.");
       }
       setShowPrdModal(true);
@@ -509,7 +513,7 @@ export default function RepositoryAnalysis() {
           setRequirementsAnalysisReady(true);
           const state = await fetchRequirementsState(res.data.repo_id);
           if (!state?.has_prd) setRequirementsAnalysisMsg("Repository analysis is ready. Upload a PRD to extract requirements.");
-          fetchReviewContributors(res.data.repo_id);
+          await fetchReviewContributors(res.data.repo_id);
         }
         fetchHistory(false); return;
       }
@@ -581,7 +585,7 @@ export default function RepositoryAnalysis() {
           if (analysisMode === "requirements" && requirementsRepoId) {
             setRequirementsAnalysisReady(true);
             setRequirementsAnalysisMsg("Repository analysis is complete. Starting coverage detection.");
-            fetchReviewContributors(requirementsRepoId);
+            await fetchReviewContributors(requirementsRepoId);
             try {
               await api.post(`/requirements/coverage/repositories/${requirementsRepoId}/detect`);
               showToast("Coverage detection started");

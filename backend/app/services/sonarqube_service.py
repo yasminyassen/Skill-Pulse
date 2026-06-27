@@ -585,6 +585,14 @@ def run_sonar_analysis(
     included_files: list[str] | None = None,
 ) -> dict[str, Any]:
     project_key = _safe_project_key(f"skill-pulse:{full_name}:{branch}")
+    properties_path = Path(repo_path) / "sonar-project.properties"
+    sonar_properties_existed = properties_path.exists()
+    original_sonar_properties = (
+        properties_path.read_bytes()
+        if sonar_properties_existed
+        else None
+    )
+    generated_artifacts: list[str] = [] if sonar_properties_existed else ["sonar-project.properties"]
     coverage = prepare_coverage_report(repo_path, uploaded_coverage_path=coverage_report_path)
     if coverage.get("coverage_file_exists"):
         normalization_result = normalize_coverage_xml_paths(
@@ -608,19 +616,26 @@ def run_sonar_analysis(
         if coverage.get("coverage_file_exists") and coverage.get("status") != "invalid"
         else None
     )
-    write_sonar_properties(
-        repo_path=repo_path,
-        project_key=project_key,
-        project_name=f"{full_name} ({branch})",
-        coverage_report_path=coverage_report_for_sonar,
-        included_files=included_files,
-    )
-    scanner = run_sonar_scanner(repo_path)
-    ce_task = _wait_for_completion(scanner)
+    try:
+        write_sonar_properties(
+            repo_path=repo_path,
+            project_key=project_key,
+            project_name=f"{full_name} ({branch})",
+            coverage_report_path=coverage_report_for_sonar,
+            included_files=included_files,
+        )
+        scanner = run_sonar_scanner(repo_path)
+        ce_task = _wait_for_completion(scanner)
+    finally:
+        if sonar_properties_existed and original_sonar_properties is not None:
+            properties_path.write_bytes(original_sonar_properties)
+        elif not sonar_properties_existed and properties_path.exists():
+            properties_path.unlink()
     return {
         "source": "sonarqube",
         "project_key": project_key,
         "sonar": {
+            "generated_artifacts": generated_artifacts,
             "coverage": coverage,
             "scanner": scanner,
             "ce_task": ce_task,

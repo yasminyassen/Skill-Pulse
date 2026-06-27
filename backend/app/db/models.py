@@ -96,13 +96,22 @@ class AnalysisRun(Base):
     code_metrics = relationship("CodeMetrics", back_populates="analysis_run", cascade="all, delete-orphan")
     security_findings = relationship("SecurityFinding", back_populates="analysis_run", cascade="all, delete-orphan")
     skill_scores = relationship("SkillScore", back_populates="analysis_run", cascade="all, delete-orphan")
-    sonar_summary = relationship("SonarAnalysisSummary", back_populates="analysis_run", cascade="all, delete-orphan", uselist=False)
+    sonar_summaries = relationship("SonarAnalysisSummary", back_populates="analysis_run", cascade="all, delete-orphan")
     sonar_file_measures = relationship("SonarFileMeasure", back_populates="analysis_run", cascade="all, delete-orphan")
     sonar_issues = relationship("SonarIssue", back_populates="analysis_run", cascade="all, delete-orphan")
     contributor_analysis_summaries = relationship("ContributorAnalysisSummary", back_populates="analysis_run", cascade="all, delete-orphan")
     user = relationship("User", back_populates="analysis_runs")
     ai_insights = Column(JSON, nullable=True)
     recruiter_candidate = relationship("RecruiterCandidate", back_populates="analysis_run", uselist=False)
+
+    @property
+    def sonar_summary(self):
+        if not self.sonar_summaries:
+            return None
+        for summary in self.sonar_summaries:
+            if summary.user_id == self.user_id:
+                return summary
+        return self.sonar_summaries[0]
 
 
 class RepositoryAnalysis(Base):
@@ -176,9 +185,12 @@ class CodeMetrics(Base):
 
 class SonarAnalysisSummary(Base):
     __tablename__ = "sonar_analysis_summaries"
+    __table_args__ = (
+        UniqueConstraint("analysis_run_id", "user_id", name="uq_sonar_analysis_summary_run_user"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"), unique=True, nullable=False)
+    analysis_run_id = Column(Integer, ForeignKey("analysis_runs.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     project_key = Column(String, nullable=True)
     quality_gate = Column(String, nullable=True)
@@ -190,7 +202,7 @@ class SonarAnalysisSummary(Base):
     raw_payload = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    analysis_run = relationship("AnalysisRun", back_populates="sonar_summary")
+    analysis_run = relationship("AnalysisRun", back_populates="sonar_summaries")
     user = relationship("User")
 
 class ContributorAnalysisSummary(Base):
