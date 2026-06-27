@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   BriefcaseBusiness,
   Check,
+  ChevronRight,
   FileCheck2,
   Mail,
   Pencil,
@@ -148,7 +149,7 @@ export default function RecruiterProfilePage() {
       const response = await api.get<RecruiterProfileData>("/recruiter/profile-dashboard");
       applyProfileState(response.data);
     } catch {
-      setError("Unable to load recruiter profile.");
+      setError("Unable to load recruiter profile");
     } finally {
       setLoading(false);
     }
@@ -541,6 +542,7 @@ export default function RecruiterProfilePage() {
           text-decoration: none;
           font-size: 14px;
           font-weight: 500;
+          width: 100%;
         }
         .rp-setting-row:hover,
         .rp-setting-row.is-active {
@@ -865,6 +867,24 @@ export default function RecruiterProfilePage() {
                     </article>
                   ))}
                   {!visibleActivities.length && <div className="rp-empty">No recent activity yet.</div>}
+                </div>
+              </section>
+
+              <section className="rp-panel">
+                <h2 className="rp-section-title">Profile Settings</h2>
+                <div className="rp-settings-grid">
+                  <button
+                    type="button"
+                    className="rp-setting-row"
+                    onClick={() => navigate("/dashboard/recruiter/account-settings")}
+                  >
+                    <span className="rp-setting-icon"><UserCog size={16} /></span>
+                    <span className="rp-setting-copy">
+                      <strong>Account Settings</strong>
+                      <small>Manage your account details and password</small>
+                    </span>
+                    <ChevronRight size={14} />
+                  </button>
                 </div>
               </section>
 

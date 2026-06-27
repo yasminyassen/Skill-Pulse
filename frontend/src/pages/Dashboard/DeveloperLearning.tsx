@@ -192,22 +192,22 @@ export default function DeveloperLearning() {
         .repo-trigger:hover, .repo-trigger.open { border-color: ${accent}80; box-shadow: 0 0 0 4px ${accent}12; }
         .repo-menu {
           position: absolute; z-index: 50; top: calc(100% + 8px); left: 0; right: 0;
-          background: #1a1a2e;
+          background: var(--bg-card);
           border: 1px solid rgba(99,102,241,0.4);
           border-radius: 16px;
-          box-shadow: 0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(99,102,241,0.15), inset 0 1px 0 rgba(255,255,255,0.05);
+          box-shadow: var(--shadow-card), 0 24px 60px rgba(0,0,0,0.25);
           max-height: 280px; overflow: auto; padding: 8px;
           backdrop-filter: blur(20px);
         }
         .repo-option {
           width: 100%; border: none; cursor: pointer; border-radius: 12px;
-          padding: 11px 12px; background: transparent; color: rgba(200,200,220,0.9);
+          padding: 11px 12px; background: transparent; color: var(--text-secondary);
           display: flex; align-items: center; justify-content: space-between; gap: 12px;
           font-family: 'Inter', system-ui, sans-serif; text-align: left;
           transition: background 0.15s, color 0.15s;
         }
-        .repo-option:hover { background: rgba(99,102,241,0.15); color: #fff; }
-        .repo-option.selected { background: rgba(99,102,241,0.2); color: #fff; }
+        .repo-option:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+        .repo-option.selected { background: ${accent}1A; color: var(--text-primary); }
         .metric-card {
           background: var(--bg-card-hover); border: 1px solid var(--border);
           border-radius: 16px; padding: 16px;
@@ -269,7 +269,7 @@ export default function DeveloperLearning() {
         .chip {
           display: inline-flex; align-items: center; gap: 5px;
           padding: 4px 10px; border-radius: 999px; font-size: 13px;
-          color: rgba(190,190,215,0.95); background: var(--bg-card-hover); border: 1px solid var(--border);
+          color: var(--text-secondary); background: var(--bg-card-hover); border: 1px solid var(--border);
         }
         .empty-state {
           border: 1px dashed var(--border-hover); border-radius: 18px; padding: 28px;
@@ -439,28 +439,28 @@ function RecommendationCard({ item, accent }: { item: LearningRecommendation; ac
           <div className="rec-skill-icon" style={{ color: styles.fg, background: styles.bg, borderColor: styles.border }}>{skillIcon}</div>
           <span className="priority-pill" style={{ color: styles.fg, background: styles.bg, border: `1px solid ${styles.border}`, flexShrink: 0 }}>{priority}</span>
         </div>
-        <h2 style={{ margin: 0, fontFamily: "'Inter', sans-serif", fontSize: 20, letterSpacing: "-0.3px", lineHeight: 1.25 }}>{item.skill || "Learning focus"}</h2>
-        {item.why_needed && <p style={{ color: "rgba(180,180,210,0.95)", lineHeight: 1.7, margin: 0, fontSize: 14 }}>{item.why_needed}</p>}
+        <h2 style={{ margin: 0, fontFamily: "'Inter', sans-serif", fontSize: 20, letterSpacing: "-0.3px", lineHeight: 1.25, color: "var(--text-primary)" }}>{item.skill || "Learning focus"}</h2>
+        {item.why_needed && <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, margin: 0, fontSize: 14 }}>{item.why_needed}</p>}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
           <div className="info-block">
             <div style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(167,139,250,0.9)", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.7px", fontWeight: 800, marginBottom: 5 }}>
               {clockIcon} Estimated Effort
             </div>
-            <div style={{ color: "rgba(210,210,230,0.95)", fontSize: 14 }}>{item.estimated_effort || "Not specified"}</div>
+            <div style={{ color: "var(--text-primary)", fontSize: 14 }}>{item.estimated_effort || "Not specified"}</div>
           </div>
           <div className="info-block">
             <div style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(167,139,250,0.9)", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.7px", fontWeight: 800, marginBottom: 5 }}>
               {targetIcon} Expected Improvement
             </div>
-            <div style={{ color: "rgba(210,210,230,0.95)", fontSize: 14 }}>{item.expected_improvement || "Not specified"}</div>
+            <div style={{ color: "var(--text-primary)", fontSize: 14 }}>{item.expected_improvement || "Not specified"}</div>
           </div>
         </div>
 
         {item.learning_objectives?.length ? (
           <div style={{ marginTop: 4 }}>
             <label className="learning-label">Objectives</label>
-            <ul style={{ margin: 0, paddingLeft: 20, color: "rgba(180,180,210,0.95)", lineHeight: 1.75, fontSize: 14 }}>
+            <ul style={{ margin: 0, paddingLeft: 20, color: "var(--text-secondary)", lineHeight: 1.75, fontSize: 14 }}>
               {item.learning_objectives.map((objective) => <li key={objective}>{objective}</li>)}
             </ul>
           </div>
@@ -477,7 +477,7 @@ function RecommendationCard({ item, accent }: { item: LearningRecommendation; ac
             </div>
           </div>
         ) : (
-          <p style={{ color: "rgba(150,150,170,0.8)", margin: 0, fontSize: 14 }}>No resources available for this recommendation.</p>
+          <p style={{ color: "var(--text-muted)", margin: 0, fontSize: 14 }}>No resources available for this recommendation.</p>
         )}
       </div>
     </article>
@@ -497,7 +497,7 @@ function ResourceCard({ resource }: { resource: LearningResource }) {
           {resource.provider && <span className="chip">{resource.provider}</span>}
           <span className="chip">{typeLabel(resource.type)}</span>
         </div>
-        {resource.reason && <p style={{ color: "rgba(180,180,210,0.95)", fontSize: 14, lineHeight: 1.55, margin: "9px 0 0" }}>{resource.reason}</p>}
+        {resource.reason && <p style={{ color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.55, margin: "9px 0 0" }}>{resource.reason}</p>}
       </div>
     </>
   );
