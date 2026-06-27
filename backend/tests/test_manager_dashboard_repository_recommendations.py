@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.manager_dashboard import (
+    get_manager_dashboard_repos,
     _normalise_overview_recommendations,
     _repository_manager_recommendation_payload,
     _risk_groups,
@@ -224,6 +225,86 @@ def test_repository_recommendation_payload_uses_selected_run_and_repo_only():
         assert [item["message"] for item in payload["top_sonar_issues"]] == ["Selected repo issue"]
         assert [item["description"] for item in payload["top_security_findings"]] == ["Selected repo finding"]
         assert [item["repository_id"] for item in payload["contributors"]] == [repo_one.id]
+    finally:
+        db.close()
+
+
+def test_manager_dashboard_repos_returns_only_current_manager_repository_runs():
+    db = _db_session()
+    try:
+        current_manager = _user(db, 1, UserRole.manager)
+        other_manager = _user(db, 2, UserRole.manager)
+        developer = _user(db, 3, UserRole.developer)
+        recruiter = _user(db, 4, UserRole.recruiter)
+
+        manager_repo = Repository(
+            github_repo_id="repo-manager",
+            name="manager-repo",
+            full_name="acme/manager-repo",
+            url="https://example.test/acme/manager-repo",
+        )
+        recruiter_repo = Repository(
+            github_repo_id="repo-recruiter",
+            name="recruiter-repo",
+            full_name="acme/recruiter-repo",
+            url="https://example.test/acme/recruiter-repo",
+        )
+        developer_repo = Repository(
+            github_repo_id="repo-developer",
+            name="developer-repo",
+            full_name="acme/developer-repo",
+            url="https://example.test/acme/developer-repo",
+        )
+        other_manager_repo = Repository(
+            github_repo_id="repo-other-manager",
+            name="other-manager-repo",
+            full_name="acme/other-manager-repo",
+            url="https://example.test/acme/other-manager-repo",
+        )
+        db.add_all([manager_repo, recruiter_repo, developer_repo, other_manager_repo])
+        db.flush()
+
+        db.add_all(
+            [
+                AnalysisRun(
+                    repository_id=manager_repo.id,
+                    user_id=current_manager.id,
+                    branch="main",
+                    analysis_scope="repository",
+                    status="completed",
+                    completed_at=datetime(2026, 6, 24, tzinfo=timezone.utc),
+                ),
+                AnalysisRun(
+                    repository_id=recruiter_repo.id,
+                    user_id=recruiter.id,
+                    branch="main",
+                    analysis_scope="repository",
+                    status="completed",
+                    completed_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+                ),
+                AnalysisRun(
+                    repository_id=developer_repo.id,
+                    user_id=developer.id,
+                    branch="main",
+                    analysis_scope="contribution",
+                    status="completed",
+                    completed_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+                ),
+                AnalysisRun(
+                    repository_id=other_manager_repo.id,
+                    user_id=other_manager.id,
+                    branch="main",
+                    analysis_scope="repository",
+                    status="completed",
+                    completed_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        repos = get_manager_dashboard_repos(db=db, current_user=current_manager)
+
+        assert [repo.id for repo in repos] == [manager_repo.id]
     finally:
         db.close()
 

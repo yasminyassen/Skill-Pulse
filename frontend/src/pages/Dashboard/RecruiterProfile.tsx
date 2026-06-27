@@ -1,18 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  AlertTriangle,
   BriefcaseBusiness,
   Check,
-  ChevronRight,
-  EyeOff,
   FileCheck2,
-  Gauge,
   Mail,
   Pencil,
   RefreshCcw,
-  ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   Target,
   UserCog,
@@ -38,13 +32,6 @@ interface RecruiterProfileData {
     hiring_focus: string | null;
     member_since: string | null;
     has_password?: boolean;
-    security_score_visible: boolean | null;
-    high_priority_threshold: number | null;
-    weight_code_quality: number | null;
-    weight_architecture: number | null;
-    weight_maintainability: number | null;
-    weight_security: number | null;
-    weight_git_activity: number | null;
   };
   talent_overview: {
     candidates_evaluated: number;
@@ -61,7 +48,6 @@ interface RecruiterProfileData {
   }>;
 }
 
-type SettingsView = "account" | "preferences" | "threshold" | "security";
 
 const emptyProfile: RecruiterProfileData = {
   user: {
@@ -76,13 +62,6 @@ const emptyProfile: RecruiterProfileData = {
     hiring_focus: null,
     member_since: null,
     has_password: false,
-    security_score_visible: true,
-    high_priority_threshold: 75,
-    weight_code_quality: 20,
-    weight_architecture: 20,
-    weight_maintainability: 20,
-    weight_security: 20,
-    weight_git_activity: 20,
   },
   talent_overview: {
     candidates_evaluated: 0,
@@ -92,32 +71,6 @@ const emptyProfile: RecruiterProfileData = {
   recent_activity: [],
 };
 
-const settingRows: Array<{ key: SettingsView; label: string; description: string; icon: typeof UserCog }> = [
-  {
-    key: "account",
-    label: "Account Settings",
-    description: "Manage your account details, password, and deletion",
-    icon: UserCog,
-  },
-  {
-    key: "preferences",
-    label: "Evaluation Preferences",
-    description: "Adjust scoring weights for candidate analysis",
-    icon: SlidersHorizontal,
-  },
-  {
-    key: "threshold",
-    label: "Priority Thresholds",
-    description: "Choose the score that marks candidates as high priority",
-    icon: Gauge,
-  },
-  {
-    key: "security",
-    label: "Security Visibility",
-    description: "Show or hide security scores in recruiter reports",
-    icon: ShieldCheck,
-  },
-];
 
 const initials = (name: string) =>
   name
@@ -150,30 +103,6 @@ const fmtAgo = (value: string | null) => {
   return `${Math.floor(months / 12)} yr ago`;
 };
 
-const fmtNumber = (value: number) => Number(value || 0).toLocaleString();
-
-function Toggle({
-  checked,
-  onChange,
-  title,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  title: string;
-}) {
-  return (
-    <button
-      type="button"
-      className={`rp-toggle ${checked ? "is-on" : ""}`}
-      onClick={() => onChange(!checked)}
-      title={title}
-      aria-pressed={checked}
-    >
-      <span />
-    </button>
-  );
-}
-
 function Skeleton() {
   return (
     <div className="rp-stack">
@@ -186,10 +115,6 @@ function Skeleton() {
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="rp-section-title">{children}</h2>;
-}
-
 export default function RecruiterProfilePage() {
   const navigate = useNavigate();
   const [profile, setProfile] = useState<RecruiterProfileData>(emptyProfile);
@@ -199,11 +124,7 @@ export default function RecruiterProfilePage() {
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ organization: "", job_title: "", department: "", hiring_focus: "" });
   const [editSaving, setEditSaving] = useState(false);
-  const [activeView, setActiveView] = useState<SettingsView>("preferences");
   const [showAllActivities, setShowAllActivities] = useState(false);
-  const [savingEval, setSavingEval] = useState(false);
-  const [securityOn, setSecurityOn] = useState(true);
-  const [threshold, setThreshold] = useState(75);
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -218,8 +139,6 @@ export default function RecruiterProfilePage() {
       department: data.user.department || "",
       hiring_focus: data.user.hiring_focus || "",
     });
-    setSecurityOn(data.user.security_score_visible ?? true);
-    setThreshold(data.user.high_priority_threshold ?? 75);
   };
 
   const loadProfile = async () => {
@@ -268,27 +187,6 @@ export default function RecruiterProfilePage() {
     }
   };
 
-  const saveEvalSettings = useCallback(async (patch: Record<string, unknown>) => {
-    setSavingEval(true);
-    try {
-      const response = await api.patch("/recruiter/eval-settings", patch);
-      setProfile(prev => ({ ...prev, user: { ...prev.user, ...response.data } }));
-      showToast("Settings saved");
-    } catch {
-      showToast("Failed to save settings", false);
-    } finally {
-      setSavingEval(false);
-    }
-  }, []);
-
-  const saveThreshold = async () => {
-    await saveEvalSettings({ high_priority_threshold: threshold });
-  };
-
-  const toggleSecurity = async (next: boolean) => {
-    setSecurityOn(next);
-    await saveEvalSettings({ security_score_visible: next });
-  };
 
   const infoGrid = useMemo(
     () => [
@@ -301,79 +199,6 @@ export default function RecruiterProfilePage() {
   );
 
   const visibleActivities = showAllActivities ? profile.recent_activity : profile.recent_activity.slice(0, 5);
-
-  const renderSettings = () => {
-    if (activeView === "account") {
-      return (
-        <section className="rp-panel">
-          <div className="rp-panel-head">
-            <div>
-              <h2>Account Settings</h2>
-              <span>Edit account details, change password, or delete the account.</span>
-            </div>
-          </div>
-          <button className="rp-btn primary" type="button" onClick={() => navigate("/dashboard/recruiter/account-settings")}>
-            Open Account Settings <ChevronRight size={16} />
-          </button>
-        </section>
-      );
-    }
-
-    if (activeView === "threshold") {
-      return (
-        <section className="rp-panel">
-          <div className="rp-panel-head">
-            <div>
-              <h2>Priority Thresholds</h2>
-              <span>Candidates at or above this score are marked high priority.</span>
-            </div>
-          </div>
-          <div className="rp-slider-block">
-            <div className="rp-slider-label"><strong>High priority score</strong><span>{threshold}%</span></div>
-            <input type="range" min={0} max={100} value={threshold} onChange={event => setThreshold(Number(event.target.value))} />
-          </div>
-          <div className="rp-actions">
-            <button className="rp-btn primary" type="button" disabled={savingEval} onClick={saveThreshold}>
-              Save Threshold
-            </button>
-          </div>
-        </section>
-      );
-    }
-
-    if (activeView === "security") {
-      return (
-        <section className="rp-panel">
-          <div className="rp-panel-head">
-            <div>
-              <h2>Security Visibility</h2>
-              <span>Control whether security scores appear in candidate reports.</span>
-            </div>
-            <Toggle checked={securityOn} onChange={toggleSecurity} title="Security score visibility" />
-          </div>
-          <div className={`rp-notice ${securityOn ? "" : "danger"}`}>
-            {securityOn ? <ShieldCheck size={16} /> : <EyeOff size={16} />}
-            <span>{securityOn ? "Security scores are visible in recruiter reports." : "Security scores are currently hidden in recruiter reports."}</span>
-          </div>
-        </section>
-      );
-    }
-
-    return (
-      <section className="rp-panel">
-        <div className="rp-panel-head">
-          <div>
-            <h2>Evaluation Preferences</h2>
-            <span>Candidate ranking now uses the Skill Score Engine.</span>
-          </div>
-        </div>
-        <div className="rp-notice">
-          <AlertTriangle size={16} />
-          <span>Legacy weighting sliders are disabled and no longer affect candidate ranking or comparison.</span>
-        </div>
-      </section>
-    );
-  };
 
   return (
     <DashboardLayout>
@@ -388,7 +213,7 @@ export default function RecruiterProfilePage() {
           padding: 36px 40px 80px;
         }
         .rp-shell {
-          max-width: 960px;
+          max-width: 1180px;
           margin: 0 auto;
           display: flex;
           flex-direction: column;
@@ -1013,27 +838,6 @@ export default function RecruiterProfilePage() {
                 </div>
               </section>
 
-              <section>
-                <SectionTitle>Talent Overview</SectionTitle>
-                <div className="rp-kpi-grid">
-                  <section className="rp-card">
-                    <div className="rp-card-top"><span>Candidates Evaluated</span><Users size={18} /></div>
-                    <strong>{fmtNumber(profile.talent_overview.candidates_evaluated)}</strong>
-                    <small>Total completed evaluations</small>
-                  </section>
-                  <section className="rp-card">
-                    <div className="rp-card-top"><span>High Priority</span><AlertTriangle size={18} /></div>
-                    <strong>{fmtNumber(profile.talent_overview.high_priority)}</strong>
-                    <small>Above current threshold</small>
-                  </section>
-                  <section className="rp-card">
-                    <div className="rp-card-top"><span>Shortlisted</span><Sparkles size={18} /></div>
-                    <strong>{fmtNumber(profile.talent_overview.profiles_shortlisted)}</strong>
-                    <small>Marked for consideration</small>
-                  </section>
-                </div>
-              </section>
-
               <section className="rp-panel">
                 <div className="rp-panel-head">
                   <div>
@@ -1064,36 +868,6 @@ export default function RecruiterProfilePage() {
                 </div>
               </section>
 
-              <div className="rp-two-col">
-                <SectionTitle>Profile Settings</SectionTitle>
-                <aside className="rp-settings-grid" aria-label="Recruiter profile settings">
-                  {settingRows.map(row => {
-                    const Icon = row.icon;
-                    return (
-                      <button
-                        key={row.key}
-                        type="button"
-                        className={`rp-setting-row ${activeView === row.key ? "is-active" : ""}`}
-                        onClick={() => {
-                          if (row.key === "account") {
-                            navigate("/dashboard/recruiter/account-settings");
-                            return;
-                          }
-                          setActiveView(row.key);
-                        }}
-                      >
-                        <span className="rp-setting-icon"><Icon size={17} /></span>
-                        <span className="rp-setting-copy">
-                          <strong>{row.label}</strong>
-                          <small>{row.description}</small>
-                        </span>
-                        <ChevronRight size={16} />
-                      </button>
-                    );
-                  })}
-                </aside>
-                {renderSettings()}
-              </div>
             </>
           )}
         </div>

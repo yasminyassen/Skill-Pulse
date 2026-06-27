@@ -30,6 +30,23 @@ class SecurityTrendPoint(BaseModel):
     low: int = 0
 
 
+class RepositoryRiskItem(BaseModel):
+    repository_id: int
+    repository_name: str = "Repository"
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    total_issues: int = 0
+    risk_weight: int = 0
+    security_score: float | None = None
+
+
+class RepositoryRiskResponse(BaseModel):
+    period: str | None = None
+    label: str | None = None
+    repositories: list[RepositoryRiskItem] = Field(default_factory=list)
+
+
 class CommonSecurityIssue(BaseModel):
     title: str
     severity: str

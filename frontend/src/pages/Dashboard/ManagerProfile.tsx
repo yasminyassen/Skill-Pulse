@@ -217,7 +217,7 @@ export default function ManagerProfile() {
           padding: 36px 40px 80px;
         }
         .mp-shell {
-          max-width: 960px;
+          max-width: 1180px;
           margin: 0 auto;
           display: flex;
           flex-direction: column;
@@ -838,11 +838,6 @@ export default function ManagerProfile() {
                 <SectionTitle>Team Overview</SectionTitle>
                 <div className="mp-kpi-grid">
                   <section className="mp-card">
-                    <div className="mp-card-top"><span>Team Members</span><Users size={18} /></div>
-                    <strong>{fmtNumber(overview.team_members)}</strong>
-                    <small>Active developers</small>
-                  </section>
-                  <section className="mp-card">
                     <div className="mp-card-top"><span>Repositories</span><BriefcaseBusiness size={18} /></div>
                     <strong>{fmtNumber(overview.repositories)}</strong>
                     <small>Analyzed by manager</small>
@@ -851,11 +846,6 @@ export default function ManagerProfile() {
                     <div className="mp-card-top"><span>Ongoing Analyses</span><Activity size={18} /></div>
                     <strong>{fmtNumber(overview.ongoing_analyses)}</strong>
                     <small>Currently processing</small>
-                  </section>
-                  <section className="mp-card">
-                    <div className="mp-card-top"><span>Team Health</span><Sparkles size={18} /></div>
-                    <strong>{Math.round(overview.team_health || 0)}%</strong>
-                    <small>Average Sonar health</small>
                   </section>
                 </div>
               </section>

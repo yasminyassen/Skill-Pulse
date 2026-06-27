@@ -24,7 +24,6 @@ from app.api import security_report
 from app.api import repos
 from app.api import requirements
 from app.api import requirement_coverage
-from app.api import github_classroom
 from app.api import recruiter_bulk
 from app.api import manager_dashboard
 from app.api import manager_profile
@@ -92,7 +91,6 @@ app.include_router(analysis.router)
 app.include_router(security_report.router)
 app.include_router(repos.router)
 app.include_router(profile_router)
-app.include_router(github_classroom.router)
 app.include_router(recruiter_bulk.router)
 app.include_router(recruiter_router)
 app.include_router(requirements.router)

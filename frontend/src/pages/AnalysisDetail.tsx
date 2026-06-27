@@ -338,6 +338,7 @@ export default function AnalysisDetail() {
   const [polling, setPolling]           = useState(false);
   const [sonarError, setSonarError]     = useState("");
   const [insightError, setInsightError] = useState("");
+  const [activeTab, setActiveTab]       = useState<"insights" | "metrics" | "findings">("insights");
 
   const fetchSonarDashboard = async () => {
     if (!analysisId) return;
@@ -403,6 +404,7 @@ export default function AnalysisDetail() {
     <DashboardLayout>
       <style>{PAGE_CSS}</style>
       <div className="ad-page">
+        <div className="ad-page-inner">
 
         {/* ── Top nav bar ── */}
         <div className="ad-topbar">
@@ -483,7 +485,21 @@ export default function AnalysisDetail() {
               </div>
             </div>
 
+            {/* Tabs */}
+            <div className="ad-tabs" role="tablist">
+              <button role="tab" aria-selected={activeTab === "insights"} className={`ad-tab-btn ${activeTab === "insights" ? "active" : ""}`} onClick={() => setActiveTab("insights")}>
+                {I.brain} AI Candidate Insights
+              </button>
+              <button role="tab" aria-selected={activeTab === "metrics"} className={`ad-tab-btn ${activeTab === "metrics" ? "active" : ""}`} onClick={() => setActiveTab("metrics")}>
+                {I.gauge} Repository Metrics
+              </button>
+              <button role="tab" aria-selected={activeTab === "findings"} className={`ad-tab-btn ${activeTab === "findings" ? "active" : ""}`} onClick={() => setActiveTab("findings")}>
+                {I.list} Detailed Findings
+              </button>
+            </div>
+
             {/* Candidate Information */}
+            {activeTab === "insights" && (
             <SectionCard title="Candidate Information" eyebrow="AI Candidate Insights" icon={I.brain} delay={40}>
               <AiInsightsContent
                 insight={insight}
@@ -495,7 +511,9 @@ export default function AnalysisDetail() {
                 candidateAvatarUrl={candidateAvatarUrl}
               />
             </SectionCard>
+            )}
 
+            {activeTab === "metrics" && (<>
             {/* Security Assessment */}
             <SectionCard title="Security Assessment" eyebrow="Repository security" icon={I.shield} delay={80}>
               <MetricGrid items={[
@@ -574,14 +592,18 @@ export default function AnalysisDetail() {
                 { label: "Classes", value: fmtNum(sonar.project_size.classes) },
               ]} />
             </SectionCard>
+            </>)}
 
             {/* Issues Explorer */}
+            {activeTab === "findings" && (
             <SectionCard title="Issues Explorer" eyebrow="Detailed findings" icon={I.list} delay={360}>
               <IssuesExplorer issues={sonar.issues_explorer} />
             </SectionCard>
+            )}
 
           </div>
         )}
+        </div>
       </div>
     </DashboardLayout>
   );
@@ -603,10 +625,16 @@ const PAGE_CSS = `
 .ad-page {
   min-height: 100vh;
   width: 100%;
-  padding: 28px 32px 64px;
+  padding: 36px 40px 80px;
   font-family: var(--font-body);
   color: var(--sp-text);
   background: var(--sp-bg-gradient);
+  box-sizing: border-box;
+}
+.ad-page-inner {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
   box-sizing: border-box;
 }
 
@@ -646,6 +674,46 @@ const PAGE_CSS = `
   line-height: 1.1;
 }
 .ad-topbar-sub { font-size: 12px; color: var(--sp-text-faint); margin: 3px 0 0; }
+
+/* Tabs */
+.ad-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--sp-surface-strong);
+  border: 1px solid var(--sp-border-soft);
+  border-radius: 12px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.ad-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--sp-text-faint);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+}
+.ad-tab-btn:hover { color: var(--sp-text-secondary); background: var(--sp-surface-hover); }
+.ad-tab-btn.active {
+  color: #fff;
+  background: linear-gradient(135deg,#7c3aed,#a855f7);
+  box-shadow: 0 4px 14px rgba(139,92,246,.3);
+}
+.ad-tab-btn svg { flex-shrink: 0; }
+@media (max-width:600px) {
+  .ad-tabs { width: 100%; }
+  .ad-tab-btn { flex: 1; justify-content: center; padding: 9px 10px; font-size: 12px; }
+}
 
 /* Cards */
 .ad-card {
@@ -830,7 +898,7 @@ const PAGE_CSS = `
   .ai-badge { width:auto; }
 }
 @media (max-width:600px) {
-  .ad-page { padding:18px 16px 48px; }
+  .ad-page { padding:20px 18px 56px; }
   .ad-hero-stats { width:100%; }
 }
 `;

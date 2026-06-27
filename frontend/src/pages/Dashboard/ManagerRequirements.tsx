@@ -1105,18 +1105,56 @@ export default function RequirementsPage() {
     <DashboardLayout>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        .rq-input,.rq-select{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:9px;color:white;font-family:'Inter',sans-serif;font-size:13px;outline:none;padding:8px 10px;box-sizing:border-box}
-        .rq-input:focus,.rq-select:focus{border-color:${accent}80;background:rgba(255,255,255,0.06)}
+        .rq-page {
+          min-height: 100vh;
+          padding: 32px 40px 80px;
+          color: var(--text-primary);
+          font-family: 'Inter', system-ui, sans-serif;
+          background: var(--bg-gradient);
+        }
+        .rq-shell {
+          max-width: 1180px;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 0;
+        }
+        .rq-input,.rq-select{
+          background:var(--bg-input, var(--bg-card));
+          border:1px solid rgba(139,92,246,0.28);
+          border-radius:12px;
+          color:var(--text-primary);
+          font-family:'Inter',sans-serif;
+          font-size:13px;
+          outline:none;
+          padding:9px 12px;
+          box-sizing:border-box;
+          transition:border-color .2s, box-shadow .2s, background .2s;
+        }
+        .rq-input::placeholder{color:var(--text-faint)}
+        .rq-input:focus,.rq-select:focus{border-color:${accent}80;background:var(--bg-input-focus, var(--bg-card-hover));box-shadow:0 0 0 4px ${accent}12}
         .rq-select option{background:#1a1a2e;color:white}
-        .rq-btn-ghost{display:inline-flex;align-items:center;gap:7px;padding:8px 13px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:9px;color:rgba(255,255,255,0.7);font-family:'Inter',sans-serif;font-size:12px;font-weight:700;cursor:pointer}
-        .rq-btn-primary{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;background:linear-gradient(135deg,${accent},#ec4899);border:none;border-radius:9px;color:white;font-family:'Inter',sans-serif;font-size:12px;font-weight:800;cursor:pointer}
+        .rq-btn-ghost{
+          display:inline-flex;align-items:center;gap:7px;padding:9px 14px;
+          background:var(--bg-card);border:1px solid var(--border);border-radius:12px;
+          color:var(--text-secondary);font-family:'Inter',sans-serif;font-size:12px;font-weight:700;cursor:pointer;
+          transition:border-color .2s, background .2s, color .2s;
+        }
+        .rq-btn-ghost:hover{border-color:${accent}80;background:${accent}12;color:${accent}}
+        .rq-btn-primary{
+          display:inline-flex;align-items:center;gap:8px;padding:10px 16px;
+          background:linear-gradient(135deg,${accent},#ec4899);border:none;border-radius:12px;color:white;
+          font-family:'Inter',sans-serif;font-size:12px;font-weight:800;cursor:pointer;
+          box-shadow:0 4px 16px ${accent}30;
+        }
         .rq-btn-primary:disabled{opacity:.45;cursor:not-allowed}
-        .rq-panel{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:14px}
+        .rq-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:18px;padding:18px;box-shadow:var(--shadow-card, none)}
         .rq-table{width:100%;border-collapse:separate;border-spacing:0 8px}
-        .rq-table th{text-align:left;color:rgba(255,255,255,0.32);font-size:10px;text-transform:uppercase;letter-spacing:.7px;padding:0 10px}
-        .rq-table td{background:rgba(255,255,255,0.025);border-top:1px solid rgba(255,255,255,0.06);border-bottom:1px solid rgba(255,255,255,0.06);padding:10px;font-size:12px;color:rgba(255,255,255,0.78);vertical-align:top}
-        .rq-table td:first-child{border-left:1px solid rgba(255,255,255,0.06);border-radius:10px 0 0 10px}
-        .rq-table td:last-child{border-right:1px solid rgba(255,255,255,0.06);border-radius:0 10px 10px 0}
+        .rq-table th{text-align:left;color:var(--text-faint);font-size:10px;text-transform:uppercase;letter-spacing:.7px;padding:0 10px}
+        .rq-table td{background:var(--bg-card);border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:10px;font-size:12px;color:var(--text-secondary);vertical-align:top}
+        .rq-table td:first-child{border-left:1px solid var(--border);border-radius:10px 0 0 10px}
+        .rq-table td:last-child{border-right:1px solid var(--border);border-radius:0 10px 10px 0}
+        @media (max-width: 760px){.rq-page{padding:22px 16px 60px}.rq-shell{max-width:100%}}
       `}</style>
 
       {toast && (
@@ -1142,10 +1180,11 @@ export default function RequirementsPage() {
           onSubmit={createRequirement}
         />
       )}
-      <div style={{ padding: "32px 36px 80px", maxWidth: 1280, fontFamily: "'Inter', sans-serif" }}>
+      <main className="rq-page">
+        <div className="rq-shell">
         <div style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: "0 0 6px", color: "white", fontFamily: "'Inter', sans-serif", fontSize: 26 }}>Requirements Workspace</h1>
-          <p style={{ margin: 0, color: "rgba(255,255,255,0.38)", fontSize: 14 }}>
+          <h1 style={{ margin: "0 0 6px", color: "var(--text-primary)", fontFamily: "'Inter', sans-serif", fontSize: 30 }}>Requirements Workspace</h1>
+          <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 14 }}>
             {role === "manager" ? "Manage confirmed requirements, assignments, and coverage evidence." : "Track coverage for your assigned stories and tasks."}
           </p>
         </div>
@@ -1492,7 +1531,8 @@ export default function RequirementsPage() {
             )}
           </>
         )}
-      </div>
+        </div>
+      </main>
     </DashboardLayout>
   );
 }

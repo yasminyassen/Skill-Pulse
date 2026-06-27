@@ -67,6 +67,7 @@ def test_developer_coverage_uses_latest_completed_run(monkeypatch):
     scheduled = []
     monkeypatch.setattr(requirement_coverage, "_latest_completed_coverage_run", fake_latest_completed)
     monkeypatch.setattr(requirement_coverage, "_build_developer_dashboard", fake_dashboard)
+    monkeypatch.setattr(requirement_coverage, "_ensure_repository_access", lambda *args, **kwargs: None)
 
     result = get_developer_coverage(
         repo_id=99,

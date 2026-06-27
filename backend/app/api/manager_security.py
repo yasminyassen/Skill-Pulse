@@ -16,6 +16,8 @@ from app.schemas.manager_security_schemas import (
     ContributorSecurityImpact,
     DetectedVulnerability,
     ManagerSecurityRepo,
+    RepositoryRiskItem,
+    RepositoryRiskResponse,
     RepositorySecurityDetail,
     RepositorySecuritySummary,
     SecurityMemberScore,
@@ -544,6 +546,61 @@ def get_team_security_overview(
         systemic_risk_analysis=_systemic_analysis(common, len(latest_repository_runs)),
         why_this_matters=_why_this_matters(),
         members=members,
+    )
+
+
+@router.get("/repository-risk", response_model=RepositoryRiskResponse)
+def get_repository_risk(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["manager"])),
+):
+    latest_repository_runs = _latest_repository_runs_by_repo(db, current_user.id)
+    if not latest_repository_runs:
+        return RepositoryRiskResponse()
+
+    run_by_id = {run.id: run for run in latest_repository_runs}
+    scores = _repository_security_scores_for_runs(db, list(run_by_id), current_user.id)
+    findings_by_repo: dict[int, list[SecurityFinding]] = defaultdict(list)
+    for finding in _findings_for_runs(db, list(run_by_id)):
+        run = run_by_id.get(finding.analysis_run_id)
+        if run is not None:
+            findings_by_repo[run.repository_id].append(finding)
+
+    repositories: list[RepositoryRiskItem] = []
+    run_times_by_repo: dict[int, datetime] = {}
+    for run in latest_repository_runs:
+        repo_findings = findings_by_repo.get(run.repository_id, [])
+        if not repo_findings:
+            continue
+
+        counts = Counter(normalize_severity(finding.severity) for finding in repo_findings)
+        high = counts.get("HIGH", 0)
+        medium = counts.get("MEDIUM", 0)
+        low = counts.get("LOW", 0)
+        risk_weight = high * 5 + medium * 3 + low
+        run_times_by_repo[run.repository_id] = _run_time(run)
+        repositories.append(
+            RepositoryRiskItem(
+                repository_id=run.repository_id,
+                repository_name=run.repository.name or run.repository.full_name or "Repository",
+                high=high,
+                medium=medium,
+                low=low,
+                total_issues=high + medium + low,
+                risk_weight=risk_weight,
+                security_score=scores.get(run.id),
+            )
+        )
+
+    if not repositories:
+        return RepositoryRiskResponse()
+
+    top_repositories = sorted(repositories, key=lambda item: item.risk_weight, reverse=True)[:6]
+    latest_used_at = max(run_times_by_repo[item.repository_id] for item in top_repositories)
+    return RepositoryRiskResponse(
+        period=latest_used_at.strftime("%Y-%m"),
+        label=latest_used_at.strftime("%b %Y"),
+        repositories=top_repositories,
     )
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -13,15 +13,6 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
 
@@ -81,6 +72,23 @@ interface TeamSecurityOverview {
   systemic_risk_analysis: string;
   why_this_matters: string[];
   members: SecurityMember[];
+}
+
+interface RepositoryRiskItem {
+  repository_id: number;
+  repository_name: string;
+  high: number;
+  medium: number;
+  low: number;
+  total_issues: number;
+  risk_weight: number;
+  security_score: number | null;
+}
+
+interface RepositoryRiskResponse {
+  period: string | null;
+  label: string | null;
+  repositories: RepositoryRiskItem[];
 }
 
 interface RepositorySummary {
@@ -148,6 +156,12 @@ const emptyTeam: TeamSecurityOverview = {
   systemic_risk_analysis: "",
   why_this_matters: [],
   members: [],
+};
+
+const emptyRepositoryRisk: RepositoryRiskResponse = {
+  period: null,
+  label: null,
+  repositories: [],
 };
 
 const severityMeta: Record<string, { color: string; bg: string; label: string }> = {
@@ -335,10 +349,131 @@ function ContributorCard({ contributor }: { contributor: ContributorImpact }) {
   );
 }
 
+function RepositoryRiskChart({ data }: { data: RepositoryRiskResponse }) {
+  const maxRisk = Math.max(...data.repositories.map(repo => repo.risk_weight), 1);
+  const segments = [
+    { key: "high", label: "High", weight: 5, color: severityMeta.High.color },
+    { key: "medium", label: "Medium", weight: 3, color: severityMeta.Medium.color },
+    { key: "low", label: "Low", weight: 1, color: severityMeta.Low.color },
+  ] as const;
+
+  if (!data.repositories.length) {
+    return <div className="ms-repo-risk-empty">No repository risk data available yet.</div>;
+  }
+
+  return (
+    <div className="ms-repo-risk-chart">
+      {data.label && <p className="ms-repo-risk-period">Latest analysis month: {data.label}</p>}
+      <div className="ms-repo-risk-list">
+        {data.repositories.map(repo => (
+          <article className="ms-repo-risk-row" key={repo.repository_id}>
+            <div className="ms-repo-risk-name" title={repo.repository_name}>{repo.repository_name}</div>
+            <div className="ms-repo-risk-track" aria-label={`${repo.repository_name} risk score ${repo.risk_weight}`}>
+              {segments.map(segment => {
+                const count = repo[segment.key];
+                const weighted = count * segment.weight;
+                return (
+                  <span
+                    key={segment.key}
+                    title={`${segment.label}: ${count}`}
+                    style={{
+                      width: `${(weighted / maxRisk) * 100}%`,
+                      background: segment.color,
+                    }}
+                  />
+                );
+              })}
+            </div>
+            <div className="ms-repo-risk-scores">
+              <strong>Risk Score {repo.risk_weight}</strong>
+              <span>Security Score {repo.security_score === null ? "N/A" : fmt(repo.security_score, 1)}</span>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="ms-repo-risk-legend">
+        {segments.map(segment => (
+          <span key={segment.key}>
+            <i style={{ background: segment.color }} />
+            {segment.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CustomSelect({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = options.find(o => o.value === value) || options[0];
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="ms-custom-select" style={{ position: "relative", minWidth: 250 }}>
+      <button
+        type="button"
+        className="ms-custom-select-trigger"
+        onClick={() => setOpen(prev => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span>{selected?.label}</span>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          style={{ transition: "transform 0.2s", transform: open ? "rotate(180deg)" : "rotate(0deg)", flexShrink: 0 }}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {open && (
+        <ul className="ms-custom-select-menu" role="listbox">
+          {options.map(opt => (
+            <li
+              key={opt.value}
+              role="option"
+              aria-selected={opt.value === value}
+              className={`ms-custom-select-option${opt.value === value ? " selected" : ""}`}
+              onClick={() => { onChange(opt.value); setOpen(false); }}
+            >
+              {opt.value === value && (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              )}
+              <span>{opt.label}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function ManagerSecurityDashboard() {
   const [repos, setRepos] = useState<SecurityRepo[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState("all");
   const [teamData, setTeamData] = useState<TeamSecurityOverview>(emptyTeam);
+  const [repositoryRiskData, setRepositoryRiskData] = useState<RepositoryRiskResponse>(emptyRepositoryRisk);
   const [repoData, setRepoData] = useState<RepositorySecurityDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -351,6 +486,11 @@ export default function ManagerSecurityDashboard() {
   const fetchRepos = async () => {
     const response = await api.get<SecurityRepo[]>("/manager/security/repos");
     setRepos(response.data || []);
+  };
+
+  const fetchRepositoryRisk = async () => {
+    const response = await api.get<RepositoryRiskResponse>("/manager/security/repository-risk");
+    setRepositoryRiskData(response.data || emptyRepositoryRisk);
   };
 
   const fetchDashboard = async () => {
@@ -379,6 +519,9 @@ export default function ManagerSecurityDashboard() {
 
   useEffect(() => {
     fetchDashboard();
+    if (selectedRepoId === "all") {
+      fetchRepositoryRisk().catch(console.error);
+    }
   }, [selectedRepoId]);
 
   const activeBreakdown = selectedRepoId === "all"
@@ -393,12 +536,13 @@ export default function ManagerSecurityDashboard() {
   return (
     <DashboardLayout>
       <main className="ms-page">
+        <div className="ms-shell">
         <header className="ms-header">
           <div>
             <h1>Team Security Health</h1>
             <p>Security risk assessment and release readiness across team repositories</p>
           </div>
-          <button className="ms-refresh" type="button" onClick={() => { fetchRepos(); fetchDashboard(); }} title="Refresh dashboard">
+          <button className="ms-refresh" type="button" onClick={() => { fetchRepos(); fetchRepositoryRisk(); fetchDashboard(); }} title="Refresh dashboard">
             <RefreshCcw size={17} />
           </button>
         </header>
@@ -412,10 +556,14 @@ export default function ManagerSecurityDashboard() {
 
         <section className="ms-filter">
           <div><Target size={18} /><span><strong>Repository Filter</strong><small>View security details for a specific repository</small></span></div>
-          <select value={selectedRepoId} onChange={event => setSelectedRepoId(event.target.value)}>
-            <option value="all">All Repositories (Team View)</option>
-            {repos.map(repo => <option key={repo.id} value={repo.id}>{titleForRepo(repo)}</option>)}
-          </select>
+          <CustomSelect
+            value={selectedRepoId}
+            onChange={setSelectedRepoId}
+            options={[
+              { value: "all", label: "All Repositories (Team View)" },
+              ...repos.map(repo => ({ value: String(repo.id), label: titleForRepo(repo) })),
+            ]}
+          />
         </section>
 
         {loading ? (
@@ -432,37 +580,9 @@ export default function ManagerSecurityDashboard() {
               </div>
               <div className="ms-note"><Info size={14} /> Based on OWASP-aligned static security analysis.</div>
               <div className="ms-divider" />
-              <h3>Security Risk Trend (Last 3 Months)</h3>
-              {teamData.trend.length === 0 ? (
-                <div style={{ padding: "28px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No trend data available yet.</div>
-              ) : (
-                <div className="ms-chart">
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={teamData.trend} barCategoryGap="30%" barGap={4}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148,163,184,0.15)" />
-                      <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "var(--text-muted)", fontSize: 12 }} />
-                      <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: "var(--text-muted)", fontSize: 12 }} width={28} />
-                      <Tooltip
-                        cursor={{ fill: "rgba(99,102,241,0.07)" }}
-                        contentStyle={{ background: "var(--bg-card)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 10, fontSize: 12.5, color: "var(--text-primary)", boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
-                        labelStyle={{ fontWeight: 700, marginBottom: 6, color: "var(--text-primary)" }}
-                        itemStyle={{ padding: "2px 0" }}
-                      />
-                      <Bar dataKey="high" fill="#ef4444" name="High" radius={[4, 4, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="medium" fill="#f97316" name="Medium" radius={[4, 4, 0, 0]} maxBarSize={32} />
-                      <Bar dataKey="low" fill="#eab308" name="Low" radius={[4, 4, 0, 0]} maxBarSize={32} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                  <div style={{ display: "flex", gap: 18, justifyContent: "center", marginTop: 6 }}>
-                    {[["#ef4444", "High"], ["#f97316", "Medium"], ["#eab308", "Low"]].map(([color, label]) => (
-                      <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)" }}>
-                        <span style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
-                        {label}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <h3>Repositories by Security Risk (Top 6)</h3>
+              <p className="ms-chart-subtitle">Risk Weight = High × 5 + Medium × 3 + Low × 1</p>
+              <RepositoryRiskChart data={repositoryRiskData} />
             </Panel>
 
             <Panel title="Most Common Security Issues">
@@ -516,10 +636,13 @@ export default function ManagerSecurityDashboard() {
         ) : null}
 
         <section className="ms-about"><Info size={18} /><p>Team security scores are calculated from manager-run repository analysis using existing security findings and developer security scores. Contributor attribution uses analysis-time user ownership for findings and metrics.</p></section>
+        </div>
       </main>
 
       <style>{`
-        .ms-page { max-width: 1180px; margin: 0 auto; padding: 32px 32px 56px; color: var(--text-primary); }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        .ms-page { max-width: 1180px; margin: 0 auto; padding: 36px 40px 80px; color: var(--text-primary); }
         .ms-header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 22px; }
         .ms-header h1 { margin: 0 0 6px; font-size: 28px; font-weight: 850; font-family: 'Inter', sans-serif; letter-spacing: 0; }
         .ms-header p, .ms-subtle { margin: 0; color: var(--text-secondary); font-size: 13.5px; }
@@ -545,6 +668,15 @@ export default function ManagerSecurityDashboard() {
         .ms-filter span { display: grid; color: var(--text-primary); }
         .ms-filter small { color: var(--text-secondary); font-size: 11px; }
         .ms-filter select { min-width: 250px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-primary); border-radius: 8px; padding: 10px 12px; font-weight: 700; }
+        .ms-custom-select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 250px; width: 100%; padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); font-size: 14px; font-weight: 700; font-family: 'Inter', sans-serif; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; text-align: left; }
+        .ms-custom-select-trigger:hover { border-color: rgba(99,102,241,0.45); }
+        .ms-custom-select-trigger:focus-visible { outline: none; border-color: rgba(99,102,241,0.6); box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+        .ms-custom-select-menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 100%; background: var(--bg-card); border: 1px solid rgba(99,102,241,0.25); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,0.18); z-index: 50; padding: 5px; margin: 0; list-style: none; max-height: 260px; overflow-y: auto; }
+        .ms-custom-select-option { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 7px; font-size: 13.5px; font-weight: 500; color: var(--text-primary); cursor: pointer; transition: background 0.12s; }
+        .ms-custom-select-option:hover { background: rgba(99,102,241,0.1); }
+        .ms-custom-select-option.selected { color: #6366f1; font-weight: 700; background: rgba(99,102,241,0.08); }
+        .ms-custom-select-option.selected svg { color: #6366f1; flex-shrink: 0; }
+        .ms-custom-select-option span { flex: 1; }
         .ms-panel { padding: 20px; margin-bottom: 18px; }
         .ms-panel-title { display: flex; align-items: center; gap: 9px; margin-bottom: 18px; color: #7c3aed; }
         .ms-panel-title h2, .ms-callout h2 { margin: 0; font-size: 16px; font-weight: 850; color: var(--text-primary); }
@@ -560,7 +692,22 @@ export default function ManagerSecurityDashboard() {
         .ms-note { display: flex; gap: 6px; align-items: center; color: var(--text-muted); margin-top: 22px; font-size: 12px; }
         .ms-divider { height: 1px; background: var(--border); margin: 28px 0 18px; }
         .ms-panel h3 { font-size: 13px; margin: 0 0 12px; color: var(--text-primary); }
-        .ms-chart { height: 230px; }
+        .ms-chart-subtitle { margin: -6px 0 16px; color: var(--text-muted); font-size: 12px; }
+        .ms-repo-risk-chart { display: grid; gap: 14px; }
+        .ms-repo-risk-period { margin: 0; color: var(--text-secondary); font-size: 12px; }
+        .ms-repo-risk-list { display: grid; gap: 12px; }
+        .ms-repo-risk-row { display: grid; grid-template-columns: minmax(130px, 220px) minmax(160px, 1fr) auto; gap: 14px; align-items: center; }
+        .ms-repo-risk-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 13px; font-weight: 800; }
+        .ms-repo-risk-track { display: flex; height: 18px; min-width: 0; overflow: hidden; border-radius: 999px; background: rgba(148,163,184,0.14); box-shadow: inset 0 0 0 1px rgba(148,163,184,0.18); }
+        .ms-repo-risk-track span { display: block; min-width: 0; height: 100%; }
+        .ms-repo-risk-track span + span { box-shadow: inset 1px 0 0 rgba(255,255,255,0.22); }
+        .ms-repo-risk-scores { display: grid; gap: 2px; min-width: 132px; text-align: right; }
+        .ms-repo-risk-scores strong { color: var(--text-primary); font-size: 12.5px; }
+        .ms-repo-risk-scores span { color: var(--text-muted); font-size: 11.5px; }
+        .ms-repo-risk-legend { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; color: var(--text-muted); font-size: 12px; }
+        .ms-repo-risk-legend span { display: inline-flex; align-items: center; gap: 6px; }
+        .ms-repo-risk-legend i { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+        .ms-repo-risk-empty { padding: 28px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
         .ms-list { display: grid; gap: 12px; }
         .ms-issue-row, .ms-vuln-row, .ms-member-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 14px; align-items: center; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg-soft); }
         .ms-vuln-row { grid-template-columns: auto 1fr; align-items: flex-start; }
@@ -603,9 +750,161 @@ export default function ManagerSecurityDashboard() {
           .ms-hero, .ms-filter, .ms-callout { flex-direction: column; align-items: stretch; }
           .ms-risk-grid, .ms-hero-stats, .ms-repo-metrics, .ms-contributor-grid { grid-template-columns: 1fr; }
           .ms-filter select { min-width: 0; width: 100%; }
+          .ms-custom-select-trigger { min-width: 0; width: 100%; }
+          .ms-custom-select-menu { right: auto; left: 0; }
           .ms-score-ring { align-self: center; }
+          .ms-repo-risk-row { grid-template-columns: 1fr; gap: 8px; }
+          .ms-repo-risk-scores { grid-template-columns: auto auto; justify-content: space-between; text-align: left; }
           .ms-issue-row { grid-template-columns: auto 1fr; }
           .ms-issue-row > b, .ms-issue-row > .ms-pill { justify-self: start; }
+        }
+
+
+        /* Manager Dashboard visual alignment */
+        .ms-page {
+          min-height: 100vh;
+          max-width: none;
+          margin: 0;
+          padding: 32px 40px 80px;
+          color: var(--text-primary);
+          font-family: 'Inter', system-ui, sans-serif;
+          background: var(--bg-gradient);
+        }
+        .ms-shell {
+          max-width: 1180px;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 0;
+        }
+        .ms-header {
+          align-items: flex-start;
+          margin-bottom: 28px;
+          flex-wrap: wrap;
+        }
+        .ms-header h1 {
+          font-size: 30px;
+          line-height: 1.1;
+          font-weight: 800;
+          letter-spacing: -0.5px;
+        }
+        .ms-header p,
+        .ms-subtle {
+          color: var(--text-muted);
+          font-size: 14px;
+        }
+        .ms-refresh {
+          width: 42px;
+          height: 42px;
+          border-radius: 12px;
+          background: var(--bg-card);
+          color: var(--text-primary);
+          transition: border-color 0.2s, background 0.2s, color 0.2s;
+        }
+        .ms-refresh:hover {
+          border-color: #8b5cf680;
+          background: #8b5cf612;
+          color: #8b5cf6;
+        }
+        .ms-hero,
+        .ms-panel,
+        .ms-filter,
+        .ms-callout,
+        .ms-about {
+          border: 1px solid var(--border);
+          background: var(--bg-card);
+          border-radius: 18px;
+          box-shadow: var(--shadow-card);
+        }
+        .ms-hero {
+          padding: 30px 34px;
+          margin-bottom: 18px;
+          border-color: rgba(139,92,246,0.28);
+          background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(236,72,153,0.08));
+        }
+        [data-theme="dark"] .ms-hero {
+          background: linear-gradient(135deg, rgba(139,92,246,0.22), rgba(236,72,153,0.12));
+        }
+        .ms-hero-label,
+        .ms-panel-title,
+        .ms-filter div,
+        .ms-score-ring,
+        .ms-custom-select-option.selected,
+        .ms-custom-select-option.selected svg {
+          color: #8b5cf6;
+        }
+        .ms-score-ring {
+          background: conic-gradient(#8b5cf6 var(--score), rgba(139,92,246,0.2) 0);
+        }
+        .ms-mini,
+        .ms-custom-select-trigger {
+          border-color: rgba(139,92,246,0.28);
+          border-radius: 14px;
+          background: var(--bg-input, var(--bg-card));
+        }
+        .ms-custom-select-trigger:hover,
+        .ms-custom-select-trigger:focus-visible {
+          border-color: #8b5cf680;
+          box-shadow: 0 0 0 4px #8b5cf612;
+        }
+        .ms-custom-select-menu {
+          background: #1a1a2e;
+          border-color: rgba(139,92,246,0.4);
+          border-radius: 16px;
+          box-shadow: 0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(139,92,246,0.12), inset 0 1px 0 rgba(255,255,255,0.05);
+          backdrop-filter: blur(20px);
+        }
+        .ms-custom-select-option {
+          border-radius: 12px;
+          color: rgba(200,200,220,0.9);
+        }
+        .ms-custom-select-option:hover,
+        .ms-custom-select-option.selected {
+          background: rgba(139,92,246,0.14);
+        }
+        .ms-panel {
+          padding: 30px 34px;
+          margin-bottom: 18px;
+        }
+        .ms-filter {
+          padding: 16px 18px;
+          margin-bottom: 18px;
+          border-color: rgba(139,92,246,0.24);
+          background: linear-gradient(135deg, rgba(139,92,246,0.10), rgba(236,72,153,0.05));
+        }
+        .ms-risk-card,
+        .ms-issue-row,
+        .ms-vuln-row,
+        .ms-member-row,
+        .ms-contributor-card,
+        .ms-repo-risk-track {
+          border-radius: 14px;
+        }
+        .ms-issue-row,
+        .ms-vuln-row,
+        .ms-member-row,
+        .ms-contributor-card {
+          background: var(--bg-card-hover);
+        }
+        .ms-callout {
+          padding: 24px 28px;
+        }
+        .ms-callout.blue {
+          border-color: rgba(139,92,246,0.28);
+          background: linear-gradient(135deg, rgba(139,92,246,0.12), rgba(236,72,153,0.06));
+        }
+        .ms-callout.green {
+          border-color: rgba(34,197,94,0.24);
+          background: linear-gradient(135deg, rgba(34,197,94,0.10), rgba(20,184,166,0.05));
+        }
+        .ms-about {
+          margin-top: 4px;
+          padding: 16px 18px;
+          color: var(--text-muted);
+        }
+        @media (max-width: 760px) {
+          .ms-page { padding: 24px 16px 56px; }
+          .ms-panel, .ms-hero { padding: 22px; }
         }
       `}</style>
     </DashboardLayout>

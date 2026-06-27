@@ -49,47 +49,7 @@ type SkippedItem = {
   reason: string;
 };
 
-type ProfileData = {
-  talent_overview: {
-    candidates_evaluated: number;
-    high_priority: number;
-    profiles_shortlisted: number;
-  };
-  recent_activity: Array<{
-    candidate_name: string;
-    repo_name: string;
-    skill_score: number | null;
-    skill_score_level: string;
-    sonar_health_score: number | null;
-    sonar_state: string;
-    quality_gate: string | null;
-    run_id: number;
-    completed_at: string | null;
-  }>;
-};
 
-type CandidateRow = {
-  candidate_name: string;
-  github_login: string;
-  skill_score: number | null;
-  skill_score_level: string;
-  sonar_health_score: number | null;
-  sonar_state: string;
-  quality_gate: string | null;
-  bugs: number | null;
-  code_smells: number | null;
-  coverage: number | null;
-  duplication_percentage: number | null;
-  cognitive_complexity: number | null;
-  reliability_rating?: string | null;
-  maintainability_rating?: string | null;
-  technical_debt_minutes?: number | null;
-  lines_of_code: number | null;
-  security?: number | null;
-  repo_count: number;
-  contribution_count: number;
-  run_id: number;
-};
 
 type ApiError = {
   response?: {
@@ -115,6 +75,21 @@ const safeNumber = (value: unknown): number | null => {
   return Number.isFinite(numeric) ? numeric : null;
 };
 
+const recruiterRepoStorageKey = () => {
+  const token = localStorage.getItem("token") || "";
+  const payload = token.split(".")[1];
+  if (payload) {
+    try {
+      const decoded = JSON.parse(window.atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>;
+      const identity = decoded?.sub ?? decoded?.user_id ?? decoded?.id;
+      if (typeof identity === "string" || typeof identity === "number") return `recruiter_candidate_repos:${identity}`;
+    } catch {
+      // Ignore malformed tokens and fall back to a non-shared key.
+    }
+  }
+  return "recruiter_candidate_repos:current";
+};
+
 const fmt = (value: number | string | null | undefined, suffix = "") => {
   if (value === null || value === undefined || value === "") return "Unavailable";
   if (typeof value === "number") return `${Number.isInteger(value) ? value : value.toFixed(1)}${suffix}`;
@@ -129,13 +104,6 @@ const scoreColor = (score: number | null | undefined) => {
   return "#f87171";
 };
 
-const qualityGateColor = (gate?: string | null) => {
-  const value = String(gate || "").toUpperCase();
-  if (value === "OK" || value === "PASS" || value === "PASSED") return "#34d399";
-  if (value === "WARN" || value === "WARNING") return "#fbbf24";
-  if (value === "ERROR" || value === "FAILED" || value === "FAIL") return "#f87171";
-  return "#94a3b8";
-};
 
 const CheckIcon = () => (
   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -236,16 +204,6 @@ function FileUploadZone({ file, onChange }: { file: File | null; onChange: (f: F
   );
 }
 
-function Metric({ label, value, color = "var(--text-primary)", helper }: { label: string; value: string | number; color?: string; helper?: string }) {
-  return (
-    <div className="rec-metric-card">
-      <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px", fontWeight: 800 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 900, color, marginTop: 5, fontFamily: "'Inter',sans-serif" }}>{value}</div>
-      {helper && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{helper}</div>}
-    </div>
-  );
-}
-
 function Pill({ value, color }: { value: string; color: string }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", padding: "3px 8px", borderRadius: 999, color, background: `${color}18`, border: `1px solid ${color}35`, fontSize: 11, fontWeight: 800, textTransform: "capitalize" }}>
@@ -265,14 +223,11 @@ export default function RecruiterDashboard() {
   const [showPreview, setShowPreview] = useState(false);
   const [forceReanalyze, setForceReanalyze] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [dashboardLoading, setDashboardLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeStep, setActiveStep] = useState<number | null>(null);
   const [repositories, setRepositories] = useState<RepoItem[]>([]);
   const [skipped, setSkipped] = useState<SkippedItem[]>([]);
   const [githubAuthUrl, setGithubAuthUrl] = useState<string | null>(null);
-  const [profile, setProfile] = useState<ProfileData | null>(null);
-  const [candidates, setCandidates] = useState<CandidateRow[]>([]);
 
   const pollingRef = useRef<number | null>(null);
   const repositoriesRef = useRef<RepoItem[]>([]);
@@ -285,30 +240,17 @@ export default function RecruiterDashboard() {
     }
   };
 
-  const loadDashboard = useCallback(async (showLoading = false) => {
-    if (showLoading) setDashboardLoading(true);
-    try {
-      const [profileRes, candidatesRes] = await Promise.all([
-        api.get<ProfileData>("/recruiter/profile-dashboard"),
-        api.get<CandidateRow[]>("/analysis/recruiter/candidates"),
-      ]);
-      setProfile(profileRes.data);
-      setCandidates(candidatesRes.data || []);
-    } finally {
-      if (showLoading) setDashboardLoading(false);
-    }
-  }, []);
 
-  useEffect(() => { void loadDashboard(true); }, [loadDashboard]);
+
   useEffect(() => { repositoriesRef.current = repositories; }, [repositories]);
   useEffect(() => {
-    if (repositories.length) localStorage.setItem("recruiter_candidate_repos", JSON.stringify(repositories));
+    if (repositories.length) localStorage.setItem(recruiterRepoStorageKey(), JSON.stringify(repositories));
   }, [repositories]);
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
     try {
-      const raw = localStorage.getItem("recruiter_candidate_repos");
+      const raw = localStorage.getItem(recruiterRepoStorageKey());
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) setRepositories(parsed);
@@ -317,9 +259,7 @@ export default function RecruiterDashboard() {
   }, []);
   useEffect(() => () => stopPolling(), []);
 
-  const rankedCandidates = useMemo(() => {
-    return [...candidates].sort((a, b) => (b.skill_score ?? -1) - (a.skill_score ?? -1));
-  }, [candidates]);
+;
 
   const candidateRows = useMemo(() => {
     const rows = repositories.map((repo) => ({
@@ -356,7 +296,6 @@ export default function RecruiterDashboard() {
     if (pending.length === 0) {
       if (current.length > 0) setActiveStep(3);
       stopPolling();
-      void loadDashboard(false);
       return;
     }
 
@@ -401,7 +340,7 @@ export default function RecruiterDashboard() {
         });
       }
     }));
-  }, [isPendingRepo, loadDashboard, updateRepo]);
+  }, [isPendingRepo, updateRepo]);
 
   const startPolling = useCallback((force = false) => {
     if (pollingRef.current && !force) return;
@@ -490,14 +429,9 @@ export default function RecruiterDashboard() {
   const removePreviewRow = (index: number) =>
     setPreviewRows((prev) => prev.filter((_, i) => i !== index));
 
-  const formatTimestamp = (value?: string | null) => {
-    if (!value) return "-";
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? "-" : parsed.toLocaleString();
-  };
 
-  const card = (content: React.ReactNode, extra?: React.CSSProperties) => (
-    <div className="rec-card" style={extra}>{content}</div>
+  const card = (content: React.ReactNode, extra?: React.CSSProperties, className = "") => (
+    <div className={`rec-card ${className}`.trim()} style={extra}>{content}</div>
   );
 
   const sectionTitle = (text: string) => (
@@ -531,10 +465,65 @@ export default function RecruiterDashboard() {
         .rec-table { width: 100%; border-collapse: collapse; min-width: 1180px; }
         .rec-table th { padding: 10px; border-bottom: 1px solid var(--border); text-align: left; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
         .rec-table td { padding: 11px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+        .analysis-status-card {
+          position: relative;
+          overflow: hidden;
+          background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(236,72,153,0.06));
+          border: 1px solid rgba(99,102,241,0.28);
+        }
+        .analysis-progress-track {
+          position: relative;
+          height: 12px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: var(--bg-input);
+          border: 1px solid var(--border);
+          margin-top: 20px;
+        }
+        .analysis-progress-fill {
+          position: absolute;
+          top: 0;
+          left: -42%;
+          height: 100%;
+          width: 42%;
+          border-radius: 999px;
+          background: linear-gradient(135deg, #6366f1, #ec4899);
+          animation: analysisProgressMove 1.25s ease-in-out infinite;
+        }
+        .analysis-step-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 11px;
+          border-radius: 999px;
+          border: 1px solid rgba(251,191,36,0.24);
+          background: rgba(251,191,36,0.08);
+          color: #fbbf24;
+          font-size: 12px;
+          font-weight: 800;
+        }
+        .analysis-done-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 11px;
+          border-radius: 999px;
+          border: 1px solid rgba(52,211,153,0.24);
+          background: rgba(52,211,153,0.08);
+          color: #34d399;
+          font-size: 12px;
+          font-weight: 800;
+        }
+        .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #fbbf24; animation: pulse 1.4s ease-in-out infinite; }
+        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+        @keyframes analysisProgressMove {
+          0% { left: -42%; }
+          100% { left: 105%; }
+        }
       `}</style>
 
-      <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'Inter', sans-serif", background: "var(--bg-gradient)" }}>
-        <div style={{ maxWidth: 1160, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+      <div style={{ minHeight: "100vh", padding: "36px 40px 80px", color: "var(--text-primary)", fontFamily: "'Inter', sans-serif", background: "var(--bg-gradient)", boxSizing: "border-box" }}>
+        <div style={{ width: "100%", maxWidth: 1180, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24, boxSizing: "border-box" }}>
           <div>
             <div className="rec-label" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 14px", borderRadius: 999, border: "1px solid rgba(99,102,241,0.4)", background: "rgba(99,102,241,0.12)", width: "fit-content", marginBottom: 10 }}>
               Recruiter Bulk Analysis
@@ -545,13 +534,6 @@ export default function RecruiterDashboard() {
             <p style={{ fontSize: 13.5, color: "var(--text-muted)", margin: 0, lineHeight: 1.6 }}>
               Upload CSV or Excel candidate repositories, preview rows, then rank candidates with the new Skill Score and SonarQube metrics.
             </p>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
-            <Metric label="Candidates" value={profile?.talent_overview.candidates_evaluated ?? (dashboardLoading ? "…" : 0)} />
-            <Metric label="High Priority" value={profile?.talent_overview.high_priority ?? (dashboardLoading ? "…" : 0)} color="#f87171" />
-            <Metric label="Shortlisted" value={profile?.talent_overview.profiles_shortlisted ?? (dashboardLoading ? "…" : 0)} color="#34d399" />
-            <Metric label="Score Unavailable" value={candidates.filter((candidate) => candidate.skill_score === null).length} color="#94a3b8" />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.1fr) minmax(280px,0.9fr)", gap: 22 }}>
@@ -583,9 +565,40 @@ export default function RecruiterDashboard() {
             )}
 
             {card(
-              <>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 14 }}>Progress</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, flexWrap: "wrap", marginBottom: 18 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 6 }}>Progress</div>
+                    <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 12.5, lineHeight: 1.6 }}>
+                      Track candidate repository analysis from upload to completed ranking.
+                    </p>
+                  </div>
+                  {activeStep === 3 && repositories.length > 0 && !repositories.some(isPendingRepo) ? (
+                    <div className="analysis-done-pill">
+                      <CheckIcon />
+                      Analysis Done
+                    </div>
+                  ) : activeStep !== null ? (
+                    <div className="analysis-step-pill">
+                      <span className="pulse-dot" />
+                      Analysis in progress
+                    </div>
+                  ) : null}
+                </div>
+
+                {activeStep !== null && activeStep !== 3 && (
+                  <div className="analysis-progress-track">
+                    <div className="analysis-progress-fill" />
+                  </div>
+                )}
+
+                {activeStep === 3 && repositories.length > 0 && !repositories.some(isPendingRepo) && (
+                  <div style={{ marginTop: 14, padding: "13px 14px", borderRadius: 12, border: "1px solid rgba(52,211,153,0.24)", background: "rgba(52,211,153,0.08)", color: "#34d399", fontSize: 13, fontWeight: 800 }}>
+                    Analysis Done — all candidate repositories have finished processing.
+                  </div>
+                )}
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 18 }}>
                   {progressSteps.map((step, idx) => {
                     const isDone = activeStep !== null && idx < activeStep;
                     const isActive = activeStep === idx;
@@ -598,10 +611,9 @@ export default function RecruiterDashboard() {
                     );
                   })}
                 </div>
-                <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
-                  Ranking now uses Skill Score, Sonar Health, Quality Gate, Bugs, Code Smells, Coverage, Duplication, and Complexity.
-                </div>
-              </>,
+              </div>,
+              { padding: "30px 34px" },
+              "analysis-status-card"
             )}
           </div>
 
@@ -654,75 +666,19 @@ export default function RecruiterDashboard() {
                 ))}
               </>,
             )
-          ) : (
-            card(
-              <>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
-                  {sectionTitle("Candidate Ranking")}
-                  <button onClick={() => void loadDashboard(true)} className="rec-view-btn">Refresh</button>
-                </div>
-                {rankedCandidates.length === 0 && <p style={{ color: "var(--text-muted)", fontSize: 13 }}>No completed candidate analyses yet.</p>}
-                <div style={{ overflowX: "auto" }}>
-                  <table className="rec-table">
-                    <thead>
-                      <tr>
-                        {[
-                          "Candidate", "Skill Score", "Level", "Sonar Health", "Gate", "Bugs", "Code Smells", "Coverage", "Duplication", "Complexity", "Debt", "LOC", "Action",
-                        ].map((header) => <th key={header}>{header}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rankedCandidates.map((candidate) => (
-                        <tr key={candidate.run_id}>
-                          <td style={{ fontWeight: 800 }}>{candidate.candidate_name}<div style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 11 }}>{candidate.github_login}</div></td>
-                          <td style={{ color: scoreColor(candidate.skill_score), fontWeight: 900 }}>{fmt(candidate.skill_score)}</td>
-                          <td>{candidate.skill_score_level || "Unavailable"}</td>
-                          <td style={{ color: scoreColor(candidate.sonar_health_score), fontWeight: 800 }}>{fmt(candidate.sonar_health_score)}</td>
-                          <td><Pill value={candidate.quality_gate || "N/A"} color={qualityGateColor(candidate.quality_gate)} /></td>
-                          <td>{fmt(candidate.bugs)}</td>
-                          <td>{fmt(candidate.code_smells)}</td>
-                          <td>{fmt(candidate.coverage, candidate.coverage == null ? "" : "%")}</td>
-                          <td>{fmt(candidate.duplication_percentage, candidate.duplication_percentage == null ? "" : "%")}</td>
-                          <td>{fmt(candidate.cognitive_complexity)}</td>
-                          <td>{fmt(candidate.technical_debt_minutes, candidate.technical_debt_minutes == null ? "" : "m")}</td>
-                          <td>{fmt(candidate.lines_of_code)}</td>
-                          <td><button onClick={() => navigate(`/analysis/${candidate.run_id}`)} className="rec-view-btn">View</button></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>,
-            )
-          )}
+          ) : null}
 
-          {(skipped.length > 0 || profile?.recent_activity?.length) && (
-            <div style={{ display: "grid", gridTemplateColumns: skipped.length > 0 ? "1fr 1fr" : "1fr", gap: 18 }}>
-              {skipped.length > 0 && card(
-                <>
-                  {sectionTitle("Skipped repositories")}
-                  {skipped.map((item, index) => (
-                    <div key={`${item.candidate_name || item.repo_name}-${index}`} className="rec-row-card">
-                      <div style={{ fontSize: 13, fontWeight: 800 }}>{item.candidate_name || item.repo_name || `Row ${item.row}`}</div>
-                      <div style={{ fontSize: 12, color: "rgba(248,113,113,0.9)", marginTop: 4 }}>{item.reason}</div>
-                    </div>
-                  ))}
-                </>,
-              )}
-              {profile?.recent_activity?.length ? card(
-                <>
-                  {sectionTitle("Recent Activity")}
-                  {profile.recent_activity.map((activity) => (
-                    <button key={activity.run_id} onClick={() => navigate(`/analysis/${activity.run_id}`)} className="rec-activity-row">
-                      <strong>{activity.candidate_name}</strong> · {activity.repo_name}
-                      <span style={{ marginLeft: 10, color: scoreColor(activity.skill_score), fontWeight: 900 }}>{fmt(activity.skill_score)} · {activity.skill_score_level}</span>
-                      <span style={{ marginLeft: 10, color: scoreColor(activity.sonar_health_score), fontWeight: 800 }}>Sonar {fmt(activity.sonar_health_score)}</span>
-                      <span style={{ float: "right", color: "var(--text-muted)" }}>{formatTimestamp(activity.completed_at)}</span>
-                    </button>
-                  ))}
-                </>,
-              ) : null}
-            </div>
+
+          {skipped.length > 0 && card(
+            <>
+              {sectionTitle("Skipped repositories")}
+              {skipped.map((item, index) => (
+                <div key={`${item.candidate_name || item.repo_name}-${index}`} className="rec-row-card">
+                  <div style={{ fontSize: 13, fontWeight: 800 }}>{item.candidate_name || item.repo_name || `Row ${item.row}`}</div>
+                  <div style={{ fontSize: 12, color: "rgba(248,113,113,0.9)", marginTop: 4 }}>{item.reason}</div>
+                </div>
+              ))}
+            </>,
           )}
         </div>
       </div>

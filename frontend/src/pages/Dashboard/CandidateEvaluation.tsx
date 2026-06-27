@@ -421,6 +421,7 @@ export default function CandidateEvaluation() {
     <DashboardLayout>
       <style>{dashboardCss}</style>
       <div className="rd-page">
+        <div className="rd-inner">
         <header className="rd-header">
           <div>
             <h1>Recruiter Dashboard</h1>
@@ -639,6 +640,7 @@ export default function CandidateEvaluation() {
         )}
 
         {toast && <div className={`rd-toast ${toast.type}`}>{toast.message}</div>}
+        </div>
       </div>
     </DashboardLayout>
   );
@@ -920,10 +922,16 @@ function distributionGradient(distribution: DashboardSummary["task_distribution"
 const dashboardCss = `
 .rd-page {
   min-height: 100vh;
-  padding: 28px;
+  padding: 36px 40px 80px;
   color: var(--sp-text);
   background: var(--sp-bg-gradient);
   font-family: var(--font-body);
+  box-sizing: border-box;
+}
+.rd-inner {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
 }
 .rd-header, .rd-actions, .rd-panel-title, .rd-candidate-cell, .rd-repo-cell a, .rd-insight-head, .rd-insight-actions, .rd-risk-legend, .rd-risk-pill, .rd-eyebrow, .rd-badge, .rd-clear-btn, .rd-ghost-btn, .rd-primary-btn, .rd-input-icon, .rd-kpi small {
   display: flex;
@@ -1097,9 +1105,26 @@ const dashboardCss = `
   color: var(--sp-text);
   padding: 9px 10px;
   outline: none;
+  font-family: var(--font-body);
+  font-size: 13px;
+  transition: border-color .16s ease, background .16s ease;
+}
+.rd-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23a78bfa' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+.rd-field select option {
+  background: var(--sp-surface);
+  color: var(--sp-text);
 }
 .rd-field input:focus, .rd-field select:focus {
   border-color: rgba(168, 85, 247, .65);
+  background: var(--sp-surface-hover);
 }
 .rd-input-icon {
   gap: 8px;
@@ -1640,6 +1665,9 @@ const dashboardCss = `
 :root[data-theme="light"] .rd-input-icon {
   background: var(--sp-input-bg);
 }
+:root[data-theme="light"] .rd-field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b5cf6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
 :root[data-theme="light"] .rd-toast {
   background: rgba(255,255,255,.96);
   box-shadow: var(--sp-shadow);
@@ -1660,7 +1688,7 @@ const dashboardCss = `
   .rd-filter-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
 }
 @media (max-width: 720px) {
-  .rd-page { padding: 18px; }
+  .rd-page { padding: 18px 16px 56px; }
   .rd-header { align-items: flex-start; flex-direction: column; }
   .rd-actions { justify-content: flex-start; }
   .rd-kpis, .rd-filter-grid, .rd-analytics { grid-template-columns: 1fr; }
