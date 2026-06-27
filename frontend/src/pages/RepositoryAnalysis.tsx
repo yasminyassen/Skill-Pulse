@@ -467,12 +467,22 @@ export default function RepositoryAnalysis() {
     setCoverageFile(selected);
   };
 
-  const submitAnalysisRun = async (url: string, selectedBranch: string) => {
+  const submitAnalysisRun = async (
+    url: string,
+    selectedBranch: string,
+    options: { autoDetectRequirementsCoverage?: boolean; requirementsDocumentId?: number | null } = {},
+  ) => {
     if (coverageFile) {
       const formData = new FormData();
       formData.append("repo_url", url);
       formData.append("branch", selectedBranch);
       formData.append("programming_language", programmingLanguage);
+      if (options.autoDetectRequirementsCoverage) {
+        formData.append("auto_detect_requirements_coverage", "true");
+        if (options.requirementsDocumentId) {
+          formData.append("requirements_document_id", String(options.requirementsDocumentId));
+        }
+      }
       formData.append("coverage_file", coverageFile);
 
       for (const pair of formData.entries()) {
@@ -486,6 +496,8 @@ export default function RepositoryAnalysis() {
       repo_url: url,
       branch: selectedBranch,
       programming_language: programmingLanguage,
+      auto_detect_requirements_coverage: Boolean(options.autoDetectRequirementsCoverage),
+      requirements_document_id: options.requirementsDocumentId || undefined,
     });
   };
 
@@ -553,14 +565,17 @@ export default function RepositoryAnalysis() {
     setAnalysisDone(false);
     setLoading(true);
     try {
-      const res = await submitAnalysisRun(repoUrl, selectedBranch);
+      const res = await submitAnalysisRun(repoUrl, selectedBranch, {
+        autoDetectRequirementsCoverage: true,
+        requirementsDocumentId: prdDocId || requirementsState?.document_id || null,
+      });
       const repoId = res.data.repo_id || requirementsRepoId;
       if (!repoId) throw new Error("Repository id was not returned.");
       setRequirementsRepoId(repoId);
       fetchRequirementsState(repoId);
       if (!res.data.cached && res.data.analysis_run_id) {
         setRunId(res.data.analysis_run_id);
-        setRequirementsAnalysisMsg("Repository analysis is running. Coverage detection will be available when analysis completes.");
+        setRequirementsAnalysisMsg("Repository analysis is running. Coverage detection will start automatically when analysis completes.");
       } else {
         await api.post(`/requirements/coverage/repositories/${repoId}/detect`);
         setRequirementsAnalysisReady(true);
@@ -584,14 +599,8 @@ export default function RepositoryAnalysis() {
           clearInterval(iv); setLoading(false); setAnalysisDone(true); setRunId(null);
           if (analysisMode === "requirements" && requirementsRepoId) {
             setRequirementsAnalysisReady(true);
-            setRequirementsAnalysisMsg("Repository analysis is complete. Starting coverage detection.");
+            setRequirementsAnalysisMsg("Repository analysis is complete. Coverage detection will start automatically.");
             await fetchReviewContributors(requirementsRepoId);
-            try {
-              await api.post(`/requirements/coverage/repositories/${requirementsRepoId}/detect`);
-              showToast("Coverage detection started");
-            } catch (err: any) {
-              showToast(err.response?.data?.detail || "Coverage detection failed", "error");
-            }
           }
           fetchHistory(false);
         }

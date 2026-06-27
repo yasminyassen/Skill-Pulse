@@ -633,13 +633,22 @@ export default function RequirementsPage() {
     else loadDeveloperData(selectedRepo);
   };
 
+  const refreshCoverageSilently = useCallback(async (repoId: string) => {
+    try {
+      const coverageRes = await api.get(`/requirements/coverage/repositories/${repoId}`).catch(() => ({ data: null }));
+      setCoverage(coverageRes.data);
+    } catch {
+      // Keep the current view stable while an in-progress coverage run is polled.
+    }
+  }, []);
+
   useEffect(() => {
     if (!selectedRepo || role !== "manager" || !coverage?.is_analysis_running) return;
     const timer = window.setInterval(() => {
-      loadManagerData(selectedRepo);
-    }, 4000);
+      refreshCoverageSilently(selectedRepo);
+    }, 8000);
     return () => window.clearInterval(timer);
-  }, [selectedRepo, coverage?.is_analysis_running, loadManagerData]);
+  }, [selectedRepo, role, coverage?.is_analysis_running, refreshCoverageSilently]);
 
   const updateStory = async (id: number, patch: any) => {
     try {
@@ -831,9 +840,13 @@ export default function RequirementsPage() {
     if (!selectedRepo) return;
     setCoverageRunning(true);
     try {
-      await api.post(`/requirements/coverage/repositories/${selectedRepo}/detect`);
+      const res = await api.post(`/requirements/coverage/repositories/${selectedRepo}/detect`);
+      setCoverage((prev: any) => ({
+        ...(prev || {}),
+        active_run: res.data,
+        is_analysis_running: true,
+      }));
       showToast(coverage ? "Coverage re-detection started" : "Coverage detection started");
-      setTimeout(refresh, 2500);
     } catch (err: any) {
       showToast(err.response?.data?.detail || "Coverage detection failed", false);
     } finally {
@@ -883,6 +896,10 @@ export default function RequirementsPage() {
 
   const uploadPrd = async (file: File) => {
     if (!selectedRepo || !file) return;
+    if (isAnalysisRunning || coverageRunning) {
+      showToast("Wait for coverage analysis to finish before replacing the PRD.", false);
+      return;
+    }
     const nextFingerprint = await fingerprintPrdFile(file);
     const activeRequirementsState = requirementsState;
     if (isKnownSamePrd(file, activeRequirementsState, currentPrdFingerprint, nextFingerprint)) {
@@ -1229,7 +1246,7 @@ export default function RequirementsPage() {
           </div>
         )}
 
-        {selectedRepo && role === "manager" && hasConfirmedRequirements && (
+        {selectedRepo && role === "manager" && hasConfirmedRequirements && (!isAnalysisRunning || coverageRun) && (
           <>
           <div className="rq-panel" style={{ marginBottom: 18, background: "linear-gradient(135deg, rgba(20,184,166,0.13), rgba(59,130,246,0.07))", borderColor: readinessBorderColor }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 24, alignItems: "center" }}>
@@ -1398,7 +1415,14 @@ export default function RequirementsPage() {
                     {openingPrdReview ? "Opening..." : "Review Requirements"}
                   </button>
                 )}
-                <button className="rq-btn-ghost" onClick={() => { if (prdFileInputRef.current) prdFileInputRef.current.value = ""; prdFileInputRef.current?.click(); }}>Replace PRD</button>
+                <button
+                  className="rq-btn-ghost"
+                  disabled={isAnalysisRunning || coverageRunning || uploadingPrd}
+                  title={isAnalysisRunning ? "Coverage analysis is running" : undefined}
+                  onClick={() => { if (prdFileInputRef.current) prdFileInputRef.current.value = ""; prdFileInputRef.current?.click(); }}
+                >
+                  Replace PRD
+                </button>
                 <input ref={prdFileInputRef} type="file" accept=".pdf,.xlsx,.xls,.md,.txt,.csv" style={{ display: "none" }} onChange={e => { const selected = e.target.files?.[0]; e.currentTarget.value = ""; if (selected) uploadPrd(selected); }} />
               </div>
             </div>

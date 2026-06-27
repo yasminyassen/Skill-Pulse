@@ -23,6 +23,7 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 from app.db.database import get_db
+from app.db.database import SessionLocal
 from app.db.models import (
     Repository,
     AnalysisRun,
@@ -38,6 +39,9 @@ from app.db.models import (
     RecruiterTask,
     RepositoryAnalysis,
     RepositoryContributor,
+    CoverageRunStatus,
+    RequirementCoverageRun,
+    RequirementDocument,
 )
 from app.core.auth_utils import get_current_user, decrypt_github_token, require_role
 from app.core.rate_limiter import limiter
@@ -95,6 +99,8 @@ class RepoRequest(BaseModel):
     repo_url: str
     branch: str = "main"
     programming_language: str = "python"
+    auto_detect_requirements_coverage: bool = False
+    requirements_document_id: int | None = None
 
 
 class RecruiterCandidateRow(BaseModel):
@@ -1192,6 +1198,126 @@ async def run_analysis(
     )
 
 
+def _run_manager_repository_analysis_then_detect_requirements_coverage(
+    *,
+    run_id: int,
+    repo_id: int,
+    repo_url: str,
+    repo_name: str,
+    branch: str,
+    full_name: str,
+    token: str | None,
+    is_private: bool,
+    manager_user_id: int,
+    coverage_report_path: str | None = None,
+    manager_contributors: list[dict] | None = None,
+    requirements_document_id: int | None = None,
+) -> None:
+    background_manager_repository_analysis_task(
+        run_id=run_id,
+        repo_id=repo_id,
+        repo_url=repo_url,
+        repo_name=repo_name,
+        branch=branch,
+        full_name=full_name,
+        token=token,
+        is_private=is_private,
+        manager_user_id=manager_user_id,
+        coverage_report_path=coverage_report_path,
+        manager_contributors=manager_contributors,
+    )
+
+    db = SessionLocal()
+    try:
+        completed_run = db.query(AnalysisRun).filter(AnalysisRun.id == run_id).first()
+        if not completed_run or completed_run.status != "completed":
+            logger.info(
+                "[run=%s] Skipping automatic requirements coverage because repository analysis status is %s",
+                run_id,
+                completed_run.status if completed_run else "missing",
+            )
+            return
+
+        from app.services.requirement_coverage_service import (
+            build_requirement_snapshots,
+            execute_coverage_run,
+            get_latest_confirmed_document,
+        )
+
+        document = None
+        if requirements_document_id is not None:
+            document = (
+                db.query(RequirementDocument)
+                .filter(
+                    RequirementDocument.id == requirements_document_id,
+                    RequirementDocument.repository_id == repo_id,
+                )
+                .first()
+            )
+        if document is None:
+            document = get_latest_confirmed_document(db, repo_id)
+        if not document:
+            logger.info(
+                "[run=%s] Skipping automatic requirements coverage because no confirmed PRD exists for repo_id=%s",
+                run_id,
+                repo_id,
+            )
+            return
+
+        existing_active = (
+            db.query(RequirementCoverageRun)
+            .filter(
+                RequirementCoverageRun.repository_id == repo_id,
+                RequirementCoverageRun.status.in_([CoverageRunStatus.pending, CoverageRunStatus.running]),
+            )
+            .order_by(RequirementCoverageRun.created_at.desc())
+            .first()
+        )
+        if existing_active:
+            logger.info(
+                "[run=%s] Skipping automatic requirements coverage because coverage run %s is already %s",
+                run_id,
+                existing_active.id,
+                existing_active.status.value if hasattr(existing_active.status, "value") else existing_active.status,
+            )
+            return
+
+        snapshots = build_requirement_snapshots(db, document.id)
+        coverage_run = RequirementCoverageRun(
+            repository_id=repo_id,
+            document_id=document.id,
+            analysis_run_id=run_id,
+            branch=completed_run.branch,
+            commit_sha=completed_run.commit_sha,
+            requirements_snapshot_hash=snapshots["requirements_snapshot_hash"],
+            tasks_snapshot_hash=snapshots["tasks_snapshot_hash"],
+            assignments_snapshot_hash=snapshots["assignments_snapshot_hash"],
+            status=CoverageRunStatus.pending,
+        )
+        db.add(coverage_run)
+        db.commit()
+        db.refresh(coverage_run)
+        logger.info(
+            "[run=%s] Starting automatic requirements coverage run %s for repo_id=%s document_id=%s",
+            run_id,
+            coverage_run.id,
+            repo_id,
+            document.id,
+        )
+        import asyncio
+        asyncio.run(
+            execute_coverage_run(
+                db,
+                coverage_run_id=coverage_run.id,
+                manager_user_id=manager_user_id,
+            )
+        )
+    except Exception:
+        logger.exception("[run=%s] Automatic requirements coverage failed", run_id)
+    finally:
+        db.close()
+
+
 def _safe_uploaded_coverage_filename(filename: str | None) -> str:
     original = os.path.basename(filename or "coverage.xml")
     if not original.lower().endswith(".xml"):
@@ -1245,6 +1371,8 @@ async def run_analysis_with_optional_coverage(
     repo_url: str = Form(...),
     branch: str = Form("main"),
     programming_language: str = Form("python"),
+    auto_detect_requirements_coverage: bool = Form(False),
+    requirements_document_id: int | None = Form(None),
     coverage_file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -1260,6 +1388,8 @@ async def run_analysis_with_optional_coverage(
             repo_url=repo_url,
             branch=branch,
             programming_language=programming_language,
+            auto_detect_requirements_coverage=auto_detect_requirements_coverage,
+            requirements_document_id=requirements_document_id,
         ),
         background_tasks=background_tasks,
         db=db,
@@ -1673,20 +1803,27 @@ async def _run_analysis_impl(
 
     # Trigger Background Task
     if is_manager:
-        background_tasks.add_task(
-            background_manager_repository_analysis_task,
-            run_id=run.id,
-            repo_id=repo.id,
-            repo_url=data.repo_url,
-            repo_name=repo_name,
-            branch=data.branch,
-            full_name=full_name,
-            token=token,
-            is_private=is_private,
-            manager_user_id=current_user.id,
-            coverage_report_path=coverage_report_path,
-            manager_contributors=manager_contributors,
+        manager_task = (
+            _run_manager_repository_analysis_then_detect_requirements_coverage
+            if data.auto_detect_requirements_coverage
+            else background_manager_repository_analysis_task
         )
+        task_kwargs = {
+            "run_id": run.id,
+            "repo_id": repo.id,
+            "repo_url": data.repo_url,
+            "repo_name": repo_name,
+            "branch": data.branch,
+            "full_name": full_name,
+            "token": token,
+            "is_private": is_private,
+            "manager_user_id": current_user.id,
+            "coverage_report_path": coverage_report_path,
+            "manager_contributors": manager_contributors,
+        }
+        if data.auto_detect_requirements_coverage:
+            task_kwargs["requirements_document_id"] = data.requirements_document_id
+        background_tasks.add_task(manager_task, **task_kwargs)
     else:
         background_tasks.add_task(
             background_analysis_task,
