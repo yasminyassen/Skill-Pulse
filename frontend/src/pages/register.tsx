@@ -221,7 +221,19 @@ const Register: React.FC = () => {
         .sp-field-label { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; }
         .sp-input-wrap { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 40px; border-radius: 11px; transition: all 0.25s; }
         .sp-input-field { flex: 1; border: none; background: transparent !important; outline: none; font-family: 'Inter', sans-serif; font-size: 13px; }
-        .sp-input-field:-webkit-autofill { -webkit-box-shadow: 0 0 0px 1000px rgba(30,20,51,0.95) inset !important; -webkit-text-fill-color: white !important; }
+
+        /* Dark mode autofill */
+        .sp-input-field:-webkit-autofill {
+          -webkit-box-shadow: 0 0 0px 1000px rgba(30,20,51,0.95) inset !important;
+          -webkit-text-fill-color: white !important;
+        }
+
+        /* Light mode autofill */
+        [data-theme="light"] .sp-input-field:-webkit-autofill {
+          -webkit-box-shadow: 0 0 0px 1000px rgba(245,243,255,0.98) inset !important;
+          -webkit-text-fill-color: #26215c !important;
+        }
+
         .sp-input-icon { flex-shrink: 0; display: flex; align-items: center; transition: color 0.2s; }
         .sp-role-group { display: flex; flex-direction: column; gap: 5px; }
         .sp-role-option { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; cursor: pointer; transition: all 0.2s; }
