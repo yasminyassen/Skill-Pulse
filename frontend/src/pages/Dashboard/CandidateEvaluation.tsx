@@ -4,14 +4,17 @@ import {
   AlertTriangle,
   ArrowUp,
   BarChart3,
+  Brain,
   CalendarDays,
   Download,
   Eye,
   Filter,
   Gauge,
   GitBranch,
+  RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Star,
   Target,
   Users,
@@ -1108,14 +1111,17 @@ const dashboardCss = `
   font-family: var(--font-body);
   font-size: 13px;
   transition: border-color .16s ease, background .16s ease;
+  box-sizing: border-box;
 }
 .rd-field select {
   appearance: none;
   -webkit-appearance: none;
+  -moz-appearance: none;
   padding-right: 34px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23a78bfa' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
+  background-size: 14px 14px;
   cursor: pointer;
 }
 .rd-field select option {
@@ -1667,6 +1673,9 @@ const dashboardCss = `
 }
 :root[data-theme="light"] .rd-field select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b5cf6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px 14px;
 }
 :root[data-theme="light"] .rd-toast {
   background: rgba(255,255,255,.96);
@@ -1694,4 +1703,4 @@ const dashboardCss = `
   .rd-kpis, .rd-filter-grid, .rd-analytics { grid-template-columns: 1fr; }
   .rd-donut { margin: 0 auto; }
 }
-`;
+`
