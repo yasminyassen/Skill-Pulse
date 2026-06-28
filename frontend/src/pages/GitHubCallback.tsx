@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { API_BASE_URL } from "../api/auth";
+import { API_BASE_URL, setCachedAuthUser } from "../api/auth";
 
 function useAuthTheme() {
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -55,8 +55,7 @@ const GitHubCallback: React.FC = () => {
           credentials: "include",
         });
         const user = await res.json();
-        localStorage.setItem("role", user.role);
-        localStorage.setItem("full_name", user.full_name || user.username || "User");
+        setCachedAuthUser(user);
 
         if (user.role === 'developer') window.location.href = '/dashboard/developer';
         else if (user.role === 'manager') window.location.href = '/dashboard/manager';

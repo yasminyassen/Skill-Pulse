@@ -1683,64 +1683,146 @@ async def _overview_recommendations(
     return recommendations
 
 
-@router.get("/overview", response_model=ManagerDashboardOverview)
-async def get_manager_dashboard_overview(
-    repo_id: int | None = Query(default=None),
-    trend_granularity: str = Query(default="monthly"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["manager"])),
-):
-    repositories = _overview_repositories(db, current_user.id)
-    repository_run = _latest_repository_run(db, current_user.id, repo_id)
+def _overview_context(
+    db: Session,
+    manager_id: int,
+    repo_id: int | None,
+    trend_granularity: str,
+) -> dict:
+    repositories = _overview_repositories(db, manager_id)
+    repository_run = _latest_repository_run(db, manager_id, repo_id)
     if repo_id is not None and repository_run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository dashboard data not found.")
 
     effective_repo_id = repository_run.repository_id if repository_run else repo_id
-    team_rows = _query_manager_score_rows(db, current_user.id, effective_repo_id)
+    team_rows = _query_manager_score_rows(db, manager_id, effective_repo_id)
     contributors = _contributor_rows(db, team_rows)
     team_performance = _team_performance(contributors)
-    repository_score = _score_for_run(db, repository_run.id, current_user.id) if repository_run else None
-    repository_summary_row = _summary_for_run(db, repository_run.id, current_user.id) if repository_run else None
+    repository_score = _score_for_run(db, repository_run.id, manager_id) if repository_run else None
+    repository_summary_row = _summary_for_run(db, repository_run.id, manager_id) if repository_run else None
     repository_security_score = _number_or_none(getattr(repository_score, "security_awareness_score", None))
     if repository_security_score is None:
-        repository_security_score = _repository_security_score(db, repository_run, current_user.id)
+        repository_security_score = _repository_security_score(db, repository_run, manager_id)
     issue_rows = _sonar_issue_rows(db, repository_run)
     repository_metrics = _repository_metric_cards(
         db,
         repository_run,
-        current_user.id,
+        manager_id,
         score=repository_score,
         summary=repository_summary_row,
         security_score=repository_security_score,
     )
     risks = _risk_groups(db, repository_run, issue_rows=issue_rows)
-    recommendations = await _overview_recommendations(
-        db=db,
-        repository_run=repository_run,
-        manager_id=current_user.id,
-        contributor_rows=team_rows,
-        risks=risks,
-        score=repository_score,
-        summary=repository_summary_row,
-        security_score=repository_security_score,
-        issue_rows=issue_rows,
-    )
 
+    return {
+        "repositories": repositories,
+        "repository_run": repository_run,
+        "effective_repo_id": effective_repo_id,
+        "team_rows": team_rows,
+        "contributors": contributors,
+        "team_performance": team_performance,
+        "repository_score": repository_score,
+        "repository_summary_row": repository_summary_row,
+        "repository_security_score": repository_security_score,
+        "issue_rows": issue_rows,
+        "repository_metrics": repository_metrics,
+        "risks": risks,
+        "trends": _build_overview_trends(db, manager_id, effective_repo_id, trend_granularity),
+    }
+
+
+def _overview_response_from_context(
+    db: Session,
+    manager_id: int,
+    context: dict,
+    recommendations: ManagerDashboardRecommendations | None = None,
+) -> ManagerDashboardOverview:
+    recommendations = recommendations or ManagerDashboardRecommendations()
+    team_performance = context["team_performance"]
     if team_performance.best_contributor and recommendations.best_contributor_reasoning:
         team_performance.best_contributor.reasoning = recommendations.best_contributor_reasoning
     if team_performance.needs_support_contributor and recommendations.needs_support_reasoning:
         team_performance.needs_support_contributor.reasoning = recommendations.needs_support_reasoning
 
     return ManagerDashboardOverview(
-        repositories=repositories,
-        repository_summary=_repository_summary(db, repository_run, current_user.id, score=repository_score),
-        repository_metrics=repository_metrics,
+        repositories=context["repositories"],
+        repository_summary=_repository_summary(
+            db,
+            context["repository_run"],
+            manager_id,
+            score=context["repository_score"],
+        ),
+        repository_metrics=context["repository_metrics"],
         team_performance=team_performance,
-        contributors=contributors,
-        trends=_build_overview_trends(db, current_user.id, effective_repo_id, trend_granularity),
-        risks=risks,
+        contributors=context["contributors"],
+        trends=context["trends"],
+        risks=context["risks"],
         recommendations=recommendations,
     )
+
+
+def warm_manager_dashboard_overview_recommendations(
+    db: Session,
+    manager_id: int,
+    repo_id: int | None,
+) -> ManagerDashboardRecommendations | None:
+    context = _overview_context(db, manager_id, repo_id, "monthly")
+    repository_run = context["repository_run"]
+    team_rows = context["team_rows"]
+    if repository_run is None or not team_rows:
+        return None
+
+    cache_key = _overview_recommendation_cache_key(repository_run, team_rows)
+    cached = _cached_overview_recommendations(repository_run, cache_key)
+    if cached is not None:
+        return cached
+
+    payload = _repository_manager_recommendation_payload(
+        db=db,
+        run=repository_run,
+        manager_id=manager_id,
+        contributor_rows=team_rows,
+        risks=context["risks"],
+        score=context["repository_score"],
+        summary=context["repository_summary_row"],
+        security_score=context["repository_security_score"],
+        issue_rows=context["issue_rows"],
+    )
+    raw = generate_repository_manager_recommendations(payload)
+    recommendations = _normalise_overview_recommendations(raw)
+    _store_overview_recommendations(db, repository_run, cache_key, recommendations)
+    return recommendations
+
+
+@router.get("/overview/recommendations", response_model=ManagerDashboardRecommendations)
+async def get_manager_dashboard_overview_recommendations(
+    repo_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["manager"])),
+):
+    context = _overview_context(db, current_user.id, repo_id, "monthly")
+    return await _overview_recommendations(
+        db=db,
+        repository_run=context["repository_run"],
+        manager_id=current_user.id,
+        contributor_rows=context["team_rows"],
+        risks=context["risks"],
+        score=context["repository_score"],
+        summary=context["repository_summary_row"],
+        security_score=context["repository_security_score"],
+        issue_rows=context["issue_rows"],
+    )
+
+
+@router.get("/overview", response_model=ManagerDashboardOverview)
+def get_manager_dashboard_overview(
+    repo_id: int | None = Query(default=None),
+    trend_granularity: str = Query(default="monthly"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["manager"])),
+):
+    context = _overview_context(db, current_user.id, repo_id, trend_granularity)
+    return _overview_response_from_context(db, current_user.id, context)
 
 
 @router.get("/repos", response_model=list[ManagerDashboardRepo])

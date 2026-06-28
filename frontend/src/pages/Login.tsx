@@ -1,6 +1,6 @@
 import type { FormEvent } from "react";
 import React, { useState, useEffect } from "react";
-import api, { API_BASE_URL, login } from '../api/auth';
+import api, { API_BASE_URL, login, setCachedAuthUser } from '../api/auth';
 
 function useAuthTheme() {
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -60,8 +60,7 @@ const Login: React.FC = () => {
       }
       const userRes = await api.get("/auth/whoami-full");
       const user = userRes.data;
-      localStorage.setItem("role", user.role);
-      localStorage.setItem("full_name", user.full_name || user.username || "User");
+      setCachedAuthUser(user);
       setSuccess(`Welcome back, ${user.full_name || user.username}!`);
       setTimeout(() => {
         if (user.role === 'developer')       window.location.href = '/dashboard/developer';
@@ -241,25 +240,9 @@ const Login: React.FC = () => {
         .lg-input-icon { flex-shrink: 0; display: flex; align-items: center; transition: color 0.2s; }
         .lg-input-field { flex: 1; border: none; background: transparent !important; outline: none; font-family: 'Inter', sans-serif; font-size: 14px; }
         .lg-pwd-toggle { background: none; border: none; padding: 0; cursor: pointer; display: flex; align-items: center; transition: color 0.2s; outline: none; }
-
-        /* Autofill background must match the active theme, otherwise Chrome/Safari
-           force a dark pill regardless of light mode. */
-        [data-theme="light"] .lg-input-field:-webkit-autofill,
-        [data-theme="light"] .lg-input-field:-webkit-autofill:hover,
-        [data-theme="light"] .lg-input-field:-webkit-autofill:focus {
-          -webkit-box-shadow: 0 0 0px 1000px #ffffff inset !important;
-          -webkit-text-fill-color: #26215c !important;
-          caret-color: #26215c;
-          transition: background-color 5000s ease-in-out 0s;
-        }
-        [data-theme="dark"] .lg-input-field:-webkit-autofill,
-        [data-theme="dark"] .lg-input-field:-webkit-autofill:hover,
-        [data-theme="dark"] .lg-input-field:-webkit-autofill:focus {
-          -webkit-box-shadow: 0 0 0px 1000px rgba(30,20,51,0.95) inset !important;
-          -webkit-text-fill-color: white !important;
-          caret-color: white;
-          transition: background-color 5000s ease-in-out 0s;
-        }
+        .lg-input-field:-webkit-autofill,
+        .lg-input-field:-webkit-autofill:hover,
+        .lg-input-field:-webkit-autofill:focus { -webkit-box-shadow: 0 0 0px 1000px rgba(30,20,51,0.95) inset !important; -webkit-text-fill-color: white !important; transition: background-color 5000s ease-in-out 0s; }
 
         .lg-msg-wrap { height: 38px; }
         .lg-error { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 9px; font-size: 11px; font-weight: 500; height: 100%; animation: lgFade 0.2s ease; }

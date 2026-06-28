@@ -19,7 +19,7 @@ async def schedule_recruiter_repo_analysis(
     db: Session,
     background_tasks: BackgroundTasks,
     current_user: User,
-    token: str,
+    token: str | None,
     candidate_name: str,
     repo_url: str,
     full_name: str,
@@ -32,9 +32,20 @@ async def schedule_recruiter_repo_analysis(
     github_avatar_url: str | None = None
     github_login: str | None = None
 
+    lookup_token = token
     try:
-        repo_data = await verify_repo_access(token, full_name)
+        repo_data = await verify_repo_access(lookup_token, full_name)
     except Exception:
+        if lookup_token:
+            try:
+                lookup_token = None
+                repo_data = await verify_repo_access(None, full_name)
+            except Exception:
+                repo_data = None
+        else:
+            repo_data = None
+
+    if not repo_data:
         return {
             "scheduled": False,
             "candidate": candidate_name,
@@ -60,7 +71,10 @@ async def schedule_recruiter_repo_analysis(
     owner = repo_data.get("owner") or {}
     github_avatar_url = owner.get("avatar_url")
     github_login = owner.get("login")
-    head_sha = await get_branch_head_sha(token, full_name, default_branch)
+    head_sha = await get_branch_head_sha(lookup_token, full_name, default_branch)
+    if not head_sha and lookup_token:
+        lookup_token = None
+        head_sha = await get_branch_head_sha(None, full_name, default_branch)
     if not head_sha:
         return {
             "scheduled": False,
@@ -227,7 +241,7 @@ async def schedule_recruiter_repo_analysis(
         repo_name=repo_name,
         branch=default_branch,
         full_name=full_name,
-        token=token,
+        token=lookup_token,
         is_private=bool(repo_data.get("private")),
         current_user_id=current_user.id,
         user_role=current_user.role.value,

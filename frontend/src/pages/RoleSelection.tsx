@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../api/auth";
+import api, { getCachedAuthUser, setCachedAuthUser } from "../api/auth";
 
 function useAuthTheme() {
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -75,7 +75,18 @@ const RoleSelection: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
+    const cachedUser = getCachedAuthUser();
+    if (cachedUser?.username || cachedUser?.full_name) {
+      setUser({
+        username: cachedUser.username || "",
+        full_name: cachedUser.full_name || cachedUser.username || "User",
+        work_email: cachedUser.work_email || "",
+        avatar_url: cachedUser.avatar_url || undefined,
+      });
+      return;
+    }
     api.get("/auth/whoami-full").then(res => {
+      setCachedAuthUser(res.data);
       setUser(res.data);
     }).catch(() => {});
   }, []);

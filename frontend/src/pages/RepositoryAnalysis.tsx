@@ -11,6 +11,7 @@ import {
   requirementsStateFromUpload,
 } from "../components/requirements/PrdWorkflow";
 import type { PrdFingerprint, RequirementsState } from "../components/requirements/PrdWorkflow";
+import { playAnalysisCompleteSound, primeAnalysisCompleteSound } from "../utils/analysisSound";
 
 interface Analysis {
   analysis_id: number;
@@ -505,6 +506,7 @@ export default function RepositoryAnalysis() {
     if (!url) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!/^https:\/\/github\.com\/.+/.test(url)) { setUrlError("URL must start with https://github.com/…"); return; }
     const selectedBranch = (br || "main").trim() || "main";
+    primeAnalysisCompleteSound();
     setUrlError(""); setGithubAuthUrl(null); setFailedMsg(null); setCachedMsg(null); setAnalysisDone(false); setLoading(true);
     if (analysisMode === "requirements") {
       setRequirementsAnalysisReady(false);
@@ -562,6 +564,7 @@ export default function RepositoryAnalysis() {
     if (!repoUrl) { setUrlError("Please enter a GitHub repository URL"); return; }
     if (!requirementsConfirmed) { showToast("Confirm requirements before analysis and coverage detection.", "error"); return; }
     const selectedBranch = (branch || "main").trim() || "main";
+    primeAnalysisCompleteSound();
     setAnalysisDone(false);
     setLoading(true);
     try {
@@ -596,6 +599,7 @@ export default function RepositoryAnalysis() {
         const res = await api.get(`/analysis/${runId}`);
         updateHistoryRunStatus(runId, res.data);
         if (res.data.status === "completed") {
+          playAnalysisCompleteSound();
           clearInterval(iv); setLoading(false); setAnalysisDone(true); setRunId(null);
           if (analysisMode === "requirements" && requirementsRepoId) {
             setRequirementsAnalysisReady(true);

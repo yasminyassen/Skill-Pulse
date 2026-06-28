@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -114,7 +114,6 @@ type DashboardSummary = {
     testing: RiskLevel;
     reliability: RiskLevel;
   }>;
-  top_candidate?: CandidateInsight | null;
 };
 
 type CandidateFilters = {
@@ -166,7 +165,6 @@ const emptySummary: DashboardSummary = {
   },
   task_distribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
   risk_heatmap: [],
-  top_candidate: null,
 };
 
 const sortOptions = [
@@ -299,14 +297,38 @@ export default function CandidateEvaluation() {
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [insightsByRun, setInsightsByRun] = useState<Record<number, CandidateInsight>>({});
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightRefreshing, setInsightRefreshing] = useState(false);
+  const [insightError, setInsightError] = useState("");
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingCandidates, setLoadingCandidates] = useState(true);
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [candidateError, setCandidateError] = useState("");
   const [summaryError, setSummaryError] = useState("");
   const [toast, setToast] = useState<ToastState>(null);
+  const insightRequestRef = useRef(0);
 
   const [activeTab, setActiveTab] = useState<"ranking" | "analytics">("ranking");
+
+  const candidateQueryFilters = useMemo<CandidateFilters>(() => ({
+    ...filters,
+    search: "",
+  }), [
+    filters.task_id,
+    filters.min_skill_score,
+    filters.max_skill_score,
+    filters.min_sonar,
+    filters.max_sonar,
+    filters.min_security,
+    filters.max_security,
+    filters.min_coverage,
+    filters.max_coverage,
+    filters.quality_gate,
+    filters.max_bugs,
+    filters.max_technical_debt_minutes,
+    filters.sort_by,
+    filters.sort_dir,
+  ]);
 
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
@@ -329,7 +351,7 @@ export default function CandidateEvaluation() {
     setLoadingCandidates(true);
     setCandidateError("");
     try {
-      const data = await loadCandidates(filters, debouncedSearch);
+      const data = await loadCandidates(candidateQueryFilters, debouncedSearch);
       setCandidates(data);
       setSelectedRunId((current) => {
         if (!data.length) return null;
@@ -341,7 +363,7 @@ export default function CandidateEvaluation() {
     } finally {
       setLoadingCandidates(false);
     }
-  }, [debouncedSearch, filters]);
+  }, [candidateQueryFilters, debouncedSearch]);
 
   const fetchSummary = useCallback(async () => {
     setLoadingSummary(true);
@@ -355,6 +377,28 @@ export default function CandidateEvaluation() {
       setLoadingSummary(false);
     }
   }, [filters.task_id]);
+
+  const fetchInsightForRun = useCallback(async (runId: number, forceRefresh = false) => {
+    const requestId = insightRequestRef.current + 1;
+    insightRequestRef.current = requestId;
+    setInsightError("");
+    if (forceRefresh) setInsightRefreshing(true);
+    else setInsightLoading(true);
+
+    try {
+      const insight = await loadCandidateInsights(runId, forceRefresh);
+      if (insightRequestRef.current !== requestId) return;
+      setInsightsByRun((prev) => ({ ...prev, [runId]: insight }));
+    } catch (error: any) {
+      if (insightRequestRef.current !== requestId) return;
+      setInsightError(error?.response?.data?.detail || "Unable to load candidate insight.");
+    } finally {
+      if (insightRequestRef.current === requestId) {
+        setInsightLoading(false);
+        setInsightRefreshing(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     fetchTasks();
@@ -372,6 +416,20 @@ export default function CandidateEvaluation() {
   useEffect(() => {
     fetchSummary();
   }, [fetchSummary]);
+
+  useEffect(() => {
+    if (!selectedRunId) {
+      setInsightError("");
+      setInsightLoading(false);
+      setInsightRefreshing(false);
+      return;
+    }
+    if (insightsByRun[selectedRunId]) {
+      setInsightError("");
+      return;
+    }
+    void fetchInsightForRun(selectedRunId);
+  }, [fetchInsightForRun, insightsByRun, selectedRunId]);
 
 
   const setFilter = <K extends keyof CandidateFilters>(key: K, value: CandidateFilters[K]) => {
@@ -419,6 +477,22 @@ export default function CandidateEvaluation() {
     summary.task_distribution.fair +
     summary.task_distribution.poor;
   const donut = distributionGradient(summary.task_distribution);
+  const selectedCandidate = useMemo(
+    () => candidates.find((candidate) => candidate.run_id === selectedRunId) || null,
+    [candidates, selectedRunId],
+  );
+  const selectedInsight = selectedRunId ? insightsByRun[selectedRunId] : undefined;
+  const topCandidateRunId = useMemo(() => {
+    const scored = candidates.filter((candidate) => candidate.skill_score !== null && candidate.skill_score !== undefined);
+    if (!scored.length) return null;
+    return scored.reduce((best, candidate) => (
+      Number(candidate.skill_score ?? -1) > Number(best.skill_score ?? -1) ? candidate : best
+    )).run_id;
+  }, [candidates]);
+  const refreshSelectedInsight = useCallback(() => {
+    if (!selectedRunId) return;
+    void fetchInsightForRun(selectedRunId, true);
+  }, [fetchInsightForRun, selectedRunId]);
 
   return (
     <DashboardLayout>
@@ -611,6 +685,19 @@ export default function CandidateEvaluation() {
                 </div>
               )}
             </section>
+            <InsightsPanel
+              candidate={selectedCandidate}
+              insight={selectedInsight}
+              loading={insightLoading}
+              refreshing={insightRefreshing}
+              error={insightError}
+              candidatesLoading={loadingCandidates}
+              isTopPerformer={Boolean(selectedCandidate && selectedCandidate.run_id === topCandidateRunId)}
+              onView={() => {
+                if (selectedRunId) navigate(`/analysis/${selectedRunId}`);
+              }}
+              onRegenerate={refreshSelectedInsight}
+            />
           </div>
         )}
 
@@ -707,6 +794,7 @@ function InsightsPanel({
   loading,
   refreshing,
   error,
+  candidatesLoading,
   isTopPerformer,
   onView,
   onRegenerate,
@@ -716,6 +804,7 @@ function InsightsPanel({
   loading: boolean;
   refreshing: boolean;
   error: string;
+  candidatesLoading: boolean;
   isTopPerformer: boolean;
   onView: () => void;
   onRegenerate: () => void;
@@ -732,7 +821,9 @@ function InsightsPanel({
         </div>
       </div>
 
-      {!candidate ? (
+      {candidatesLoading ? (
+        <InsightSkeleton />
+      ) : !candidate ? (
         <div className="rd-empty">Select a candidate to view AI-generated insights.</div>
       ) : loading && !insight ? (
         <InsightSkeleton />
@@ -1151,7 +1242,10 @@ const dashboardCss = `
   gap: 8px;
 }
 .rd-main-grid {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, .45fr);
+  gap: 14px;
+  align-items: start;
 }
 .rd-table-panel {
   min-width: 0;

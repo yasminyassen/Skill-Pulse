@@ -38,6 +38,7 @@ from app.services.code_intelligence import analyze_python_files
 from app.services.llm_client import LLMError, analyze_skill_gaps_with_llm
 from app.services.metrics import build_unified_schema
 from app.services.learning_recommendations import build_learning_recommendations
+from app.services.recruiter_candidate_insights import generate_and_cache_recruiter_candidate_insight
 from app.api.manager_dashboard import (
     _analysis_run_ids,
     _build_team_aggregate_metrics,
@@ -46,6 +47,7 @@ from app.api.manager_dashboard import (
     _manager_team_insight_payload,
     _normalise_team_insights,
     _query_manager_score_rows,
+    warm_manager_dashboard_overview_recommendations,
 )
 from ai_services.insights.ai_insights import generate_insights
 from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
@@ -850,17 +852,9 @@ async def build_personal_repo_context(
     user: User,
     repo,
     branch: str,
+    github_login_hint: str | None = None,
 ) -> dict:
-    github_login = None
-    if user.github_access_token:
-        try:
-            _, github_login = await resolve_github_identity(db, user)
-        except Exception as exc:
-            logging.warning(
-                "Failed to resolve GitHub identity for user %s: %s",
-                user.id,
-                exc,
-            )
+    github_login = github_login_hint
     return {
         "has_github_identity": bool(github_login),
         "github_login": github_login,
@@ -1346,7 +1340,19 @@ async def _background_analysis_task_async(
             if repo_analysis:
                 repo_analysis.analysis_status = "completed"
                 repo_analysis.analyzed_at = run.completed_at
-            db.commit()
+            if is_recruiter_scoring_mode:
+                try:
+                    generate_and_cache_recruiter_candidate_insight(
+                        db,
+                        run_id=run.id,
+                        recruiter_user_id=current_user_id,
+                    )
+                    logger.info("[run=%s] Warmed recruiter candidate insight cache", run_id)
+                except Exception:
+                    logger.exception("[run=%s] Recruiter candidate insight cache warm-up failed", run_id)
+                    db.commit()
+            else:
+                db.commit()
             logger.info("[run=%s] Background analysis completed successfully", run_id)
         else:
             logger.info(
@@ -1610,6 +1616,27 @@ async def _background_manager_team_analysis_task_async(
                     "[run=%s] Global manager team insight generation failed manager_user_id=%s",
                     run_id,
                     manager_user_id,
+                )
+
+            try:
+                overview_recommendations = warm_manager_dashboard_overview_recommendations(
+                    db,
+                    manager_user_id,
+                    repo_id,
+                )
+                if overview_recommendations is not None:
+                    logger.info(
+                        "[run=%s] Warmed manager overview recommendation cache manager_user_id=%s repo_id=%s",
+                        run_id,
+                        manager_user_id,
+                        repo_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "[run=%s] Manager overview recommendation cache warm-up failed manager_user_id=%s repo_id=%s",
+                    run_id,
+                    manager_user_id,
+                    repo_id,
                 )
         logger.info(
             "[run=%s] Manager team execution summary manager_user_id=%s requested=%d analyzed=%d failed=%d completed=%s failed_details=%s",

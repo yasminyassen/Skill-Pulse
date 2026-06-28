@@ -78,7 +78,6 @@ export default function ConnectedRepositories() {
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .repo-row { transition: background 0.15s; border-radius: 12px; }
         .repo-row:hover { background: var(--bg-card-hover); }
-        .view-btn:hover { background: rgba(99,102,241,0.15) !important; border-color: rgba(99,102,241,0.4) !important; color: #a5b4fc !important; }
         .disc-btn:hover { background: rgba(248,113,113,0.12) !important; border-color: rgba(248,113,113,0.3) !important; color: #f87171 !important; }
       `}</style>
 
@@ -107,7 +106,7 @@ export default function ConnectedRepositories() {
                   <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "8px" }}>
                     <Skeleton w="40%" h={14} /><Skeleton w="25%" h={11} />
                   </div>
-                  <Skeleton w={56} h={32} radius={8} /><Skeleton w={80} h={32} radius={8} />
+                  <Skeleton w={56} h={32} radius={8} />
                 </div>
               ))}
             </div>
@@ -146,10 +145,6 @@ export default function ConnectedRepositories() {
                     <span style={{ fontSize: "16px", fontWeight: 800, color: sColor }}>{Math.round(sc)}</span>
                   </div>
                 )}
-                <button className="view-btn" onClick={() => navigate(`/analysis/${repo.analysis_id}`)} style={{ padding: "7px 14px", borderRadius: "8px", flexShrink: 0, border: "1px solid rgba(99,102,241,0.25)", background: "rgba(99,102,241,0.08)", color: "#818cf8", fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "'Inter', sans-serif", transition: "all 0.15s", display: "flex", alignItems: "center", gap: "5px" }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                  View
-                </button>
                 <button className="disc-btn" onClick={() => handleDisconnect(repo.analysis_id, repo.repo_name)} disabled={isDisconnecting} title="Disconnect this analysis" style={{ padding: "7px 10px", borderRadius: "8px", flexShrink: 0, border: "1px solid var(--border)", background: "var(--bg-card)", color: "var(--text-muted)", fontSize: "12px", fontWeight: 600, cursor: isDisconnecting ? "not-allowed" : "pointer", fontFamily: "'Inter', sans-serif", transition: "all 0.15s", opacity: isDisconnecting ? 0.5 : 1, display: "flex", alignItems: "center", gap: "5px" }}>
                   {isDisconnecting ? (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>) : (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>)}
                 </button>

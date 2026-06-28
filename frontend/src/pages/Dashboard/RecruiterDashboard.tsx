@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
+import { playAnalysisCompleteSound, primeAnalysisCompleteSound } from "../../utils/analysisSound";
 
 type SonarState = "ready" | "sonar_unavailable" | "pending" | string;
 
@@ -94,6 +95,17 @@ const fmt = (value: number | string | null | undefined, suffix = "") => {
   if (value === null || value === undefined || value === "") return "Unavailable";
   if (typeof value === "number") return `${Number.isInteger(value) ? value : value.toFixed(1)}${suffix}`;
   return `${value}${suffix}`;
+};
+
+const skippedReasonLabel = (reason: string | null | undefined) => {
+  const normalized = String(reason || "").trim();
+  const labels: Record<string, string> = {
+    private_repository_not_supported: "Private repositories are not supported for recruiter analysis. Use public repositories only.",
+    github_repo_lookup_failed: "Could not find or access this repository. Confirm the URL is a public GitHub repository.",
+    branch_not_found: "The selected branch was not found in this repository.",
+    missing_candidate_name: "Candidate name is required.",
+  };
+  return labels[normalized] || normalized || "Skipped";
 };
 
 const scoreColor = (score: number | null | undefined) => {
@@ -299,11 +311,13 @@ export default function RecruiterDashboard() {
       return;
     }
 
+    let completedThisPoll = false;
     await Promise.all(pending.map(async (repo) => {
       try {
         const res = await api.get(`/analysis/${repo.analysis_run_id}`);
         const status = res.data.status || "running";
         if (status === "completed") {
+          completedThisPoll = true;
           updateRepo(repo, {
             analysis_status: "completed",
             status: "completed",
@@ -340,6 +354,7 @@ export default function RecruiterDashboard() {
         });
       }
     }));
+    if (completedThisPoll) playAnalysisCompleteSound();
   }, [isPendingRepo, updateRepo]);
 
   const startPolling = useCallback((force = false) => {
@@ -360,7 +375,7 @@ export default function RecruiterDashboard() {
     const needsAuth = isRecord(detail) && Boolean(detail.requires_github_auth);
     if (needsAuth) {
       setGithubAuthUrl(typeof detail.auth_url === "string" ? detail.auth_url : null);
-      setError("Connect GitHub to analyze candidate repositories.");
+      setError("Connect GitHub only if you need access to private repositories. Public repositories can be analyzed without connecting.");
     } else {
       setError(typeof detail === "string" ? detail : "Request failed. Please try again.");
     }
@@ -395,6 +410,7 @@ export default function RecruiterDashboard() {
 
   const handleConfirmAnalysis = async () => {
     if (previewRows.length === 0) { setError("Add at least one valid candidate row before starting analysis."); return; }
+    primeAnalysisCompleteSound();
     setError(null); setGithubAuthUrl(null); setLoading(true);
     setRepositories([]); setSkipped([]); setActiveStep(1); stopPolling();
     try {
@@ -637,7 +653,7 @@ export default function RecruiterDashboard() {
               )}
               {previewSkipped.length > 0 && (
                 <div style={{ marginBottom: 16, fontSize: 12, color: "rgba(248,113,113,0.85)", lineHeight: 1.6 }}>
-                  Skipped while reading file: {previewSkipped.map((item) => `${item.candidate_name || item.repo_name || `row ${item.row}`} (${item.reason})`).join("; ")}
+                  Skipped while reading file: {previewSkipped.map((item) => `${item.candidate_name || item.repo_name || `row ${item.row}`} (${skippedReasonLabel(item.reason)})`).join("; ")}
                 </div>
               )}
               <button onClick={handleConfirmAnalysis} disabled={previewRows.length === 0 || loading} className="rec-success-btn" style={{ opacity: previewRows.length === 0 || loading ? 0.6 : 1, cursor: previewRows.length === 0 || loading ? "not-allowed" : "pointer" }}>
@@ -675,7 +691,7 @@ export default function RecruiterDashboard() {
               {skipped.map((item, index) => (
                 <div key={`${item.candidate_name || item.repo_name}-${index}`} className="rec-row-card">
                   <div style={{ fontSize: 13, fontWeight: 800 }}>{item.candidate_name || item.repo_name || `Row ${item.row}`}</div>
-                  <div style={{ fontSize: 12, color: "rgba(248,113,113,0.9)", marginTop: 4 }}>{item.reason}</div>
+                  <div style={{ fontSize: 12, color: "rgba(248,113,113,0.9)", marginTop: 4 }}>{skippedReasonLabel(item.reason)}</div>
                 </div>
               ))}
             </>,

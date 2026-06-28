@@ -184,6 +184,43 @@ const emptyOverview: Overview = {
   },
 };
 
+const emptyRecommendations: Recommendations = {
+  fix_first: [],
+  prioritize_next: [],
+  plan_when_possible: [],
+  strengthen_further: [],
+  actionable_recommendations: [],
+  prioritized_team_next_moves: [],
+  team_improvement_guidance: [],
+  best_contributor_reasoning: null,
+  needs_support_reasoning: null,
+  architectural_concerns: [],
+  delivery_risks: [],
+  quality_concerns: [],
+  team_strengths: [],
+  recommended_priorities: [],
+};
+
+const withRecommendations = (overview: Overview, next: Recommendations): Overview => ({
+  ...overview,
+  recommendations: next,
+  team_performance: {
+    ...overview.team_performance,
+    best_contributor: overview.team_performance.best_contributor
+      ? {
+        ...overview.team_performance.best_contributor,
+        reasoning: next.best_contributor_reasoning || overview.team_performance.best_contributor.reasoning,
+      }
+      : overview.team_performance.best_contributor,
+    needs_support_contributor: overview.team_performance.needs_support_contributor
+      ? {
+        ...overview.team_performance.needs_support_contributor,
+        reasoning: next.needs_support_reasoning || overview.team_performance.needs_support_contributor.reasoning,
+      }
+      : overview.team_performance.needs_support_contributor,
+  },
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const accent = "#8b5cf6";
@@ -501,6 +538,38 @@ function RecommendationGroup({ title, items, tone, icon }: { title: string; item
   );
 }
 
+function RecommendationsSkeleton() {
+  return (
+    <>
+      <div className="m-rec-grid">
+        {[0, 1, 2, 3].map(item => (
+          <article className="m-rec m-rec-skeleton" key={item}>
+            <div className="m-rec-head">
+              <span className="m-rec-icon sk" />
+              <div className="sk" style={{ width: 140, height: 16 }} />
+            </div>
+            <div className="sk" style={{ height: 12, marginTop: 14 }} />
+            <div className="sk" style={{ height: 12, marginTop: 10, width: "82%" }} />
+            <div className="sk" style={{ height: 12, marginTop: 10, width: "64%" }} />
+          </article>
+        ))}
+      </div>
+      <div className="m-reason-grid">
+        {[0, 1, 2].map(item => (
+          <div className="m-reason-card" key={item}>
+            <div className="m-reason-head">
+              <span className="sk" style={{ width: 20, height: 20, borderRadius: 8 }} />
+              <div className="sk" style={{ width: 130, height: 14 }} />
+            </div>
+            <div className="sk" style={{ height: 11, marginTop: 12 }} />
+            <div className="sk" style={{ height: 11, marginTop: 9, width: "74%" }} />
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 // ─── Repo Dropdown ────────────────────────────────────────────────────────────
 
 function RepoDropdown({ repos, selectedRepoId, loading, onChange, dropdownRef }: {
@@ -588,28 +657,81 @@ export default function ManagerDashboard() {
   const [selectedRepoId, setSelectedRepoId] = useState("latest");
   const [trendGranularity, setTrendGranularity] = useState<"daily" | "monthly">("monthly");
   const [data, setData] = useState<Overview>(emptyOverview);
+  const [recommendations, setRecommendations] = useState<Recommendations>(emptyRecommendations);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [recommendationsError, setRecommendationsError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const overviewRequestRef = useRef(0);
+  const recommendationsRequestRef = useRef(0);
+  const recommendationsRef = useRef<Recommendations>(emptyRecommendations);
+
+  const dashboardParams = selectedRepoId === "latest"
+    ? { trend_granularity: trendGranularity }
+    : { repo_id: Number(selectedRepoId), trend_granularity: trendGranularity };
+
+  const recommendationParams = selectedRepoId === "latest"
+    ? {}
+    : { repo_id: Number(selectedRepoId) };
+
+  const applyRecommendationsToOverview = useCallback((next: Recommendations) => {
+    setData(current => withRecommendations(current, next));
+  }, []);
 
   const fetchOverview = useCallback(async () => {
+    const requestId = overviewRequestRef.current + 1;
+    overviewRequestRef.current = requestId;
     setLoading(true);
     setError("");
     try {
-      const params = selectedRepoId === "latest"
-        ? { trend_granularity: trendGranularity }
-        : { repo_id: Number(selectedRepoId), trend_granularity: trendGranularity };
-      const response = await api.get<Overview>("/manager/dashboard/overview", { params });
-      setData(response.data || emptyOverview);
+      const response = await api.get<Overview>("/manager/dashboard/overview", { params: dashboardParams });
+      if (overviewRequestRef.current !== requestId) return;
+      setData(withRecommendations(response.data || emptyOverview, recommendationsRef.current));
     } catch {
+      if (overviewRequestRef.current !== requestId) return;
       setError("Unable to load manager dashboard.");
     } finally {
-      setLoading(false);
+      if (overviewRequestRef.current === requestId) setLoading(false);
     }
   }, [selectedRepoId, trendGranularity]);
 
-  useEffect(() => { fetchOverview(); }, [fetchOverview]);
+  const fetchRecommendations = useCallback(async () => {
+    const requestId = recommendationsRequestRef.current + 1;
+    recommendationsRequestRef.current = requestId;
+    recommendationsRef.current = emptyRecommendations;
+    setRecommendations(emptyRecommendations);
+    setRecommendationsError("");
+    setRecommendationsLoading(true);
+    try {
+      const response = await api.get<Recommendations>("/manager/dashboard/overview/recommendations", {
+        params: recommendationParams,
+      });
+      if (recommendationsRequestRef.current !== requestId) return;
+      const next = response.data || emptyRecommendations;
+      recommendationsRef.current = next;
+      setRecommendations(next);
+      applyRecommendationsToOverview(next);
+    } catch {
+      if (recommendationsRequestRef.current !== requestId) return;
+      recommendationsRef.current = emptyRecommendations;
+      setRecommendations(emptyRecommendations);
+      setRecommendationsError("Unable to load AI recommendations.");
+    } finally {
+      if (recommendationsRequestRef.current === requestId) setRecommendationsLoading(false);
+    }
+  }, [selectedRepoId, applyRecommendationsToOverview]);
+
+  const refreshDashboard = useCallback(() => {
+    fetchOverview();
+    fetchRecommendations();
+  }, [fetchOverview, fetchRecommendations]);
+
+  useEffect(() => {
+    fetchOverview();
+    fetchRecommendations();
+  }, [fetchOverview, fetchRecommendations]);
 
   const metricsWithoutGate = data.repository_metrics.filter(m => m.key !== "quality_gate");
 
@@ -912,7 +1034,7 @@ export default function ManagerDashboard() {
                 onChange={setSelectedRepoId}
                 dropdownRef={dropdownRef}
               />
-              <button type="button" className="m-refresh-btn" onClick={fetchOverview} title="Refresh dashboard">
+              <button type="button" className="m-refresh-btn" onClick={refreshDashboard} title="Refresh dashboard">
                 <RefreshCcw size={17} />
               </button>
             </div>
@@ -1102,39 +1224,47 @@ export default function ManagerDashboard() {
                     <Sparkles size={14} style={{ color: accent }} />
                     <h2>Actionable Recommendations</h2>
                   </div>
-                  <div className="m-rec-grid">
-                    <RecommendationGroup title="Fix First" items={data.recommendations.fix_first} tone="fix" icon={<AlertCircle size={18} />} />
-                    <RecommendationGroup title="Prioritize Next" items={data.recommendations.prioritize_next} tone="next" icon={<TrendingUp size={18} />} />
-                    <RecommendationGroup title="Plan When Possible" items={data.recommendations.plan_when_possible} tone="plan" icon={<CheckCircle2 size={18} />} />
-                    <RecommendationGroup title="Strengthen Further" items={data.recommendations.strengthen_further} tone="strong" icon={<Award size={18} />} />
-                  </div>
-                  <div className="m-reason-grid">
-                    <div className="m-reason-card">
-                      <div className="m-reason-head"><Brain size={16} /><strong>Architectural Concerns</strong></div>
-                      {data.recommendations.architectural_concerns.map(item => <p key={item}>{item}</p>)}
-                      {!data.recommendations.architectural_concerns.length && <p className="m-empty">None identified.</p>}
-                    </div>
-                    <div className="m-reason-card">
-                      <div className="m-reason-head"><Activity size={16} /><strong>Delivery Risks</strong></div>
-                      {data.recommendations.delivery_risks.map(item => <p key={item}>{item}</p>)}
-                      {!data.recommendations.delivery_risks.length && <p className="m-empty">None identified.</p>}
-                    </div>
-                    <div className="m-reason-card">
-                      <div className="m-reason-head"><Layers size={16} /><strong>Quality Concerns</strong></div>
-                      {data.recommendations.quality_concerns.map(item => <p key={item}>{item}</p>)}
-                      {!data.recommendations.quality_concerns.length && <p className="m-empty">None identified.</p>}
-                    </div>
-                    <div className="m-reason-card">
-                      <div className="m-reason-head"><ShieldCheck size={16} /><strong>Team Strengths</strong></div>
-                      {data.recommendations.team_strengths.map(item => <p key={item}>{item}</p>)}
-                      {!data.recommendations.team_strengths.length && <p className="m-empty">None identified.</p>}
-                    </div>
-                    <div className="m-reason-card">
-                      <div className="m-reason-head"><CheckCircle2 size={16} /><strong>Recommended Priorities</strong></div>
-                      {data.recommendations.recommended_priorities.map(item => <p key={item}>{item}</p>)}
-                      {!data.recommendations.recommended_priorities.length && <p className="m-empty">None identified.</p>}
-                    </div>
-                  </div>
+                  {recommendationsLoading ? (
+                    <RecommendationsSkeleton />
+                  ) : recommendationsError ? (
+                    <div className="m-error">{recommendationsError}</div>
+                  ) : (
+                    <>
+                      <div className="m-rec-grid">
+                        <RecommendationGroup title="Fix First" items={recommendations.fix_first} tone="fix" icon={<AlertCircle size={18} />} />
+                        <RecommendationGroup title="Prioritize Next" items={recommendations.prioritize_next} tone="next" icon={<TrendingUp size={18} />} />
+                        <RecommendationGroup title="Plan When Possible" items={recommendations.plan_when_possible} tone="plan" icon={<CheckCircle2 size={18} />} />
+                        <RecommendationGroup title="Strengthen Further" items={recommendations.strengthen_further} tone="strong" icon={<Award size={18} />} />
+                      </div>
+                      <div className="m-reason-grid">
+                        <div className="m-reason-card">
+                          <div className="m-reason-head"><Brain size={16} /><strong>Architectural Concerns</strong></div>
+                          {recommendations.architectural_concerns.map(item => <p key={item}>{item}</p>)}
+                          {!recommendations.architectural_concerns.length && <p className="m-empty">None identified.</p>}
+                        </div>
+                        <div className="m-reason-card">
+                          <div className="m-reason-head"><Activity size={16} /><strong>Delivery Risks</strong></div>
+                          {recommendations.delivery_risks.map(item => <p key={item}>{item}</p>)}
+                          {!recommendations.delivery_risks.length && <p className="m-empty">None identified.</p>}
+                        </div>
+                        <div className="m-reason-card">
+                          <div className="m-reason-head"><Layers size={16} /><strong>Quality Concerns</strong></div>
+                          {recommendations.quality_concerns.map(item => <p key={item}>{item}</p>)}
+                          {!recommendations.quality_concerns.length && <p className="m-empty">None identified.</p>}
+                        </div>
+                        <div className="m-reason-card">
+                          <div className="m-reason-head"><ShieldCheck size={16} /><strong>Team Strengths</strong></div>
+                          {recommendations.team_strengths.map(item => <p key={item}>{item}</p>)}
+                          {!recommendations.team_strengths.length && <p className="m-empty">None identified.</p>}
+                        </div>
+                        <div className="m-reason-card">
+                          <div className="m-reason-head"><CheckCircle2 size={16} /><strong>Recommended Priorities</strong></div>
+                          {recommendations.recommended_priorities.map(item => <p key={item}>{item}</p>)}
+                          {!recommendations.recommended_priorities.length && <p className="m-empty">None identified.</p>}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </>

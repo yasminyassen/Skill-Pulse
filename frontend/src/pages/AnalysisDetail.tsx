@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/auth";
 import DashboardLayout from "./DashboardLayout";
+import { playAnalysisCompleteSound } from "../utils/analysisSound";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -366,7 +367,7 @@ export default function AnalysisDetail() {
         setResult(data);
         setPolling(data.status === "running" || data.status === "pending");
         setLoading(false);
-        if (data.status === "completed") { await fetchSonarDashboard(); await fetchInsight(); }
+        if (data.status === "completed") void Promise.all([fetchSonarDashboard(), fetchInsight()]);
       } catch (e: any) {
         if (e.response?.status === 401) { localStorage.clear(); window.location.href = "/login"; return; }
         setNotFound(true); setLoading(false);
@@ -383,7 +384,10 @@ export default function AnalysisDetail() {
         setResult(data);
         if (data.status === "completed" || data.status === "failed") {
           setPolling(false); window.clearInterval(iv);
-          if (data.status === "completed") { await fetchSonarDashboard(); await fetchInsight(); }
+          if (data.status === "completed") {
+            playAnalysisCompleteSound();
+            void Promise.all([fetchSonarDashboard(), fetchInsight()]);
+          }
         }
       } catch { window.clearInterval(iv); }
     }, 3000);

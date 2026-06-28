@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 
 const canonicalizeLoopbackUrl = (rawUrl?: string) => {
   if (!rawUrl) return "http://localhost:8000";
@@ -21,6 +21,96 @@ const api = axios.create({
   withCredentials: true, // ← sends HttpOnly cookies automatically on every request
 });
 
+const GET_DEDUPE_CACHE_MS = 900;
+const MAX_RECENT_GETS = 120;
+const inFlightGetRequests = new Map<string, Promise<AxiosResponse>>();
+const recentGetResponses = new Map<string, { expiresAt: number; response: AxiosResponse }>();
+
+const stableStringify = (value: unknown): string => {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, item]) => `${key}:${stableStringify(item)}`).join(",")}}`;
+};
+
+const getRequestCacheKey = (url: string, config?: AxiosRequestConfig) => {
+  const token = localStorage.getItem("token") || "";
+  const params = stableStringify(config?.params || {});
+  return `${token}|${config?.baseURL || API_BASE_URL}|${url}|${params}`;
+};
+
+const shouldDedupeGet = (config?: AxiosRequestConfig) => {
+  const custom = config as AxiosRequestConfig & { dedupe?: boolean; skipDedupe?: boolean };
+  return custom?.dedupe !== false && custom?.skipDedupe !== true;
+};
+
+const rememberRecentGet = (key: string, response: AxiosResponse) => {
+  recentGetResponses.set(key, {
+    expiresAt: Date.now() + GET_DEDUPE_CACHE_MS,
+    response,
+  });
+  if (recentGetResponses.size > MAX_RECENT_GETS) {
+    const oldestKey = recentGetResponses.keys().next().value;
+    if (oldestKey) recentGetResponses.delete(oldestKey);
+  }
+};
+
+const rawGet = api.get.bind(api);
+api.get = ((url: string, config?: AxiosRequestConfig) => {
+  if (!shouldDedupeGet(config)) return rawGet(url, config);
+
+  const key = getRequestCacheKey(url, config);
+  const cached = recentGetResponses.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return Promise.resolve(cached.response);
+  }
+  if (cached) recentGetResponses.delete(key);
+
+  const inFlight = inFlightGetRequests.get(key);
+  if (inFlight) return inFlight;
+
+  const request = rawGet(url, config)
+    .then((response) => {
+      rememberRecentGet(key, response);
+      return response;
+    })
+    .finally(() => {
+      inFlightGetRequests.delete(key);
+    });
+
+  inFlightGetRequests.set(key, request);
+  return request;
+}) as typeof api.get;
+
+export type CachedAuthUser = {
+  id?: number;
+  username?: string;
+  full_name?: string;
+  work_email?: string;
+  avatar_url?: string | null;
+  role?: string | null;
+  specialization?: string | null;
+};
+
+export const setCachedAuthUser = (user: CachedAuthUser) => {
+  localStorage.setItem("auth_user", JSON.stringify(user));
+  if (user.role) localStorage.setItem("role", user.role);
+  localStorage.setItem("full_name", user.full_name || user.username || "User");
+};
+
+export const getCachedAuthUser = (): CachedAuthUser | null => {
+  try {
+    const raw = localStorage.getItem("auth_user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    localStorage.removeItem("auth_user");
+    return null;
+  }
+};
+
 let refreshPromise: Promise<string> | null = null;
 let redirectingToLogin = false;
 
@@ -30,6 +120,7 @@ const clearSessionAndRedirectToLogin = () => {
   localStorage.removeItem("token");
   localStorage.removeItem("role");
   localStorage.removeItem("full_name");
+  localStorage.removeItem("auth_user");
   window.location.href = "/login?session=expired";
 };
 
@@ -132,6 +223,7 @@ export const logout = async () => {
     localStorage.removeItem("token");
     localStorage.removeItem("role");
     localStorage.removeItem("full_name");
+    localStorage.removeItem("auth_user");
     window.location.href = "/login";
   }
 };

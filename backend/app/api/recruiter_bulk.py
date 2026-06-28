@@ -8,7 +8,6 @@ from app.core.auth_utils import decrypt_github_token, require_role
 from app.core.rate_limiter import limiter
 from app.db.database import get_db
 from app.db.models import RecruiterTask, User
-from app.services.code_analysis_service import build_github_connect_payload
 from app.services.github_client import refresh_github_access_token_for_user
 from app.services.recruiter_analysis_service import schedule_recruiter_repo_analysis
 from app.services.recruiter_bulk_import import _parse_repo_url, parse_candidate_upload
@@ -81,17 +80,16 @@ class BulkConfirmRequest(BaseModel):
 
 
 async def _resolve_recruiter_token(
-    request: Request,
     db: Session,
     current_user: User,
-) -> str:
+) -> str | None:
     if not current_user.github_access_token:
-        raise HTTPException(
-            status_code=403,
-            detail=build_github_connect_payload(request, current_user),
-        )
+        return None
 
-    token = decrypt_github_token(current_user.github_access_token)
+    try:
+        token = decrypt_github_token(current_user.github_access_token)
+    except Exception:
+        return None
     if (
         current_user.github_token_expires_at
         and current_user.github_token_expires_at <= datetime.now(timezone.utc)
@@ -99,26 +97,22 @@ async def _resolve_recruiter_token(
         refreshed_token = await refresh_github_access_token_for_user(db, current_user)
         if refreshed_token:
             token = refreshed_token
+        else:
+            return None
 
-    if not token:
-        raise HTTPException(
-            status_code=403,
-            detail=build_github_connect_payload(request, current_user),
-        )
-    return token
+    return token or None
 
 
 async def _schedule_rows(
     *,
     rows: list[dict],
-    request: Request,
     background_tasks: BackgroundTasks,
     db: Session,
     current_user: User,
     force_reanalyze: bool,
     task_id: int | None = None,
 ) -> BulkAnalyzeResponse:
-    token = await _resolve_recruiter_token(request, db, current_user)
+    token = await _resolve_recruiter_token(db, current_user)
     repositories: list[BulkRepository] = []
     skipped: list[dict] = []
 
@@ -272,7 +266,6 @@ async def bulk_analyze_confirm(
 
     result = await _schedule_rows(
         rows=rows,
-        request=request,
         background_tasks=background_tasks,
         db=db,
         current_user=current_user,
