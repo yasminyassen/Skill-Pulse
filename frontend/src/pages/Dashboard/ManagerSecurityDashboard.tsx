@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  AlertTriangle, CheckCircle2, Info, KeyRound, Lightbulb, Lock,
+  AlertTriangle, CheckCircle2, ChevronDown, Info, KeyRound, Lightbulb, Lock,
   RefreshCcw, Shield, ShieldAlert, Target, Users, type LucideIcon,
 } from "lucide-react";
 import api from "../../api/auth";
@@ -35,10 +35,19 @@ const severityMeta: Record<string, { color: string; bg: string; label: string }>
   Medium: { color: "#f97316", bg: "rgba(249,115,22,0.13)", label: "Medium" },
   Low: { color: "#eab308", bg: "rgba(234,179,8,0.14)", label: "Low" },
 };
+type SeverityName = "High" | "Medium" | "Low";
+const severityOrder: SeverityName[] = ["High", "Medium", "Low"];
 const scoreColor = (score: number) => score >= 85 ? "#22c55e" : score >= 70 ? "#f59e0b" : "#f97316";
 const fmt = (value: number | null | undefined, digits = 0) => { const n = Number(value ?? 0); return Number.isFinite(n) ? n.toFixed(digits) : "0"; };
 const initials = (name: string) => name.split(" ").filter(Boolean).slice(0, 2).map(p => p[0]).join("").toUpperCase() || "SP";
 const titleForRepo = (repo?: SecurityRepo | null) => repo?.name || repo?.full_name || "Repository";
+const normalizeSeverity = (severity?: string | null): SeverityName => {
+  const value = (severity || "").toLowerCase();
+  if (value.includes("high") || value.includes("critical")) return "High";
+  if (value.includes("low")) return "Low";
+  return "Medium";
+};
+const contributorGroupKey = (group: ContributorIssueGroup) => String(group.contributor_id ?? group.username ?? group.contributor_name);
 
 function Panel({ title, icon: Icon, children, className = "" }: { title: string; icon?: LucideIcon; children: ReactNode; className?: string }) {
   return (
@@ -122,16 +131,73 @@ function MemberSecurityRow({ member }: { member: SecurityMember }) {
 }
 
 function VulnerabilityRow({ item }: { item: Vulnerability }) {
-  const meta = severityMeta[item.severity] || severityMeta.Medium;
+  const severity = normalizeSeverity(item.severity);
+  const meta = severityMeta[severity];
   return (
     <article className="ms-vuln-row">
       <span className="ms-issue-icon" style={{ color: meta.color, background: meta.bg }}><AlertTriangle size={18} /></span>
       <div>
-        <div className="ms-vuln-title"><strong>{item.title}</strong><span className="ms-pill" style={{ color: meta.color, background: meta.bg }}>{item.severity}</span></div>
+        <div className="ms-vuln-title"><strong>{item.title}</strong><span className="ms-pill" style={{ color: meta.color, background: meta.bg }}>{severity}</span></div>
         <p>{item.description || "Security finding detected by static analysis."}</p>
         {(item.file_path || item.contributor_name) && <small>{item.file_path}{item.line_number ? `:${item.line_number}` : ""}{item.contributor_name ? ` • Attributed to ${item.contributor_name}` : ""}</small>}
       </div>
     </article>
+  );
+}
+
+function VulnerabilitySeverityAccordion({
+  items,
+  openSeverity,
+  onToggle,
+}: {
+  items: Vulnerability[];
+  openSeverity: SeverityName | null;
+  onToggle: (severity: SeverityName) => void;
+}) {
+  const grouped = useMemo(() => severityOrder.reduce<Record<SeverityName, Vulnerability[]>>((acc, severity) => {
+    acc[severity] = items.filter(item => normalizeSeverity(item.severity) === severity);
+    return acc;
+  }, { High: [], Medium: [], Low: [] }), [items]);
+
+  if (!items.length) return <p className="ms-empty">No vulnerabilities detected in this repository.</p>;
+
+  return (
+    <div className="ms-accordion-stack">
+      {severityOrder.map(severity => {
+        const meta = severityMeta[severity];
+        const vulnerabilities = grouped[severity];
+        const isOpen = openSeverity === severity;
+        return (
+          <article className="ms-accordion-card" key={severity}>
+            <button
+              type="button"
+              className="ms-accordion-trigger"
+              onClick={() => onToggle(severity)}
+              aria-expanded={isOpen}
+            >
+              <span className="ms-accordion-main">
+                <span className="ms-issue-icon compact" style={{ color: meta.color, background: meta.bg }}><AlertTriangle size={16} /></span>
+                <span>
+                  <strong>{severity} Risk Findings</strong>
+                  <small>{vulnerabilities.length} finding{vulnerabilities.length === 1 ? "" : "s"}</small>
+                </span>
+              </span>
+              <span className="ms-accordion-side">
+                <span className="ms-pill" style={{ color: meta.color, background: meta.bg }}>{vulnerabilities.length}</span>
+                <ChevronDown className={isOpen ? "open" : ""} size={18} />
+              </span>
+            </button>
+            {isOpen && (
+              <div className="ms-accordion-body">
+                {vulnerabilities.length
+                  ? vulnerabilities.map(item => <VulnerabilityRow key={item.id} item={item} />)
+                  : <p className="ms-empty">No {severity.toLowerCase()} risk findings in this repository.</p>}
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
@@ -153,6 +219,62 @@ function ContributorCard({ contributor }: { contributor: ContributorImpact }) {
         {!contributor.issue_count && !contributor.issues_fixed && !contributor.issues_introduced && <span>No active or changed issues</span>}
       </div>
     </article>
+  );
+}
+
+function ContributorIssuesAccordion({
+  groups,
+  openContributorKey,
+  onToggle,
+}: {
+  groups: ContributorIssueGroup[];
+  openContributorKey: string | null;
+  onToggle: (key: string) => void;
+}) {
+  if (!groups.length) return <p className="ms-empty">No attributed vulnerabilities for this repository.</p>;
+
+  return (
+    <div className="ms-accordion-stack">
+      {groups.map(group => {
+        const key = contributorGroupKey(group);
+        const isOpen = openContributorKey === key;
+        const total = group.high + group.medium + group.low;
+        return (
+          <article className="ms-accordion-card" key={key}>
+            <button
+              type="button"
+              className="ms-accordion-trigger"
+              onClick={() => onToggle(key)}
+              aria-expanded={isOpen}
+            >
+              <span className="ms-accordion-main">
+                <span className="ms-avatar compact">{initials(group.contributor_name || "SP")}</span>
+                <span>
+                  <strong>{group.contributor_name || "Unattributed"}</strong>
+                  <small>{group.username ? `@${group.username}` : `${total} active issue${total === 1 ? "" : "s"}`}</small>
+                </span>
+              </span>
+              <span className="ms-accordion-side wide">
+                <span className="ms-contributor-issue-counts">
+                  {!!group.high && <span className="ms-high">{group.high} high</span>}
+                  {!!group.medium && <span className="ms-med">{group.medium} medium</span>}
+                  {!!group.low && <span className="ms-low">{group.low} low</span>}
+                  {!total && <span>No active issues</span>}
+                </span>
+                <ChevronDown className={isOpen ? "open" : ""} size={18} />
+              </span>
+            </button>
+            {isOpen && (
+              <div className="ms-accordion-body">
+                {group.issues.length
+                  ? group.issues.map(issue => <VulnerabilityRow key={issue.id} item={issue} />)
+                  : <p className="ms-empty">No attributed vulnerabilities for this contributor.</p>}
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
@@ -220,6 +342,8 @@ export default function ManagerSecurityDashboard() {
   const [teamData, setTeamData] = useState<TeamSecurityOverview>(emptyTeam);
   const [repositoryRiskData, setRepositoryRiskData] = useState<RepositoryRiskResponse>(emptyRepositoryRisk);
   const [repoData, setRepoData] = useState<RepositorySecurityDetail | null>(null);
+  const [openFindingSeverity, setOpenFindingSeverity] = useState<SeverityName | null>(null);
+  const [openContributorKey, setOpenContributorKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const selectedRepo = useMemo(() => repos.find(repo => String(repo.id) === selectedRepoId) || null, [repos, selectedRepoId]);
@@ -228,8 +352,8 @@ export default function ManagerSecurityDashboard() {
   const fetchDashboard = async () => {
     setLoading(true); setError("");
     try {
-      if (selectedRepoId === "all") { const response = await api.get<TeamSecurityOverview>("/manager/security/team"); setTeamData(response.data || emptyTeam); setRepoData(null); }
-      else { const response = await api.get<RepositorySecurityDetail>(`/manager/security/repositories/${selectedRepoId}`); setRepoData(response.data); }
+      if (selectedRepoId === "all") { const response = await api.get<TeamSecurityOverview>("/manager/security/team"); setTeamData(response.data || emptyTeam); setRepoData(null); setOpenFindingSeverity(null); setOpenContributorKey(null); }
+      else { const response = await api.get<RepositorySecurityDetail>(`/manager/security/repositories/${selectedRepoId}`); setRepoData(response.data); setOpenFindingSeverity(null); setOpenContributorKey(null); }
     } catch (err) { console.error(err); setError("Unable to load manager security dashboard."); }
     finally { setLoading(false); }
   };
@@ -298,7 +422,11 @@ export default function ManagerSecurityDashboard() {
               </Panel>
               <section className="ms-callout blue"><Target size={24} /><div><h2>Release Readiness Assessment</h2><p>{repoData.release_readiness}</p></div></section>
               <Panel title="Detected Vulnerabilities">
-                <div className="ms-list">{repoData.detected_vulnerabilities.length ? repoData.detected_vulnerabilities.map(item => <VulnerabilityRow key={item.id} item={item} />) : <p className="ms-empty">No vulnerabilities detected in this repository.</p>}</div>
+                <VulnerabilitySeverityAccordion
+                  items={repoData.detected_vulnerabilities}
+                  openSeverity={openFindingSeverity}
+                  onToggle={severity => setOpenFindingSeverity(current => current === severity ? null : severity)}
+                />
               </Panel>
               <section className="ms-callout blue"><Lightbulb size={24} /><div><h2>Recommended Actions</h2>{repoData.recommended_actions.map(action => <p key={action}><CheckCircle2 size={15} /> {action}</p>)}</div></section>
               <Panel title="Security Contribution by Member (This Repository)" icon={Users}>
@@ -307,24 +435,11 @@ export default function ManagerSecurityDashboard() {
               </Panel>
               <Panel title="Security Issues by Contributor">
                 <p className="ms-subtle">Vulnerabilities grouped by attributed SkillPulse contributor using analysis-time file and line attribution.</p>
-                {repoData.issues_by_contributor.length ? repoData.issues_by_contributor.map(group => (
-                  <div className="ms-group" key={group.contributor_id ?? group.contributor_name}>
-                    <div className="ms-contributor-issue-head">
-                      <div>
-                        <strong>{group.contributor_name || "Unattributed"}</strong>
-                        {group.username && <small>@{group.username}</small>}
-                      </div>
-                      <div className="ms-contributor-issue-counts">
-                        {!!group.high && <span className="ms-high">{group.high} high</span>}
-                        {!!group.medium && <span className="ms-med">{group.medium} medium</span>}
-                        {!!group.low && <span className="ms-low">{group.low} low</span>}
-                      </div>
-                    </div>
-                    {group.issues.length
-                      ? group.issues.map(issue => <VulnerabilityRow key={issue.id} item={issue} />)
-                      : <p className="ms-empty">No attributed vulnerabilities for this contributor.</p>}
-                  </div>
-                )) : <p className="ms-empty">No attributed vulnerabilities for this repository.</p>}
+                <ContributorIssuesAccordion
+                  groups={repoData.issues_by_contributor}
+                  openContributorKey={openContributorKey}
+                  onToggle={key => setOpenContributorKey(current => current === key ? null : key)}
+                />
               </Panel>
             </>
           ) : null}
@@ -439,6 +554,29 @@ export default function ManagerSecurityDashboard() {
         .ms-vuln-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .ms-pill, .ms-impact { border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 800; white-space: nowrap; }
 
+        /* ─── Accordions ─── */
+        .ms-accordion-stack { display: grid; gap: 10px; margin-top: 14px; }
+        .ms-panel-title + .ms-accordion-stack { margin-top: 0; }
+        .ms-accordion-card { border: 1px solid var(--border); border-radius: 14px; background: var(--bg-card-hover); overflow: hidden; }
+        .ms-accordion-trigger {
+          width: 100%; border: 0; background: transparent; color: var(--text-primary);
+          display: flex; align-items: center; justify-content: space-between; gap: 14px;
+          padding: 14px; font: inherit; cursor: pointer; text-align: left;
+          transition: background 0.16s ease, color 0.16s ease;
+        }
+        .ms-accordion-trigger:hover { background: rgba(139,92,246,0.08); }
+        .ms-accordion-trigger:focus-visible { outline: 2px solid rgba(139,92,246,0.45); outline-offset: -2px; }
+        .ms-accordion-main { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
+        .ms-accordion-main strong { display: block; color: var(--text-primary); font-size: 13.5px; }
+        .ms-accordion-main small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 12px; }
+        .ms-accordion-side { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; color: var(--text-secondary); flex: 0 0 auto; }
+        .ms-accordion-side.wide { min-width: 260px; }
+        .ms-accordion-side svg { transition: transform 0.18s ease; }
+        .ms-accordion-side svg.open { transform: rotate(180deg); }
+        .ms-accordion-body { display: grid; gap: 10px; padding: 0 14px 14px; }
+        .ms-accordion-body .ms-vuln-row { background: var(--bg-card); }
+        .ms-issue-icon.compact, .ms-avatar.compact { width: 32px; height: 32px; border-radius: 9px; font-size: 11px; flex: 0 0 auto; }
+
         /* ─── Callouts ─── */
         .ms-callout { display: flex; gap: 16px; padding: 24px 28px; margin-bottom: 18px; }
         .ms-callout.blue { border-color: rgba(139,92,246,0.28); background: linear-gradient(135deg, rgba(139,92,246,0.08), rgba(236,72,153,0.04)); color: #8b5cf6; }
@@ -506,6 +644,9 @@ export default function ManagerSecurityDashboard() {
           .ms-repo-risk-scores { grid-template-columns: auto auto; justify-content: space-between; text-align: left; }
           .ms-issue-row { grid-template-columns: auto 1fr; }
           .ms-issue-row > b, .ms-issue-row > .ms-pill { justify-self: start; }
+          .ms-accordion-trigger { align-items: flex-start; }
+          .ms-accordion-side.wide { min-width: 0; }
+          .ms-contributor-issue-counts { justify-content: flex-start; }
         }
       `}</style>
     </DashboardLayout>
