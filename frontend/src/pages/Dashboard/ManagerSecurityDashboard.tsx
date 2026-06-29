@@ -17,7 +17,15 @@ interface RepositoryRiskResponse { period: string | null; label: string | null; 
 interface RepositorySummary { id: number; name: string | null; full_name: string | null; security_score: number; total_issues: number; high: number; medium: number; low: number; }
 interface Vulnerability { id: number; title: string; severity: string; description: string | null; file_path: string | null; line_number: number | null; cwe: string | null; owasp_category: string | null; contributor_id: number | null; contributor_name: string | null; }
 interface ContributorImpact { id: number; full_name: string; username: string; avatar_url: string | null; specialization: string | null; security_score: number; issue_count: number; issues_fixed: number; issues_introduced: number; high: number; medium: number; low: number; net_impact: string; }
-interface ContributorIssueGroup { severity: string; issues: Vulnerability[]; }
+interface ContributorIssueGroup {
+  contributor_id: number | null;
+  contributor_name: string;
+  username: string | null;
+  high: number;
+  medium: number;
+  low: number;
+  issues: Vulnerability[];
+}
 interface RepositorySecurityDetail { repository: RepositorySummary; release_readiness: string; detected_vulnerabilities: Vulnerability[]; recommended_actions: string[]; contributor_impacts: ContributorImpact[]; issues_by_contributor: ContributorIssueGroup[]; }
 
 const emptyTeam: TeamSecurityOverview = { overall_score: 0, repository_count: 0, total_issues: 0, team_members: 0, risk_breakdown: { high: 0, medium: 0, low: 0, total: 0 }, trend: [], common_issues: [], systemic_risk_analysis: "", why_this_matters: [], members: [] };
@@ -121,7 +129,7 @@ function VulnerabilityRow({ item }: { item: Vulnerability }) {
       <div>
         <div className="ms-vuln-title"><strong>{item.title}</strong><span className="ms-pill" style={{ color: meta.color, background: meta.bg }}>{item.severity}</span></div>
         <p>{item.description || "Security finding detected by static analysis."}</p>
-        {(item.file_path || item.contributor_name) && <small>{item.file_path}{item.line_number ? `:${item.line_number}` : ""}{item.contributor_name ? ` • Last attributed to ${item.contributor_name}` : ""}</small>}
+        {(item.file_path || item.contributor_name) && <small>{item.file_path}{item.line_number ? `:${item.line_number}` : ""}{item.contributor_name ? ` • Attributed to ${item.contributor_name}` : ""}</small>}
       </div>
     </article>
   );
@@ -298,11 +306,23 @@ export default function ManagerSecurityDashboard() {
                 <div className="ms-contributor-grid">{repoData.contributor_impacts.map(item => <ContributorCard key={item.id} contributor={item} />)}</div>
               </Panel>
               <Panel title="Security Issues by Contributor">
-                <p className="ms-subtle">Vulnerabilities grouped by severity and attributed to contributors using analysis-time file ownership.</p>
+                <p className="ms-subtle">Vulnerabilities grouped by attributed SkillPulse contributor using analysis-time file and line attribution.</p>
                 {repoData.issues_by_contributor.length ? repoData.issues_by_contributor.map(group => (
-                  <div className="ms-group" key={group.severity}>
-                    <span className="ms-pill" style={{ color: severityMeta[group.severity]?.color, background: severityMeta[group.severity]?.bg }}>{group.severity} Risk</span>
-                    {group.issues.map(issue => <VulnerabilityRow key={issue.id} item={issue} />)}
+                  <div className="ms-group" key={group.contributor_id ?? group.contributor_name}>
+                    <div className="ms-contributor-issue-head">
+                      <div>
+                        <strong>{group.contributor_name || "Unattributed"}</strong>
+                        {group.username && <small>@{group.username}</small>}
+                      </div>
+                      <div className="ms-contributor-issue-counts">
+                        {!!group.high && <span className="ms-high">{group.high} high</span>}
+                        {!!group.medium && <span className="ms-med">{group.medium} medium</span>}
+                        {!!group.low && <span className="ms-low">{group.low} low</span>}
+                      </div>
+                    </div>
+                    {group.issues.length
+                      ? group.issues.map(issue => <VulnerabilityRow key={issue.id} item={issue} />)
+                      : <p className="ms-empty">No attributed vulnerabilities for this contributor.</p>}
                   </div>
                 )) : <p className="ms-empty">No attributed vulnerabilities for this repository.</p>}
               </Panel>
@@ -445,6 +465,10 @@ export default function ManagerSecurityDashboard() {
         .ms-contributor-stats span { display: flex; align-items: center; gap: 6px; }
         .ms-contributor-stats b { margin-left: auto; color: var(--text-primary); }
         .ms-group { display: grid; gap: 10px; margin-top: 18px; }
+        .ms-contributor-issue-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,0.035); }
+        .ms-contributor-issue-head strong { display: block; color: var(--text-primary); font-size: 14px; }
+        .ms-contributor-issue-head small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 12px; }
+        .ms-contributor-issue-counts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; font-size: 12px; font-weight: 800; }
 
         /* ─── Repo risk chart ─── */
         .ms-repo-risk-chart { display: grid; gap: 14px; }

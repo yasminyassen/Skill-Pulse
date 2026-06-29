@@ -121,7 +121,12 @@ class ContributorSecurityImpact(BaseModel):
 
 
 class ContributorIssueGroup(BaseModel):
-    severity: str
+    contributor_id: int | None = None
+    contributor_name: str = "Unattributed"
+    username: str | None = None
+    high: int = 0
+    medium: int = 0
+    low: int = 0
     issues: list[DetectedVulnerability] = Field(default_factory=list)
 
 

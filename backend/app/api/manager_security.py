@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth_utils import require_role
 from app.db.database import get_db
-from app.db.models import AnalysisRun, Repository, SecurityFinding, SkillScore, User, UserRole
+from app.db.models import AnalysisRun, ContributorAnalysisSummary, Repository, SecurityFinding, SkillScore, User, UserRole
 from app.schemas.manager_security_schemas import (
     CommonSecurityIssue,
     ContributorIssueGroup,
@@ -391,8 +391,17 @@ def _member_scores(db: Session, run_ids: list[int]) -> list[SecurityMemberScore]
     return sorted(result, key=lambda item: item.security_score)
 
 
-def _vulnerability_item(finding: SecurityFinding, users_by_id: dict[int, User]) -> DetectedVulnerability:
-    contributor = users_by_id.get(finding.user_id) if finding.user_id is not None else None
+def _vulnerability_item(
+    finding: SecurityFinding,
+    users_by_id: dict[int, User],
+    *,
+    include_contributor: bool = True,
+) -> DetectedVulnerability:
+    contributor = (
+        users_by_id.get(finding.user_id)
+        if include_contributor and finding.user_id is not None
+        else None
+    )
     return DetectedVulnerability(
         id=finding.id,
         title=_issue_title(finding),
@@ -404,6 +413,97 @@ def _vulnerability_item(finding: SecurityFinding, users_by_id: dict[int, User]) 
         owasp_category=finding.owasp_category,
         contributor_id=contributor.id if contributor else None,
         contributor_name=contributor.full_name if contributor else None,
+    )
+
+
+def _users_by_id_for_findings(db: Session, findings: list[SecurityFinding], fallback_run_id: int | None = None) -> dict[int, User]:
+    user_ids = {finding.user_id for finding in findings if finding.user_id is not None}
+    if fallback_run_id is not None:
+        user_ids.update(
+            user_id
+            for (user_id,) in (
+                db.query(ContributorAnalysisSummary.user_id)
+                .filter(ContributorAnalysisSummary.analysis_run_id == fallback_run_id)
+                .all()
+            )
+            if user_id is not None
+        )
+        user_ids.update(
+            user_id
+            for (user_id,) in (
+                db.query(SkillScore.user_id)
+                .filter(SkillScore.analysis_run_id == fallback_run_id)
+                .all()
+            )
+            if user_id is not None
+        )
+    if not user_ids:
+        return {}
+    return {
+        user.id: user
+        for user in db.query(User).filter(User.id.in_(user_ids)).all()
+    }
+
+
+def _contributors_for_team_run(db: Session, run_id: int) -> list[User]:
+    rows = (
+        db.query(User)
+        .join(ContributorAnalysisSummary, ContributorAnalysisSummary.user_id == User.id)
+        .filter(
+            ContributorAnalysisSummary.analysis_run_id == run_id,
+            User.role == UserRole.developer,
+        )
+        .order_by(User.full_name.asc(), User.username.asc())
+        .all()
+    )
+    if rows:
+        return rows
+    return (
+        db.query(User)
+        .join(SkillScore, SkillScore.user_id == User.id)
+        .filter(SkillScore.analysis_run_id == run_id, User.role == UserRole.developer)
+        .order_by(User.full_name.asc(), User.username.asc())
+        .all()
+    )
+
+
+def _issues_grouped_by_contributor(
+    findings: list[SecurityFinding],
+    users_by_id: dict[int, User],
+    contributors: list[User] | None = None,
+) -> list[ContributorIssueGroup]:
+    grouped: dict[int | None, list[SecurityFinding]] = defaultdict(list)
+    for contributor in contributors or []:
+        grouped[contributor.id]
+    for finding in findings:
+        grouped[finding.user_id].append(finding)
+
+    result: list[ContributorIssueGroup] = []
+    for user_id, rows in grouped.items():
+        user = users_by_id.get(user_id) if user_id is not None else None
+        deduped_rows = _dedupe_findings(rows)
+        vulnerabilities = sorted(
+            [_vulnerability_item(finding, users_by_id) for finding in deduped_rows],
+            key=lambda item: SEVERITY_ORDER.get(item.severity.upper(), 0),
+            reverse=True,
+        )
+        breakdown = _risk_breakdown(deduped_rows)
+        result.append(
+            ContributorIssueGroup(
+                contributor_id=user.id if user else None,
+                contributor_name=user.full_name if user else "Unattributed",
+                username=user.username if user else None,
+                high=breakdown.high,
+                medium=breakdown.medium,
+                low=breakdown.low,
+                issues=vulnerabilities,
+            )
+        )
+
+    return sorted(
+        result,
+        key=lambda item: (item.high, item.medium, item.low, len(item.issues), item.contributor_name),
+        reverse=True,
     )
 
 
@@ -446,12 +546,37 @@ def _contributor_impacts(
     findings: list[SecurityFinding],
     previous_findings: list[SecurityFinding],
 ) -> list[ContributorSecurityImpact]:
-    rows = (
-        db.query(SkillScore, User)
-        .join(User, SkillScore.user_id == User.id)
-        .filter(SkillScore.analysis_run_id == run_id, User.role == UserRole.developer)
+    summary_rows = (
+        db.query(ContributorAnalysisSummary, User)
+        .join(User, ContributorAnalysisSummary.user_id == User.id)
+        .filter(
+            ContributorAnalysisSummary.analysis_run_id == run_id,
+            User.role == UserRole.developer,
+        )
         .all()
     )
+    score_rows = (
+        db.query(SkillScore.user_id, SkillScore.security_awareness_score)
+        .filter(SkillScore.analysis_run_id == run_id)
+        .all()
+    )
+    score_by_user = {
+        user_id: security_awareness_score
+        for user_id, security_awareness_score in score_rows
+        if user_id is not None
+    }
+    if summary_rows:
+        rows = [
+            (summary.security_score, user)
+            for summary, user in summary_rows
+        ]
+    else:
+        rows = (
+            db.query(SkillScore.security_awareness_score, User)
+            .join(User, SkillScore.user_id == User.id)
+            .filter(SkillScore.analysis_run_id == run_id, User.role == UserRole.developer)
+            .all()
+        )
     findings_by_user: dict[int, list[SecurityFinding]] = defaultdict(list)
     for finding in findings:
         if finding.user_id is not None:
@@ -459,11 +584,15 @@ def _contributor_impacts(
 
     deltas = _user_issue_delta(findings, previous_findings)
     result: list[ContributorSecurityImpact] = []
-    for score, user in rows:
+    for score_value_raw, user in rows:
         breakdown = _risk_breakdown(_dedupe_findings(findings_by_user.get(user.id, [])))
         delta = deltas.get(user.id, {})
         issue_count = breakdown.total
-        score_value = _round_score(score.security_awareness_score or 0.0)
+        score_value = _round_score(
+            score_value_raw
+            if score_value_raw is not None
+            else score_by_user.get(user.id, 0.0)
+        )
         introduced = int(delta.get("introduced", 0))
         fixed = int(delta.get("fixed", 0))
         if breakdown.high or introduced > fixed:
@@ -625,25 +754,23 @@ def get_repository_security_detail(
         else None
     )
     previous_team_findings = _dedupe_findings(_findings_for_runs(db, [previous_team_run.id])) if previous_team_run else []
-    users_by_id = {
-        user.id: user
-        for user in (
-            db.query(User)
-            .join(SkillScore, SkillScore.user_id == User.id)
-            .filter(SkillScore.analysis_run_id == (team_run.id if team_run else run.id))
-            .all()
-        )
-    }
+    team_contributors = _contributors_for_team_run(db, team_run.id) if team_run else []
+    users_by_id = _users_by_id_for_findings(
+        db,
+        [*findings, *team_findings],
+        fallback_run_id=team_run.id if team_run else run.id,
+    )
+    users_by_id.update({contributor.id: contributor for contributor in team_contributors})
     vulnerabilities = sorted(
-        [_vulnerability_item(finding, users_by_id) for finding in findings],
+        [_vulnerability_item(finding, users_by_id, include_contributor=False) for finding in findings],
         key=lambda item: SEVERITY_ORDER.get(item.severity.upper(), 0),
         reverse=True,
     )
-    grouped_by_severity: list[ContributorIssueGroup] = []
-    for severity in ("High", "Medium", "Low"):
-        issues = [item for item in vulnerabilities if item.severity == severity]
-        if issues:
-            grouped_by_severity.append(ContributorIssueGroup(severity=severity, issues=issues))
+    grouped_by_contributor = (
+        _issues_grouped_by_contributor(team_findings, users_by_id, team_contributors)
+        if team_run
+        else []
+    )
 
     common = _common_issues(findings, {run.id: run.repository_id})
 
@@ -659,12 +786,12 @@ def get_repository_security_detail(
             low=breakdown.low,
         ),
         release_readiness=_release_readiness(run.repository.name, breakdown),
-        detected_vulnerabilities=vulnerabilities[:10],
+        detected_vulnerabilities=vulnerabilities,
         recommended_actions=_recommended_actions(breakdown, common),
         contributor_impacts=(
             _contributor_impacts(db, team_run.id, team_findings, previous_team_findings)
             if team_run
             else []
         ),
-        issues_by_contributor=grouped_by_severity,
+        issues_by_contributor=grouped_by_contributor,
     )
