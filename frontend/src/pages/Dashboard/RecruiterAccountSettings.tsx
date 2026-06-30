@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, KeyRound, LockKeyhole, Save, Trash2, X } from "lucide-react";
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
+import { ConfirmDialog } from "../../components/ui/ThemedDialog";
 
 const accent = "#a855f7";
 
@@ -61,6 +62,7 @@ export default function RecruiterAccountSettings() {
   const [codeSent, setCodeSent] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   const hasPassword = Boolean(profile?.has_password);
@@ -195,7 +197,10 @@ export default function RecruiterAccountSettings() {
 
   const deleteAccount = async (event: FormEvent) => {
     event.preventDefault();
-    if (!window.confirm("Delete this recruiter account permanently?")) return;
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDeleteAccount = async () => {
     setSaving(true);
     try {
       await api.post("/recruiter/profile/delete-account", deleteForm);
@@ -203,6 +208,7 @@ export default function RecruiterAccountSettings() {
       window.location.href = "/login?account=deleted";
     } catch {
       showToast("Account deletion failed", false);
+      setDeleteConfirmOpen(false);
     } finally {
       setSaving(false);
     }
@@ -454,6 +460,18 @@ export default function RecruiterAccountSettings() {
           {toast.msg}
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="Delete recruiter account?"
+        description="This permanently removes your recruiter profile, candidate analysis data, saved insights, and account settings. This action cannot be undone."
+        accent={accent}
+        tone="danger"
+        confirmLabel="Delete Account"
+        loading={saving}
+        onCancel={() => setDeleteConfirmOpen(false)}
+        onConfirm={confirmDeleteAccount}
+      />
 
       <main className="ras-page">
         <div className="ras-shell">
