@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, KeyRound, LockKeyhole, Save, Trash2, X } from "lucide-react";
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
+import { ConfirmDialog } from "../../components/ui/ThemedDialog";
 
 const accent = "#6366f1";
 
@@ -60,6 +61,7 @@ export default function AccountSettings() {
   const [codeSent, setCodeSent] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   const hasPassword = Boolean(profile?.has_password);
@@ -192,7 +194,10 @@ export default function AccountSettings() {
 
   const deleteAccount = async (event: FormEvent) => {
     event.preventDefault();
-    if (!window.confirm("Delete this developer account permanently?")) return;
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDeleteAccount = async () => {
     setSaving(true);
     try {
       await api.post("/profile/delete-account", deleteForm);
@@ -200,6 +205,7 @@ export default function AccountSettings() {
       window.location.href = "/login?account=deleted";
     } catch {
       showToast("Account deletion failed", false);
+      setDeleteConfirmOpen(false);
     } finally {
       setSaving(false);
     }
@@ -451,6 +457,18 @@ export default function AccountSettings() {
           {toast.msg}
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="Delete developer account?"
+        description="This permanently removes your developer profile, repository history, scores, uploaded requirements, and profile data. This action cannot be undone."
+        accent={accent}
+        tone="danger"
+        confirmLabel="Delete Account"
+        loading={saving}
+        onCancel={() => setDeleteConfirmOpen(false)}
+        onConfirm={confirmDeleteAccount}
+      />
 
       <main className="das-page">
         <div className="das-shell">

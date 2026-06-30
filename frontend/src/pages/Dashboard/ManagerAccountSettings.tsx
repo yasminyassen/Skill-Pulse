@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, KeyRound, LockKeyhole, Save, Trash2, X } from "lucide-react";
 import api from "../../api/auth";
 import DashboardLayout from "../DashboardLayout";
+import { ConfirmDialog } from "../../components/ui/ThemedDialog";
 
 const accent = "#8b5cf6";
 
@@ -60,6 +61,7 @@ export default function ManagerAccountSettings() {
   const [codeSent, setCodeSent] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   const showToast = (msg: string, ok = true) => {
@@ -196,7 +198,10 @@ export default function ManagerAccountSettings() {
 
   const deleteAccount = async (event: FormEvent) => {
     event.preventDefault();
-    if (!window.confirm("Delete this manager account permanently?")) return;
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDeleteAccount = async () => {
     setSaving(true);
     try {
       await api.post("/manager/profile/delete-account", deleteForm);
@@ -204,6 +209,7 @@ export default function ManagerAccountSettings() {
       window.location.href = "/login?account=deleted";
     } catch {
       showToast("Account deletion failed", false);
+      setDeleteConfirmOpen(false);
     } finally {
       setSaving(false);
     }
@@ -457,6 +463,18 @@ export default function ManagerAccountSettings() {
           {toast.msg}
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="Delete manager account?"
+        description="This permanently removes your manager profile, activity logs, uploaded requirements, and manager-owned analysis data. This action cannot be undone."
+        accent={accent}
+        tone="danger"
+        confirmLabel="Delete Account"
+        loading={saving}
+        onCancel={() => setDeleteConfirmOpen(false)}
+        onConfirm={confirmDeleteAccount}
+      />
 
       <main className="mas-page">
         <div className="mas-shell">

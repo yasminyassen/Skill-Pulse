@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Eye, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import DashboardLayout from "../DashboardLayout";
 import api from "../../api/auth";
+import { TextareaDialog } from "../../components/ui/ThemedDialog";
 import {
   ExtractedRequirementsReviewModal,
   fingerprintPrdFile,
@@ -75,6 +76,19 @@ type DraftStory = {
   priority: string;
   acceptance_criteria: { id: number; text: string }[];
   technical_tasks: DraftTask[];
+};
+
+type ReviewTextDialogState = {
+  isOpen: boolean;
+  mode: "edit" | "merge";
+  title: string;
+  description: string;
+  text: string;
+  originalText: string;
+  type?: "story" | "ac" | "story_desc" | "task";
+  storyIdValue: number;
+  itemId?: number;
+  selectedTaskIds: number[];
 };
 
 const pct = (value?: number | null) => `${Math.round(Number(value || 0))}%`;
@@ -512,6 +526,17 @@ export default function RequirementsPage() {
   const [reviewStories, setReviewStories] = useState<Story[]>([]);
   const [reviewDocId, setReviewDocId] = useState<number | null>(null);
   const [reviewSelectedTaskIds, setReviewSelectedTaskIds] = useState<number[]>([]);
+  const [reviewTextDialog, setReviewTextDialog] = useState<ReviewTextDialogState>({
+    isOpen: false,
+    mode: "edit",
+    title: "",
+    description: "",
+    text: "",
+    originalText: "",
+    storyIdValue: 0,
+    selectedTaskIds: [],
+  });
+  const [reviewTextSaving, setReviewTextSaving] = useState(false);
   const [showAddRequirement, setShowAddRequirement] = useState(false);
   const [requirementDraft, setRequirementDraft] = useState<DraftStory>(emptyDraftStory());
   const [savingRequirement, setSavingRequirement] = useState(false);
@@ -963,33 +988,82 @@ export default function RequirementsPage() {
     }
   };
 
-  const editReviewItem = async (type: "story" | "ac" | "story_desc" | "task", storyIdValue: number, text: string, title: string, itemId?: number) => {
-    const next = window.prompt(title, text);
-    if (next === null || next.trim() === text.trim()) return;
+  const editReviewItem = (type: "story" | "ac" | "story_desc" | "task", storyIdValue: number, text: string, title: string, itemId?: number) => {
+    setReviewTextDialog({
+      isOpen: true,
+      mode: "edit",
+      title,
+      description: "Update the extracted requirement text before confirming it for this repository.",
+      text,
+      originalText: text,
+      type,
+      storyIdValue,
+      itemId,
+      selectedTaskIds: [],
+    });
+  };
+
+  const closeReviewTextDialog = () => {
+    if (reviewTextSaving) return;
+    setReviewTextDialog(prev => ({ ...prev, isOpen: false }));
+  };
+
+  const saveReviewTextDialog = async () => {
+    const next = reviewTextDialog.text.trim();
+    if (!next) return;
+    if (reviewTextDialog.mode === "edit" && next === reviewTextDialog.originalText.trim()) {
+      closeReviewTextDialog();
+      return;
+    }
+    setReviewTextSaving(true);
     try {
+      if (reviewTextDialog.mode === "merge") {
+        const res = await api.post(`/requirements/stories/${reviewTextDialog.storyIdValue}/tasks/merge`, {
+          task_ids: reviewTextDialog.selectedTaskIds,
+          new_description: next,
+        });
+        const mergedTask = res.data;
+        const selectedIds = new Set(reviewTextDialog.selectedTaskIds);
+        setReviewStories(prev => prev.map(s => {
+          if (storyId(s) !== reviewTextDialog.storyIdValue) return s;
+          return { ...s, technical_tasks: [...(s.technical_tasks || []).filter(task => !selectedIds.has(taskId(task))), mergedTask] };
+        }));
+        setReviewSelectedTaskIds(prev => prev.filter(id => !selectedIds.has(id)));
+        showToast("Tasks merged");
+        setReviewTextDialog(prev => ({ ...prev, isOpen: false }));
+        return;
+      }
+
+      const { type, storyIdValue, itemId } = reviewTextDialog;
       if (type === "task" && itemId) {
-        await updateReviewTask(itemId, { description: next.trim() });
+        await updateReviewTask(itemId, { description: next });
+        setReviewTextDialog(prev => ({ ...prev, isOpen: false }));
         return;
       }
       if (type === "story") {
-        await api.patch(`/requirements/stories/${storyIdValue}`, { title: next.trim() });
-        setReviewStories(prev => prev.map(story => storyId(story) === storyIdValue ? { ...story, title: next.trim() } : story));
+        await api.patch(`/requirements/stories/${storyIdValue}`, { title: next });
+        setReviewStories(prev => prev.map(story => storyId(story) === storyIdValue ? { ...story, title: next } : story));
+        setReviewTextDialog(prev => ({ ...prev, isOpen: false }));
         return;
       }
       if (type === "story_desc") {
-        await api.patch(`/requirements/stories/${storyIdValue}`, { description: next.trim() });
-        setReviewStories(prev => prev.map(story => storyId(story) === storyIdValue ? { ...story, description: next.trim() } : story));
+        await api.patch(`/requirements/stories/${storyIdValue}`, { description: next });
+        setReviewStories(prev => prev.map(story => storyId(story) === storyIdValue ? { ...story, description: next } : story));
+        setReviewTextDialog(prev => ({ ...prev, isOpen: false }));
         return;
       }
       if (type === "ac" && itemId) {
         const story = reviewStories.find(s => storyId(s) === storyIdValue);
         if (!story) return;
-        const updatedAcs = (story.acceptance_criteria || []).map((ac: any) => (ac.id ?? ac.ac_id) === itemId ? { ...ac, text: next.trim() } : ac);
+        const updatedAcs = (story.acceptance_criteria || []).map((ac: any) => (ac.id ?? ac.ac_id) === itemId ? { ...ac, text: next } : ac);
         await api.patch(`/requirements/stories/${storyIdValue}`, { acceptance_criteria: updatedAcs });
         setReviewStories(prev => prev.map(s => storyId(s) === storyIdValue ? { ...s, acceptance_criteria: updatedAcs } : s));
+        setReviewTextDialog(prev => ({ ...prev, isOpen: false }));
       }
     } catch (err: any) {
-      showToast(err.response?.data?.detail || "Review update failed", false);
+      showToast(err.response?.data?.detail || (reviewTextDialog.mode === "merge" ? "Task merge failed" : "Review update failed"), false);
+    } finally {
+      setReviewTextSaving(false);
     }
   };
 
@@ -999,23 +1073,16 @@ export default function RequirementsPage() {
     const selectedInStory = (story.technical_tasks || []).filter(task => reviewSelectedTaskIds.includes(taskId(task)));
     if (selectedInStory.length < 2) return;
     const combined = selectedInStory.map(task => `- [${task.type?.toUpperCase?.() || "TASK"}] ${task.description}`).join("\n\n");
-    const next = window.prompt("Edit merged task description", combined);
-    if (!next?.trim()) return;
-    try {
-      const res = await api.post(`/requirements/stories/${storyIdValue}/tasks/merge`, {
-        task_ids: selectedInStory.map(task => taskId(task)),
-        new_description: next.trim(),
-      });
-      const mergedTask = res.data;
-      setReviewStories(prev => prev.map(s => {
-        if (storyId(s) !== storyIdValue) return s;
-        const selectedIds = new Set(selectedInStory.map(task => taskId(task)));
-        return { ...s, technical_tasks: [...(s.technical_tasks || []).filter(task => !selectedIds.has(taskId(task))), mergedTask] };
-      }));
-      setReviewSelectedTaskIds(prev => prev.filter(id => !selectedInStory.some(task => taskId(task) === id)));
-    } catch (err: any) {
-      showToast(err.response?.data?.detail || "Task merge failed", false);
-    }
+    setReviewTextDialog({
+      isOpen: true,
+      mode: "merge",
+      title: "Merge Technical Tasks",
+      description: "Edit the combined description. The selected tasks will become one task that keeps their linked acceptance criteria.",
+      text: combined,
+      originalText: combined,
+      storyIdValue,
+      selectedTaskIds: selectedInStory.map(task => taskId(task)),
+    });
   };
 
   const confirmReview = async () => {
@@ -1177,6 +1244,21 @@ export default function RequirementsPage() {
       {toast && (
         <div style={{ position: "fixed", right: 26, bottom: 26, zIndex: 500, padding: "11px 16px", borderRadius: 10, background: "#181826", border: `1px solid ${toast.ok ? "rgba(52,211,153,.35)" : "rgba(248,113,113,.35)"}`, color: toast.ok ? "#34d399" : "#f87171", fontSize: 13, fontWeight: 800 }}>{toast.msg}</div>
       )}
+      <TextareaDialog
+        open={reviewTextDialog.isOpen}
+        title={reviewTextDialog.title}
+        description={reviewTextDialog.description}
+        value={reviewTextDialog.text}
+        accent={accent}
+        confirmLabel={reviewTextDialog.mode === "merge" ? "Confirm Merge" : "Save Changes"}
+        loading={reviewTextSaving}
+        confirmDisabled={!reviewTextDialog.text.trim()}
+        minHeight={reviewTextDialog.mode === "merge" ? 170 : 120}
+        placeholder="Type the updated requirement text..."
+        onCancel={closeReviewTextDialog}
+        onConfirm={saveReviewTextDialog}
+        onChange={text => setReviewTextDialog(prev => ({ ...prev, text }))}
+      />
       <StoryDetailsDrawer
         story={selectedStory}
         contributors={contributors}

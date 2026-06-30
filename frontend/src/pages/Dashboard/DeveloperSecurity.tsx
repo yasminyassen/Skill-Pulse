@@ -55,7 +55,6 @@ interface SecurityReport {
   owasp_distribution: Record<string, number>;
   top_vulnerable_files?: Record<string, number>;
   categorized_findings: Record<string, Record<string, Omit<SecurityFinding, "severity" | "file_path">[]>>;
-  failed_tools?: string[];
   security_score_breakdown?: SecurityScoreBreakdown | null;
 }
 
@@ -290,7 +289,6 @@ export default function DeveloperSecurity() {
     .sort((a, b) => safeNumber(b[1]) - safeNumber(a[1])).slice(0, 4);
   const selectedRepo      = repos.find(repo => repo.analysis_id === selectedId);
   const selectedBreakdown = detail?.scores?.security_score_breakdown || report?.security_score_breakdown || null;
-  const failedTools       = report?.failed_tools || [];
   const score             = aggregateSecurityScore ?? 0;
   const breakdown         = aggregateBreakdown;
 
@@ -577,19 +575,6 @@ export default function DeveloperSecurity() {
                       </div>
                       <ScoreRing value={safeNumber(detail?.scores?.security_score)} size={72} />
                     </div>
-
-                    {failedTools.length > 0 && (
-                      <div style={{
-                        marginTop: 16,
-                        border: "1px solid rgba(248,113,113,0.25)",
-                        background: "rgba(248,113,113,0.08)",
-                        color: "var(--text-secondary)", borderRadius: 12,
-                        padding: "12px 14px", fontSize: 12.5,
-                      }}>
-                        Some scanners failed during this analysis:{" "}
-                        <strong style={{ color: "#f87171" }}>{failedTools.join(", ")}</strong>.
-                      </div>
-                    )}
 
                     {selectedBreakdown && (
                       <div className="metrics-grid">
