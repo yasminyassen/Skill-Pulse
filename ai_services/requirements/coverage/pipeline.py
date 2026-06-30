@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import time
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -40,6 +42,33 @@ from app.db.models import (
 
 logger = logging.getLogger(__name__)
 
+LLM_EVALUATION_CONCURRENCY = 6
+
+
+async def _gather_with_concurrency(limit: int, coroutines, batch_type: str):
+    started_at = time.perf_counter()
+    logger.info(
+        "[Coverage] Starting %s batch (count=%s, limit=%s)",
+        batch_type,
+        len(coroutines),
+        limit,
+    )
+    semaphore = asyncio.Semaphore(limit)
+
+    async def _run(coroutine):
+        async with semaphore:
+            return await coroutine
+
+    results = await asyncio.gather(*[_run(coroutine) for coroutine in coroutines])
+    elapsed = time.perf_counter() - started_at
+    logger.info(
+        "[Coverage] Finished %s batch (count=%s, elapsed=%.2fs)",
+        batch_type,
+        len(coroutines),
+        elapsed,
+    )
+    return results
+
 
 def _ac_status_enum(status: str) -> AcCoverageStatus:
     mapping = {
@@ -61,6 +90,8 @@ def _story_status_enum(status: str) -> StoryCoverageStatus:
 
 async def build_developer_task_results_for_run(run: RequirementCoverageRun, document: RequirementDocument) -> list[dict]:
     developer_task_results: list[dict] = []
+    task_inputs: list[dict] = []
+    task_evaluations = []
     for story in document.user_stories:
         for task in story.technical_tasks:
             linked_ac_texts = [
@@ -73,40 +104,58 @@ async def build_developer_task_results_for_run(run: RequirementCoverageRun, docu
                 task.description,
                 linked_ac_texts=linked_ac_texts,
             )
-            task_eval = await evaluate_developer_task_implementation(
-                task_description=task.description,
-                linked_acceptance_criteria=linked_ac_texts,
-                code_evidence=evidence,
-            )
-            developer_task_results.append(
+            task_inputs.append(
                 {
-                    "task_id": task.id,
-                    "story_id": story.id,
-                    "status": task_eval.get("status"),
-                    "score": ac_score_from_status(task_eval.get("status")),
-                    "confidence": task_eval.get("confidence"),
-                    "reason": task_eval.get("reason"),
-                    "linked_ac_ids": task.ac_ids or [],
-                    "evidence": [
-                        {
-                            "file_path": e.get("file_path"),
-                            "chunk_id": e.get("chunk_id"),
-                            "symbol_name": e.get("symbol_name"),
-                            "symbol_type": e.get("symbol_type"),
-                            "start_line": e.get("start_line"),
-                            "end_line": e.get("end_line"),
-                            "similarity": e.get("score"),
-                            "vector_score": e.get("vector_score"),
-                            "lexical_score": e.get("lexical_score"),
-                            "rerank_score": e.get("rerank_score"),
-                            "retrieval_source": e.get("retrieval_source") or "primary",
-                            "excerpt": (e.get("chunk_text") or "")[:500],
-                        }
-                        for e in evidence
-                    ],
-                    "matched_chunk_ids": [e.get("chunk_id") for e in evidence if e.get("chunk_id")],
+                    "story": story,
+                    "task": task,
+                    "linked_ac_texts": linked_ac_texts,
+                    "evidence": evidence,
                 }
             )
+            task_evaluations.append(
+                evaluate_developer_task_implementation(
+                    task_description=task.description,
+                    linked_acceptance_criteria=linked_ac_texts,
+                    code_evidence=evidence,
+                )
+            )
+
+    task_results = await _gather_with_concurrency(LLM_EVALUATION_CONCURRENCY, task_evaluations, "DeveloperTask")
+
+    for task_input, task_eval in zip(task_inputs, task_results):
+        story = task_input["story"]
+        task = task_input["task"]
+        linked_ac_texts = task_input["linked_ac_texts"]
+        evidence = task_input["evidence"]
+        developer_task_results.append(
+            {
+                "task_id": task.id,
+                "story_id": story.id,
+                "status": task_eval.get("status"),
+                "score": ac_score_from_status(task_eval.get("status")),
+                "confidence": task_eval.get("confidence"),
+                "reason": task_eval.get("reason"),
+                "linked_ac_ids": task.ac_ids or [],
+                "evidence": [
+                    {
+                        "file_path": e.get("file_path"),
+                        "chunk_id": e.get("chunk_id"),
+                        "symbol_name": e.get("symbol_name"),
+                        "symbol_type": e.get("symbol_type"),
+                        "start_line": e.get("start_line"),
+                        "end_line": e.get("end_line"),
+                        "similarity": e.get("score"),
+                        "vector_score": e.get("vector_score"),
+                        "lexical_score": e.get("lexical_score"),
+                        "rerank_score": e.get("rerank_score"),
+                        "retrieval_source": e.get("retrieval_source") or "primary",
+                        "excerpt": (e.get("chunk_text") or "")[:500],
+                    }
+                    for e in evidence
+                ],
+                "matched_chunk_ids": [e.get("chunk_id") for e in evidence if e.get("chunk_id")],
+            }
+        )
     return developer_task_results
 
 
@@ -200,10 +249,11 @@ async def run_coverage_pipeline(
         db.commit()
 
         story_weight_inputs: list[tuple[float, str]] = []
+        ac_evaluations = []
+        story_entries: list[tuple[UserStory, list[dict]]] = []
 
         for story in document.user_stories:
-            ac_statuses: list[str] = []
-            matched_symbols: list[str] = []
+            story_items: list[dict] = []
 
             for ac in story.acceptance_criteria or []:
                 if not isinstance(ac, dict):
@@ -213,12 +263,55 @@ async def run_coverage_pipeline(
                 linked_tasks = tasks_for_ac(story.technical_tasks, ac_id)
 
                 if not linked_tasks:
+                    story_items.append(
+                        {
+                            "type": "missing_linked_task",
+                            "ac_id": ac_id,
+                        }
+                    )
+                    continue
+
+                primary_task_id = linked_tasks[0].id
+                evidence = retrieve_code_for_acceptance_criterion_with_linked_tasks(
+                    run.id,
+                    ac_text,
+                    [task.description for task in linked_tasks],
+                )
+                evaluation_index = len(ac_evaluations)
+                story_items.append(
+                    {
+                        "type": "evaluated",
+                        "ac_id": ac_id,
+                        "primary_task_id": primary_task_id,
+                        "evidence": evidence,
+                        "evaluation_index": evaluation_index,
+                    }
+                )
+                ac_evaluations.append(
+                    evaluate_ac_coverage(
+                        story_title=story.title,
+                        story_description=story.description,
+                        ac_text=ac_text,
+                        code_evidence=evidence,
+                    )
+                )
+
+            story_entries.append((story, story_items))
+
+        ac_results = await _gather_with_concurrency(LLM_EVALUATION_CONCURRENCY, ac_evaluations, "AC")
+
+        for story, story_items in story_entries:
+            ac_statuses: list[str] = []
+            matched_symbols: list[str] = []
+
+            for item in story_items:
+                if item["type"] == "missing_linked_task":
                     db.add(
                         AcCoverageResult(
                             coverage_run_id=run.id,
                             story_id=story.id,
                             task_id=None,
-                            ac_id=ac_id,
+                            ac_id=item["ac_id"],
                             status=AcCoverageStatus.not_covered,
                             score=0.0,
                             confidence=1.0,
@@ -230,23 +323,14 @@ async def run_coverage_pipeline(
                     ac_statuses.append("NOT_COVERED")
                     continue
 
-                primary_task_id = linked_tasks[0].id
-                evidence = retrieve_code_for_acceptance_criterion_with_linked_tasks(
-                    run.id,
-                    ac_text,
-                    [task.description for task in linked_tasks],
-                )
+                primary_task_id = item["primary_task_id"]
+                evidence = item["evidence"]
                 for ev in evidence:
                     sym = ev.get("symbol_name")
                     if sym:
                         matched_symbols.append(sym)
 
-                llm_result = await evaluate_ac_coverage(
-                    story_title=story.title,
-                    story_description=story.description,
-                    ac_text=ac_text,
-                    code_evidence=evidence,
-                )
+                llm_result = ac_results[item["evaluation_index"]]
                 status = llm_result["status"]
                 ac_statuses.append(status)
 
@@ -255,7 +339,7 @@ async def run_coverage_pipeline(
                         coverage_run_id=run.id,
                         story_id=story.id,
                         task_id=primary_task_id,
-                        ac_id=ac_id,
+                        ac_id=item["ac_id"],
                         status=_ac_status_enum(status),
                         score=ac_score_from_status(status),
                         confidence=llm_result.get("confidence"),
