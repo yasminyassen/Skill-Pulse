@@ -1,0 +1,7 @@
+# Sample PRD for Skill-Pulse requirements upload testing
+
+## User Story 1
+As a user, I want to log in securely so that my account is protected.
+
+## User Story 2
+As a manager, I want to view team security scores so that I can track risk.

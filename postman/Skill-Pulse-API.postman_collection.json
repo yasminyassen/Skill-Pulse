@@ -1,0 +1,3966 @@
+{
+  "info": {
+    "_postman_id": "714167db-af93-4e57-8b64-09dc7f42c8d9",
+    "name": "Skill-Pulse API Tests",
+    "description": "Complete Postman test suite for Skill-Pulse.\n\n## Setup\n1. Import `Skill-Pulse-Local.postman_environment.json`\n2. Start backend: `uvicorn app.main:app --reload` from `backend/`\n3. Run folder **00 - Setup & Smoke** (set verification_code from email/DB)\n4. For role-specific tests, login as manager/recruiter and re-run those folders\n\n## Variables\nSet `repo_url`, `branch`, `analysis_run_id`, `repo_id` in environment after analysis.\n\n## Notes\n- Analysis runs are async: poll **Get Analysis Status** until status=completed\n- Developer analysis needs GitHub connected + Python contributions\n- Manager analysis needs registered team developers on the repo",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Collection-level: ensure base_url is set",
+          "if (!pm.environment.get('base_url')) {",
+          "    pm.environment.set('base_url', 'http://localhost:8000');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "analysis_run_id",
+      "value": "1"
+    },
+    {
+      "key": "repo_id",
+      "value": "1"
+    },
+    {
+      "key": "doc_id",
+      "value": "1"
+    },
+    {
+      "key": "coverage_run_id",
+      "value": "1"
+    },
+    {
+      "key": "dev_username",
+      "value": "dev_tester"
+    },
+    {
+      "key": "user_email",
+      "value": "dev_tester@example.com"
+    },
+    {
+      "key": "mgr_username",
+      "value": "mgr_tester"
+    },
+    {
+      "key": "mgr_email",
+      "value": "mgr_tester@example.com"
+    },
+    {
+      "key": "rec_username",
+      "value": "rec_tester"
+    },
+    {
+      "key": "rec_email",
+      "value": "rec_tester@example.com"
+    },
+    {
+      "key": "repo_url",
+      "value": "https://github.com/octocat/Hello-World"
+    },
+    {
+      "key": "branch",
+      "value": "master"
+    },
+    {
+      "key": "verification_code",
+      "value": "000000"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Setup & Smoke",
+      "description": "Run these first to confirm the API is up and obtain an access token.",
+      "item": [
+        {
+          "name": "OpenAPI schema",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/openapi.json",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "openapi.json"
+              ]
+            },
+            "description": "Smoke test: API is running."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Register Developer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Creates a developer test account. 400 if username/email already exists.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{dev_username}}\",\n  \"full_name\": \"Test Developer\",\n  \"work_email\": \"{{user_email}}\",\n  \"role\": \"developer\",\n  \"specialization\": \"backend\",\n  \"password\": \"TestPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 400]\", function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    if (data.user_id) pm.environment.set(\"user_id\", String(data.user_id));\n    if (data.work_email) pm.environment.set(\"test_email\", data.work_email);\n}\n"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Verify Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/verify-email",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "verify-email"
+              ]
+            },
+            "description": "Use the 6-digit code from email or database.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"work_email\": \"{{user_email}}\",\n  \"code\": \"{{verification_code}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 400]\", function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Login Developer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{dev_username}}\",\n  \"password\": \"TestPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Developer login returns 200\", function () {",
+                  "    pm.expect(pm.response.code).to.eql(200);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "const data = pm.response.json();",
+                  "pm.test(\"access_token saved\", function () {",
+                  "    pm.expect(data.access_token).to.be.a(\"string\").and.not.empty;",
+                  "});",
+                  "pm.environment.set(\"access_token\", data.access_token);",
+                  "pm.collectionVariables.set(\"access_token\", data.access_token);"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Auth",
+      "description": "",
+      "item": [
+        {
+          "name": "Register Manager",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{mgr_username}}\",\n  \"full_name\": \"Test Manager\",\n  \"work_email\": \"{{mgr_email}}\",\n  \"role\": \"manager\",\n  \"password\": \"TestPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 400]\", function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    if (data.user_id) pm.environment.set(\"user_id\", String(data.user_id));\n    if (data.work_email) pm.environment.set(\"test_email\", data.work_email);\n}\n"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Register Recruiter",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{rec_username}}\",\n  \"full_name\": \"Test Recruiter\",\n  \"work_email\": \"{{rec_email}}\",\n  \"role\": \"recruiter\",\n  \"password\": \"TestPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 400]\", function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    if (data.user_id) pm.environment.set(\"user_id\", String(data.user_id));\n    if (data.work_email) pm.environment.set(\"test_email\", data.work_email);\n}\n"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Login Manager",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{mgr_username}}\",\n  \"password\": \"TestPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 401, 403]\", function () {",
+                  "    pm.expect([200, 401, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    if (data.access_token) {\n        pm.environment.set(\"access_token\", data.access_token);\n        pm.collectionVariables.set(\"access_token\", data.access_token);\n    }\n}\npm.test(\"access_token saved\", function () {\n    if (pm.response.code === 200) {\n        pm.expect(pm.environment.get(\"access_token\")).to.be.a(\"string\").and.not.empty;\n    }\n});\n"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Login Recruiter",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{rec_username}}\",\n  \"password\": \"TestPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 401, 403]\", function () {",
+                  "    pm.expect([200, 401, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    if (data.access_token) {\n        pm.environment.set(\"access_token\", data.access_token);\n        pm.collectionVariables.set(\"access_token\", data.access_token);\n    }\n}\npm.test(\"access_token saved\", function () {\n    if (pm.response.code === 200) {\n        pm.expect(pm.environment.get(\"access_token\")).to.be.a(\"string\").and.not.empty;\n    }\n});\n"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Whoami Full",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/whoami-full",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "whoami-full"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/refresh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Requires refresh_token cookie from login."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 401]\", function () {",
+                  "    pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/forgot-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{user_email}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/reset-password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{reset_token}}\",\n  \"new_password\": \"NewPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 400]\", function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        },
+        {
+          "name": "Complete Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/complete-profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "complete-profile"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"developer\",\n  \"specialization\": \"backend\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 422]\", function () {",
+                  "    pm.expect([200, 422]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 401]\", function () {",
+                  "    pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "auth": {
+            "type": "noauth"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Analysis (Developer)",
+      "description": "",
+      "item": [
+        {
+          "name": "Run Analysis",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/run",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "run"
+              ]
+            },
+            "description": "Requires GitHub linked for developer contribution scope.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"repo_url\": \"{{repo_url}}\",\n  \"branch\": \"{{branch}}\",\n  \"programming_language\": \"python\",\n  \"auto_detect_requirements_coverage\": false\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 422]\", function () {",
+                  "    pm.expect([200, 403, 422]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    const runId = data.analysis_run_id || data.run_id;\n    if (runId) {\n        pm.environment.set(\"analysis_run_id\", String(runId));\n        pm.collectionVariables.set(\"analysis_run_id\", String(runId));\n    }\n    if (data.repo_id) pm.environment.set(\"repo_id\", String(data.repo_id));\n}\n"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Run Analysis With Coverage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/run/with-coverage",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "run",
+                "with-coverage"
+              ]
+            },
+            "description": "Attach a coverage XML file in Postman before sending.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "repo_url",
+                  "value": "{{repo_url}}",
+                  "type": "text"
+                },
+                {
+                  "key": "branch",
+                  "value": "{{branch}}",
+                  "type": "text"
+                },
+                {
+                  "key": "programming_language",
+                  "value": "python",
+                  "type": "text"
+                },
+                {
+                  "key": "auto_detect_requirements_coverage",
+                  "value": "false",
+                  "type": "text"
+                },
+                {
+                  "key": "coverage_file",
+                  "type": "file",
+                  "src": "sample-coverage.xml",
+                  "description": "JaCoCo/Cobertura XML"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 422]\", function () {",
+                  "    pm.expect([200, 403, 422]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    const runId = data.analysis_run_id || data.run_id;\n    if (runId) {\n        pm.environment.set(\"analysis_run_id\", String(runId));\n        pm.collectionVariables.set(\"analysis_run_id\", String(runId));\n    }\n    if (data.repo_id) pm.environment.set(\"repo_id\", String(data.repo_id));\n}\n"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Analysis Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/{{analysis_run_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "{{analysis_run_id}}"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});",
+                  "\nif (pm.response.code === 200) {\n    const data = pm.response.json();\n    if (data.status) pm.environment.set(\"analysis_status\", data.status);\n    if (data.analysis_run_id) pm.environment.set(\"analysis_run_id\", String(data.analysis_run_id));\n}\npm.test(\"Analysis status is present\", function () {\n    if (pm.response.code === 200 && pm.response.json().status) {\n        pm.expect([\"pending\", \"running\", \"completed\", \"failed\"]).to.include(pm.response.json().status);\n    }\n});\n"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Analysis History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/history",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Detailed Metrics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/{{analysis_run_id}}/detailed-metrics",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "{{analysis_run_id}}",
+                "detailed-metrics"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Learning Recommendations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/{{analysis_run_id}}/learning-recommendations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "{{analysis_run_id}}",
+                "learning-recommendations"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sonar Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/{{analysis_run_id}}/sonar-dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "{{analysis_run_id}}",
+                "sonar-dashboard"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sonar Results",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/{{analysis_run_id}}/sonar-results",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "{{analysis_run_id}}",
+                "sonar-results"
+              ],
+              "query": [
+                {
+                  "key": "include_raw",
+                  "value": "false"
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Skills Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/skills/summary",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "skills",
+                "summary"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Profile Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/profile-dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "profile-dashboard"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Analysis Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{developer_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "profile"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organization\": \"SkillPulse QA\",\n  \"job_title\": \"Backend Developer\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - Security Report",
+      "description": "",
+      "item": [
+        {
+          "name": "Get Security Report",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/security-report/{{analysis_run_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "security-report",
+                "{{analysis_run_id}}"
+              ]
+            },
+            "description": "Returns Bandit/Semgrep/Safety/Gitleaks findings and score breakdown."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 - Repositories",
+      "description": "",
+      "item": [
+        {
+          "name": "Connected Repos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/repos/connected",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "repos",
+                "connected"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Disconnect Analysis",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/repos/disconnect-analysis/{{analysis_run_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "repos",
+                "disconnect-analysis",
+                "{{analysis_run_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Disconnect Repo",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/repos/disconnect/{{repo_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "repos",
+                "disconnect",
+                "{{repo_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 - Profile",
+      "description": "",
+      "item": [
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Updated Name\",\n  \"organization\": \"SkillPulse\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Set Password Request Code",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/profile/set-password/request-code",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile",
+                "set-password",
+                "request-code"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 400]\", function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change Password Request Code",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/profile/change-password/request-code",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "profile",
+                "change-password",
+                "request-code"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"TestPass1!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 400]\", function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 - Manager Dashboard",
+      "description": "Use manager token (login as manager first).",
+      "item": [
+        {
+          "name": "Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/overview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "overview"
+              ],
+              "query": [
+                {
+                  "key": "trend_granularity",
+                  "value": "monthly"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Repos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/repos",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "repos"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "KPIs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/kpis",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "kpis"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trends",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/trends",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "trends"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Skills Distribution",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/skills",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "skills"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Team Insights",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/insights",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "insights"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Team Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/members",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "members"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Member Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/dashboard/members/{{user_id}}/details",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "dashboard",
+                "members",
+                "{{user_id}}",
+                "details"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 - Manager Security",
+      "description": "",
+      "item": [
+        {
+          "name": "Security Repos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/security/repos",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "security",
+                "repos"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Team Security Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/security/team",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "security",
+                "team"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Repository Risk",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/security/repository-risk",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "security",
+                "repository-risk"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Repo Security Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/security/repositories/{{repo_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "security",
+                "repositories",
+                "{{repo_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 - Manager Profile",
+      "description": "",
+      "item": [
+        {
+          "name": "Get Manager Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "profile"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Team Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/profile/team-overview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "profile",
+                "team-overview"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activities",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/manager/profile/activities",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "manager",
+                "profile",
+                "activities"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "6"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "09 - Requirements",
+      "description": "Upload PRD via multipart in Postman manually: POST /requirements/upload",
+      "item": [
+        {
+          "name": "Upload PRD",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/upload",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "upload"
+              ]
+            },
+            "description": "Manager only. Attach a PRD file before sending.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "sample-prd.txt",
+                  "description": "PDF/MD/TXT/XLSX/CSV"
+                },
+                {
+                  "key": "repository_id",
+                  "value": "{{repo_id}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 422]\", function () {",
+                  "    pm.expect([200, 403, 422]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Repositories",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Requirements State",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories/{{repo_id}}/requirements-state",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories",
+                "{{repo_id}}",
+                "requirements-state"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Repo Stories",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories/{{repo_id}}/stories",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories",
+                "{{repo_id}}",
+                "stories"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Analysis Readiness",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories/{{repo_id}}/analysis-readiness",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories",
+                "{{repo_id}}",
+                "analysis-readiness"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Contributors",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories/{{repo_id}}/contributors",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories",
+                "{{repo_id}}",
+                "contributors"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sync Contributors",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories/{{repo_id}}/sync-contributors",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories",
+                "{{repo_id}}",
+                "sync-contributors"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Developer Assigned Repos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories/developer/assigned",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories",
+                "developer",
+                "assigned"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200]\", function () {",
+                  "    pm.expect([200]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Developer Repo Tasks",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/repositories/{{repo_id}}/developer",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "repositories",
+                "{{repo_id}}",
+                "developer"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Document Stories",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/{{doc_id}}/stories",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "{{doc_id}}",
+                "stories"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm Requirements",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/{{doc_id}}/confirm",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "{{doc_id}}",
+                "confirm"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10 - Requirement Coverage",
+      "description": "",
+      "item": [
+        {
+          "name": "Detect Coverage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/coverage/repositories/{{repo_id}}/detect",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "coverage",
+                "repositories",
+                "{{repo_id}}",
+                "detect"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Coverage Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/coverage/repositories/{{repo_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "coverage",
+                "repositories",
+                "{{repo_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Coverage Runs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/coverage/repositories/{{repo_id}}/runs",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "coverage",
+                "repositories",
+                "{{repo_id}}",
+                "runs"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Coverage Run Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/coverage/runs/{{coverage_run_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "coverage",
+                "runs",
+                "{{coverage_run_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Ownership",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/coverage/repositories/{{repo_id}}/refresh-ownership",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "coverage",
+                "repositories",
+                "{{repo_id}}",
+                "refresh-ownership"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Developer Coverage",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/requirements/coverage/repositories/{{repo_id}}/developer",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "requirements",
+                "coverage",
+                "repositories",
+                "{{repo_id}}",
+                "developer"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 404]\", function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11 - Recruiter",
+      "description": "",
+      "item": [
+        {
+          "name": "Bulk Analyze Preview",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/recruiter/bulk-analyze/preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "recruiter",
+                "bulk-analyze",
+                "preview"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "sample-candidates.csv",
+                  "description": "CSV or XLSX"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 422]\", function () {",
+                  "    pm.expect([200, 403, 422]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bulk Analyze Confirm",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/recruiter/bulk-analyze/confirm",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "recruiter",
+                "bulk-analyze",
+                "confirm"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"candidates\": [\n    {\n      \"candidate_name\": \"Jane Doe\",\n      \"repo_url\": \"{{repo_url}}\",\n      \"branch\": \"{{branch}}\"\n    }\n  ],\n  \"force_reanalyze\": false,\n  \"title\": \"QA Batch\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 422]\", function () {",
+                  "    pm.expect([200, 403, 422]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recruiter Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/recruiter/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "recruiter",
+                "profile"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Eval Settings",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/recruiter/eval-settings",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "recruiter",
+                "eval-settings"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"security_score_visible\": true,\n  \"weight_security\": 20\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Profile Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/recruiter/profile-dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "recruiter",
+                "profile-dashboard"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recruiter Tasks",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/recruiter/tasks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "recruiter",
+                "tasks"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recruiter Candidates",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/recruiter/candidates",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "recruiter",
+                "candidates"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Dashboard Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/recruiter/dashboard-summary",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "recruiter",
+                "dashboard-summary"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403]\", function () {",
+                  "    pm.expect([200, 403]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Candidate Insights",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/recruiter/candidate-insights/{{analysis_run_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "recruiter",
+                "candidate-insights",
+                "{{analysis_run_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Candidate Analysis",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/analysis/recruiter/candidates/{{analysis_run_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "analysis",
+                "recruiter",
+                "candidates",
+                "{{analysis_run_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is one of [200, 403, 404]\", function () {",
+                  "    pm.expect([200, 403, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"Response time under 30s\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(30000);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON when body exists\", function () {",
+                  "    if (pm.response.text() && pm.response.text().length > 0) {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/json\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "",
+                  "const runId = pm.environment.get(\"analysis_run_id\") || pm.collectionVariables.get(\"analysis_run_id\");",
+                  "if (!runId || isNaN(parseInt(runId, 10))) {",
+                  "    console.warn(\"[skip] analysis_run_id not set — skipping \" + pm.info.requestName);",
+                  "    postman.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
