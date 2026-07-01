@@ -23,6 +23,7 @@ class BulkRepository(BaseModel):
     clone_path: str = ""
     html_url: str
     default_branch: str
+    analysis_source: str = "scheduled"
     analysis_run_id: int | None = None
     analysis_status: str | None = None
     status: str | None = None
@@ -77,6 +78,15 @@ class BulkConfirmRequest(BaseModel):
     force_reanalyze: bool = False
     title: str | None = None
     csv_filename: str | None = None
+
+
+def _apply_bulk_task_status(task: RecruiterTask, repositories: list[BulkRepository]) -> int:
+    scheduled_count = sum(1 for repo in repositories if repo.analysis_source != "cache")
+    if len(repositories) == 0:
+        task.status = "failed" if task.valid_count > 0 else "completed"
+    elif scheduled_count == 0:
+        task.status = "completed"
+    return scheduled_count
 
 
 async def _resolve_recruiter_token(
@@ -145,6 +155,7 @@ async def _schedule_rows(
             clone_path=result.get("clone_path", ""),
             html_url=result["html_url"],
             default_branch=result["default_branch"],
+            analysis_source=result.get("analysis_source") or "scheduled",
             analysis_run_id=result.get("analysis_run_id"),
             analysis_status=result.get("analysis_status"),
             status=result.get("status"),
@@ -274,13 +285,14 @@ async def bulk_analyze_confirm(
     )
     result.skipped = skipped + result.skipped
     task.skipped_count = len(result.skipped)
-    if len(result.repositories) == 0:
-        task.status = "failed" if task.valid_count > 0 else "completed"
+    scheduled_count = _apply_bulk_task_status(task, result.repositories)
     db.commit()
 
     logger.info(
-        "Recruiter bulk confirm finished scheduled=%d skipped=%d user_id=%s",
+        "Recruiter bulk confirm finished repositories=%d scheduled=%d cached=%d skipped=%d user_id=%s",
         len(result.repositories),
+        scheduled_count,
+        len(result.repositories) - scheduled_count,
         len(result.skipped),
         current_user.id,
     )

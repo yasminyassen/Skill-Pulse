@@ -12,6 +12,7 @@ type RepoItem = {
   clone_path: string;
   html_url: string;
   default_branch: string;
+  analysis_source?: "cache" | "scheduled" | "force_reanalyze" | string | null;
   analysis_run_id?: number | null;
   analysis_status?: string | null;
   status?: string | null;
@@ -114,6 +115,12 @@ const scoreColor = (score: number | null | undefined) => {
   if (score >= 60) return "#fbbf24";
   if (score >= 40) return "#fb923c";
   return "#f87171";
+};
+
+const analysisSourceLabel = (repo: Pick<RepoItem, "analysis_source">) => {
+  if (repo.analysis_source === "cache") return "Reused";
+  if (repo.analysis_source === "force_reanalyze") return "Reanalyzing";
+  return "New analysis";
 };
 
 
@@ -285,6 +292,7 @@ export default function RecruiterDashboard() {
       analyzed_at: repo.analyzed_at ?? null,
       latest_commit_sha: repo.latest_commit_sha ?? null,
       run_id: repo.analysis_run_id ?? null,
+      analysis_source: repo.analysis_source ?? null,
     }));
     return rows.sort((a, b) => (b.skill_score ?? -1) - (a.skill_score ?? -1));
   }, [repositories]);
@@ -293,6 +301,25 @@ export default function RecruiterDashboard() {
     const status = repo.analysis_status || repo.status || "pending";
     return Boolean(repo.analysis_run_id) && (status === "running" || status === "pending");
   }, []);
+
+  const batchSummary = useMemo(() => {
+    const total = repositories.length;
+    const reused = repositories.filter((repo) => repo.analysis_source === "cache").length;
+    const newlyScheduled = repositories.filter((repo) => repo.analysis_source !== "cache").length;
+    const pending = repositories.filter(isPendingRepo).length;
+    const failed = repositories.filter((repo) => (repo.analysis_status || repo.status) === "failed").length;
+    const completed = total - pending - failed;
+    const allCached = total > 0 && reused === total;
+    const mixed = reused > 0 && newlyScheduled > 0;
+    return { total, reused, newlyScheduled, pending, failed, completed, allCached, mixed };
+  }, [isPendingRepo, repositories]);
+
+  const completionMessage = useMemo(() => {
+    if (!batchSummary.total) return "";
+    if (batchSummary.allCached) return "Results reused — all candidate repositories were already analyzed with no code changes.";
+    if (batchSummary.mixed) return `Batch complete — ${batchSummary.reused} reused from cache and ${batchSummary.newlyScheduled} newly analyzed.`;
+    return "Analysis Done — all candidate repositories have finished processing.";
+  }, [batchSummary]);
 
   const updateRepo = useCallback((target: RepoItem, patch: Partial<RepoItem>) =>
     setRepositories((prev) => prev.map((repo) => {
@@ -424,6 +451,7 @@ export default function RecruiterDashboard() {
       });
       const fetchedRepos: RepoItem[] = (response.data.repositories || []).map((repo: RepoItem) => ({
         ...repo,
+        analysis_source: repo.analysis_source || "scheduled",
         analysis_run_id: repo.analysis_run_id ?? null,
         analysis_status: repo.analysis_status || repo.status || "running",
         skill_score: repo.skill_score ?? null,
@@ -433,7 +461,16 @@ export default function RecruiterDashboard() {
       }));
       setRepositories(fetchedRepos);
       setSkipped(response.data.skipped || []);
-      setShowPreview(false); setActiveStep(2); startPolling(true);
+      setShowPreview(false);
+      const hasPendingRepos = fetchedRepos.some(isPendingRepo);
+      repositoriesRef.current = fetchedRepos;
+      if (hasPendingRepos) {
+        setActiveStep(2);
+        startPolling(true);
+      } else {
+        setActiveStep(3);
+        stopPolling();
+      }
     } catch (err: unknown) {
       handleAuthError(err); setActiveStep(null);
     } finally { setLoading(false); }
@@ -530,6 +567,18 @@ export default function RecruiterDashboard() {
           font-size: 12px;
           font-weight: 800;
         }
+        .rec-mini-stat {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+          gap: 2px;
+          border: 1px solid rgba(148,163,184,0.16);
+          border-radius: 10px;
+          background: rgba(15,23,42,0.28);
+          padding: 8px 9px;
+        }
+        .rec-mini-stat span { color: var(--text-primary); font-size: 13px; font-weight: 800; }
+        .rec-mini-stat small { color: var(--text-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
         .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #fbbf24; animation: pulse 1.4s ease-in-out infinite; }
         @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
         @keyframes analysisProgressMove {
@@ -592,12 +641,12 @@ export default function RecruiterDashboard() {
                   {activeStep === 3 && repositories.length > 0 && !repositories.some(isPendingRepo) ? (
                     <div className="analysis-done-pill">
                       <CheckIcon />
-                      Analysis Done
+                      {batchSummary.allCached ? "Results Reused" : "Analysis Done"}
                     </div>
                   ) : activeStep !== null ? (
                     <div className="analysis-step-pill">
                       <span className="pulse-dot" />
-                      Analysis in progress
+                      {batchSummary.mixed ? "Mixed batch in progress" : "Analysis in progress"}
                     </div>
                   ) : null}
                 </div>
@@ -610,7 +659,16 @@ export default function RecruiterDashboard() {
 
                 {activeStep === 3 && repositories.length > 0 && !repositories.some(isPendingRepo) && (
                   <div style={{ marginTop: 14, padding: "13px 14px", borderRadius: 12, border: "1px solid rgba(52,211,153,0.24)", background: "rgba(52,211,153,0.08)", color: "#34d399", fontSize: 13, fontWeight: 800 }}>
-                    Analysis Done — all candidate repositories have finished processing.
+                    {completionMessage}
+                  </div>
+                )}
+
+                {repositories.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, marginTop: 14 }}>
+                    <div className="rec-mini-stat"><span>{batchSummary.reused}</span><small>Reused</small></div>
+                    <div className="rec-mini-stat"><span>{batchSummary.newlyScheduled}</span><small>New</small></div>
+                    <div className="rec-mini-stat"><span>{batchSummary.pending}</span><small>Running</small></div>
+                    <div className="rec-mini-stat"><span>{batchSummary.failed}</span><small>Failed</small></div>
                   </div>
                 )}
 
@@ -671,10 +729,11 @@ export default function RecruiterDashboard() {
                 </div>
                 {candidateRows.length === 0 && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>No candidate scores available from the current upload yet.</div>}
                 {candidateRows.map((row) => (
-                  <div key={`${row.candidate}-${row.repo_name}-${row.run_id || "pending"}`} className="rec-row-card" style={{ display: "grid", gridTemplateColumns: "1fr 0.9fr 0.7fr 0.8fr 0.8fr auto", gap: 12, alignItems: "center" }}>
+                  <div key={`${row.candidate}-${row.repo_name}-${row.run_id || "pending"}`} className="rec-row-card" style={{ display: "grid", gridTemplateColumns: "1fr 0.9fr 0.7fr 0.75fr 0.8fr 0.8fr auto", gap: 12, alignItems: "center" }}>
                     <div><div className="rec-meta-label">Candidate</div><div className="rec-meta-value">{row.candidate}</div></div>
                     <div><div className="rec-meta-label">Repository</div><div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{row.repo_name}</div></div>
                     <div><div className="rec-meta-label">Status</div><Pill value={row.analysis_status} color={row.analysis_status === "completed" ? "#34d399" : row.analysis_status === "failed" ? "#f87171" : "#fbbf24"} /></div>
+                    <div><div className="rec-meta-label">Source</div><Pill value={analysisSourceLabel(row)} color={row.analysis_source === "cache" ? "#38bdf8" : "#a78bfa"} /></div>
                     <div><div className="rec-meta-label">Skill Score</div><div className="rec-meta-value" style={{ color: scoreColor(row.skill_score) }}>{fmt(row.skill_score)}</div></div>
                     <div><div className="rec-meta-label">Sonar Health</div><div className="rec-meta-value" style={{ color: scoreColor(row.sonar_health_score) }}>{fmt(row.sonar_health_score)}</div></div>
                     <button disabled={!row.run_id} onClick={() => row.run_id && navigate(`/analysis/${row.run_id}`)} className="rec-view-btn">View</button>

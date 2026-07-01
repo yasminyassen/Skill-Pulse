@@ -16,6 +16,8 @@ from app.db.models import (
     AnalysisRun,
     CodeMetrics,
     ContributorAnalysisSummary,
+    RecruiterCandidate,
+    RecruiterTask,
     Repository,
     RepositoryAnalysis,
     RepositoryContributor,
@@ -86,6 +88,52 @@ def _model_to_dict(model: BaseModel) -> dict:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _refresh_recruiter_task_status_for_run(db: Session, run_id: int) -> None:
+    candidate = (
+        db.query(RecruiterCandidate)
+        .filter(RecruiterCandidate.analysis_run_id == run_id)
+        .first()
+    )
+    if not candidate or not candidate.task_id:
+        return
+
+    task = db.query(RecruiterTask).filter(RecruiterTask.id == candidate.task_id).first()
+    if not task or task.status != "analyzing":
+        return
+
+    active_count = (
+        db.query(AnalysisRun.id)
+        .join(RecruiterCandidate, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
+        .filter(
+            RecruiterCandidate.task_id == task.id,
+            AnalysisRun.status.in_(["pending", "running"]),
+        )
+        .count()
+    )
+    if active_count > 0:
+        return
+
+    completed_count = (
+        db.query(AnalysisRun.id)
+        .join(RecruiterCandidate, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
+        .filter(
+            RecruiterCandidate.task_id == task.id,
+            AnalysisRun.status == "completed",
+        )
+        .count()
+    )
+    failed_count = (
+        db.query(AnalysisRun.id)
+        .join(RecruiterCandidate, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
+        .filter(
+            RecruiterCandidate.task_id == task.id,
+            AnalysisRun.status == "failed",
+        )
+        .count()
+    )
+    task.status = "completed" if completed_count > 0 or failed_count == 0 else "failed"
 
 
 def _pure_manager_insights(
@@ -1350,9 +1398,9 @@ async def _background_analysis_task_async(
                     logger.info("[run=%s] Warmed recruiter candidate insight cache", run_id)
                 except Exception:
                     logger.exception("[run=%s] Recruiter candidate insight cache warm-up failed", run_id)
-                    db.commit()
-            else:
-                db.commit()
+            if is_recruiter_scoring_mode:
+                _refresh_recruiter_task_status_for_run(db, run.id)
+            db.commit()
             logger.info("[run=%s] Background analysis completed successfully", run_id)
         else:
             logger.info(
@@ -1387,6 +1435,8 @@ async def _background_analysis_task_async(
             if repo_analysis:
                 repo_analysis.analysis_status = "failed"
                 repo_analysis.analyzed_at = run.completed_at
+            if user_role == "recruiter":
+                _refresh_recruiter_task_status_for_run(db, run.id)
             db.commit()
             logger.info("[run=%s] Failure status persisted after LLM error", run_id)
         return {
@@ -1422,6 +1472,8 @@ async def _background_analysis_task_async(
             if repo_analysis:
                 repo_analysis.analysis_status = "failed"
                 repo_analysis.analyzed_at = run.completed_at
+            if user_role == "recruiter":
+                _refresh_recruiter_task_status_for_run(db, run.id)
             db.commit()
             logger.info("[run=%s] Failure status persisted after background task error", run_id)
         elif "rate" in error_text.lower():

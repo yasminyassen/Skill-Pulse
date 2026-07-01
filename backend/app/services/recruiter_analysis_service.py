@@ -133,19 +133,6 @@ async def schedule_recruiter_repo_analysis(
         if existing_analysis.last_run_id:
             existing_run = db.query(AnalysisRun).filter(AnalysisRun.id == existing_analysis.last_run_id).first()
             if existing_run:
-                existing_candidate = (
-                    db.query(RecruiterCandidate)
-                    .filter(RecruiterCandidate.analysis_run_id == existing_run.id)
-                    .first()
-                )
-                if existing_candidate and task_id and existing_candidate.task_id is None:
-                    existing_candidate.task_id = task_id
-                if existing_candidate and github_login and not existing_candidate.github_login:
-                    existing_candidate.github_login = github_login
-                if existing_candidate and github_avatar_url and not existing_candidate.github_avatar_url:
-                    existing_candidate.github_avatar_url = github_avatar_url
-                if existing_candidate:
-                    db.commit()
                 sonar_summary = build_sonar_repo_summary(existing_run)
                 score_row = (
                     db.query(SkillScore)
@@ -163,6 +150,7 @@ async def schedule_recruiter_repo_analysis(
 
         return {
             "scheduled": False,
+            "analysis_source": "cache",
             "candidate": candidate_name,
             "github_avatar_url": github_avatar_url,
             "repo_name": repo_name,
@@ -260,6 +248,7 @@ async def schedule_recruiter_repo_analysis(
 
     return {
         "scheduled": True,
+        "analysis_source": "force_reanalyze" if force_reanalyze else "scheduled",
         "candidate": candidate_name,
         "github_avatar_url": github_avatar_url,
         "repo_name": repo_name,

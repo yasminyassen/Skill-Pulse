@@ -2019,6 +2019,28 @@ async def get_recruiter_tasks(
         .group_by(RecruiterCandidate.task_id)
         .all()
     )
+    active_counts = dict(
+        db.query(RecruiterCandidate.task_id, func.count(AnalysisRun.id))
+        .join(AnalysisRun, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
+        .filter(
+            RecruiterCandidate.task_id.in_(task_ids),
+            AnalysisRun.user_id == current_user.id,
+            AnalysisRun.status.in_(["pending", "running"]),
+        )
+        .group_by(RecruiterCandidate.task_id)
+        .all()
+    )
+    failed_counts = dict(
+        db.query(RecruiterCandidate.task_id, func.count(AnalysisRun.id))
+        .join(AnalysisRun, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
+        .filter(
+            RecruiterCandidate.task_id.in_(task_ids),
+            AnalysisRun.user_id == current_user.id,
+            AnalysisRun.status == "failed",
+        )
+        .group_by(RecruiterCandidate.task_id)
+        .all()
+    )
     average_scores = dict(
         db.query(RecruiterCandidate.task_id, func.avg(SkillScore.overall_score))
         .join(AnalysisRun, RecruiterCandidate.analysis_run_id == AnalysisRun.id)
@@ -2036,9 +2058,16 @@ async def get_recruiter_tasks(
     response = []
     for task in tasks:
         analyzed_count = int(analyzed_counts.get(task.id, 0))
+        active_count = int(active_counts.get(task.id, 0))
+        failed_count = int(failed_counts.get(task.id, 0))
         status = task.status
-        if status == "analyzing" and task.valid_count and analyzed_count >= task.valid_count:
-            status = "completed"
+        if status == "analyzing":
+            if active_count > 0:
+                status = "analyzing"
+            elif analyzed_count > 0 or failed_count == 0:
+                status = "completed"
+            else:
+                status = "failed"
         avg_score = average_scores.get(task.id)
         response.append(RecruiterTaskResponse(
             id=task.id,
