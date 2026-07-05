@@ -82,6 +82,18 @@ interface ContributorHighlight {
   reasoning: string | null;
 }
 
+interface QualityProgress {
+  has_baseline_analysis: boolean;
+  baseline_analysis_id: number | null;
+  issues_fixed: number;
+  issues_introduced: number;
+  remaining_issues: number;
+  coverage_delta: number | null;
+  duplication_delta: number | null;
+  cognitive_complexity_delta: number | null;
+  net_impact: string;
+}
+
 interface TeamPerformance {
   average_team_score: number | null;
   average_team_security_score: number | null;
@@ -90,6 +102,7 @@ interface TeamPerformance {
   best_contributor: ContributorHighlight | null;
   needs_support_contributor: ContributorHighlight | null;
   total_contributors: number;
+  quality_progress: QualityProgress;
 }
 
 interface ContributorRow {
@@ -159,6 +172,18 @@ interface Overview {
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
+const emptyQualityProgress: QualityProgress = {
+  has_baseline_analysis: false,
+  baseline_analysis_id: null,
+  issues_fixed: 0,
+  issues_introduced: 0,
+  remaining_issues: 0,
+  coverage_delta: null,
+  duplication_delta: null,
+  cognitive_complexity_delta: null,
+  net_impact: "No baseline",
+};
+
 const emptyOverview: Overview = {
   repositories: [],
   repository_summary: {
@@ -171,6 +196,7 @@ const emptyOverview: Overview = {
     average_team_score: null, average_team_security_score: null,
     average_coverage: null, average_code_smells: null,
     best_contributor: null, needs_support_contributor: null, total_contributors: 0,
+    quality_progress: emptyQualityProgress,
   },
   contributors: [],
   trends: [],
@@ -254,6 +280,13 @@ const fmtPlainMetric = (value: number | string | null | undefined, unit = "", di
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "number") return `${value.toFixed(digits)}${unit}`;
   return `${value}${unit}`;
+};
+
+const fmtSignedDelta = (value: number | null | undefined, unit = "") => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  const numeric = Number(value);
+  if (Math.abs(numeric) < 0.005) return `0${unit}`;
+  return `${numeric > 0 ? "+" : ""}${numeric.toFixed(unit === "%" ? 1 : 0)}${unit}`;
 };
 
 const fmtDate = (value: string | null | undefined) => {
@@ -482,6 +515,54 @@ function CodeSmellsMetric({ value }: { value: number | null }) {
       </div>
       <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
         <span className={`m-score-status ${statusClass(status)}`}>{status} maintainability</span>
+      </div>
+    </article>
+  );
+}
+
+function TeamQualityProgress({ progress }: { progress?: QualityProgress | null }) {
+  progress = progress || emptyQualityProgress;
+  const impactColor = progress.net_impact === "Improved" ? "#22c55e" : progress.net_impact === "Needs attention" ? "#ef4444" : "#f59e0b";
+  const metricItems = [
+    { label: "Coverage", value: progress.coverage_delta, unit: "%", goodWhen: "up" },
+    { label: "Duplication", value: progress.duplication_delta, unit: "%", goodWhen: "down" },
+    { label: "Complexity", value: progress.cognitive_complexity_delta, unit: "", goodWhen: "down" },
+  ];
+
+  return (
+    <article className="m-quality-progress">
+      <div className="m-quality-head">
+        <div>
+          <span className="m-label">Team Quality Progress</span>
+          <h3>Cumulative Repository Progress</h3>
+          <p>{progress.has_baseline_analysis ? `Compared with baseline analysis #${progress.baseline_analysis_id}.` : "No baseline repository analysis is available yet."}</p>
+        </div>
+        <span className="m-quality-impact" style={{ color: impactColor, borderColor: `${impactColor}45`, background: `${impactColor}14` }}>
+          {progress.net_impact}
+        </span>
+      </div>
+      <div className="m-quality-grid">
+        {[
+          { label: "Quality Issues Fixed", value: progress.issues_fixed, color: "#22c55e" },
+          { label: "New Quality Issues", value: progress.issues_introduced, color: "#ef4444" },
+          { label: "Remaining Issues", value: progress.remaining_issues, color: accent },
+        ].map(item => (
+          <div key={item.label} className="m-quality-stat">
+            <strong style={{ color: item.color }}>{item.value}</strong>
+            <span>{item.label}</span>
+          </div>
+        ))}
+        {metricItems.map(item => {
+          const value = item.value;
+          const isGood = value === null || value === undefined || Math.abs(Number(value)) < 0.005 ? null : item.goodWhen === "up" ? Number(value) > 0 : Number(value) < 0;
+          const color = isGood === null ? "var(--text-muted)" : isGood ? "#22c55e" : "#ef4444";
+          return (
+            <div key={item.label} className="m-quality-stat">
+              <strong style={{ color }}>{fmtSignedDelta(value, item.unit)}</strong>
+              <span>{item.label} Change</span>
+            </div>
+          );
+        })}
       </div>
     </article>
   );
@@ -895,6 +976,33 @@ export default function ManagerDashboard() {
 
         /* ── Team section ── */
         .m-team-top { display: grid; grid-template-columns: 200px 1fr 1fr; gap: 12px; }
+        .m-quality-progress {
+          border: 1px solid var(--border); border-radius: 18px;
+          background: var(--bg-card); padding: 18px 20px;
+          box-shadow: var(--shadow-card);
+        }
+        .m-quality-head {
+          display: flex; align-items: flex-start; justify-content: space-between;
+          gap: 14px; margin-bottom: 15px;
+        }
+        .m-quality-head h3 {
+          margin: 5px 0 4px; font-size: 17px; font-family: 'Inter', sans-serif;
+          color: var(--text-primary); letter-spacing: -0.2px;
+        }
+        .m-quality-head p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.45; }
+        .m-quality-impact {
+          border: 1px solid; border-radius: 999px; padding: 5px 10px;
+          font-size: 11.5px; font-weight: 800; white-space: nowrap;
+        }
+        .m-quality-grid {
+          display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px;
+        }
+        .m-quality-stat {
+          border: 1px solid var(--border); border-radius: 13px; background: var(--bg-input);
+          padding: 13px 14px; min-height: 74px;
+        }
+        .m-quality-stat strong { display: block; font-size: 22px; line-height: 1; margin-bottom: 8px; font-family: 'Inter', sans-serif; font-weight: 900; }
+        .m-quality-stat span { display: block; color: var(--text-secondary); font-size: 12px; font-weight: 700; line-height: 1.35; }
         .m-team-stat {
           background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
           padding: 18px; display: grid; align-content: center; gap: 6px;
@@ -1002,7 +1110,7 @@ export default function ManagerDashboard() {
         /* ── Responsive ── */
         @media (max-width: 1100px) {
           .m-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .m-team-top, .m-gauge-grid, .m-reason-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .m-team-top, .m-gauge-grid, .m-quality-grid, .m-reason-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .m-rec-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 760px) {
@@ -1010,7 +1118,7 @@ export default function ManagerDashboard() {
           .m-header { flex-direction: column; }
           .m-score-band { grid-template-columns: 1fr; }
           .m-score-col { border-right: 0; border-bottom: 1px solid var(--border); padding-right: 0; padding-bottom: 14px; }
-          .m-summary-grid, .m-metric-grid, .m-team-top, .m-gauge-grid, .m-risk-grid, .m-rec-grid, .m-reason-grid { grid-template-columns: 1fr; }
+          .m-summary-grid, .m-metric-grid, .m-team-top, .m-gauge-grid, .m-quality-grid, .m-risk-grid, .m-rec-grid, .m-reason-grid { grid-template-columns: 1fr; }
           .m-risk-row { grid-template-columns: 1fr; }
           .m-repo-trigger { min-width: 0; width: 100%; }
         }
@@ -1121,6 +1229,7 @@ export default function ManagerDashboard() {
                     <HighlightCard title="Best Contributor" person={data.team_performance.best_contributor} icon={<TrendingUp size={17} />} />
                     <HighlightCard title="Needs Support" person={data.team_performance.needs_support_contributor} icon={<Target size={17} />} />
                   </div>
+                  <TeamQualityProgress progress={data.team_performance.quality_progress} />
                   <div className="m-gauge-grid">
                     <ScoreRingMetric label="Team Average Skill Score" value={data.team_performance.average_team_score} description="Combined team capability score across contributors." />
                     <ScoreRingMetric label="Team Average Security Score" value={data.team_performance.average_team_security_score} description="Security posture average from the latest contributor analyses." />

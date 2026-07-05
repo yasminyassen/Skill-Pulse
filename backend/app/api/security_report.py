@@ -9,6 +9,11 @@ from app.db.models import User
 from fastapi import Request
 from app.core.rate_limiter import limiter
 from app.services.security_service import compute_security_score_breakdown
+from app.services.issue_progress import (
+    compare_fingerprints,
+    previous_completed_run_for_user_repo,
+    security_finding_fingerprint,
+)
 
 
 router = APIRouter(prefix="/security-report", tags=["security"])
@@ -21,6 +26,46 @@ def _severity_bucket(severity: str | None) -> str:
     if s in {"HIGH", "MEDIUM", "LOW"}:
         return s
     return "MEDIUM"
+
+
+def _security_progress(
+    db: Session,
+    run: AnalysisRun,
+    current_findings: list[SecurityFinding],
+) -> dict:
+    previous_run = previous_completed_run_for_user_repo(db, run)
+    if previous_run is None:
+        return {
+            "has_previous_analysis": False,
+            "previous_analysis_id": None,
+            "issues_fixed": 0,
+            "issues_introduced": 0,
+            "remaining_issues": len(current_findings),
+            "net_impact": "No baseline",
+        }
+
+    previous_findings = (
+        db.query(SecurityFinding)
+        .filter(SecurityFinding.analysis_run_id == previous_run.id)
+        .all()
+    )
+    delta = compare_fingerprints(current_findings, previous_findings, security_finding_fingerprint)
+    fixed = delta["fixed"]
+    introduced = delta["introduced"]
+    if introduced > fixed:
+        net_impact = "Risk increased"
+    elif fixed > introduced:
+        net_impact = "Improved"
+    else:
+        net_impact = "Stable"
+    return {
+        "has_previous_analysis": True,
+        "previous_analysis_id": previous_run.id,
+        "issues_fixed": fixed,
+        "issues_introduced": introduced,
+        "remaining_issues": delta["remaining"],
+        "net_impact": net_impact,
+    }
 
 
 @router.get("/{analysis_id}")
@@ -68,6 +113,8 @@ def get_security_report(
     ]
     security_score_breakdown = compute_security_score_breakdown(security_score_inputs)
 
+    progress = _security_progress(db, run, findings)
+
     if not findings:
         return {
             "analysis_id": analysis_id,
@@ -82,6 +129,7 @@ def get_security_report(
             },
             "failed_tools": failed_tools,
             "security_score_breakdown": security_score_breakdown,
+            "security_progress": progress,
         }
 
     total = len(findings)
@@ -159,5 +207,6 @@ def get_security_report(
         "categorized_findings": categorized_findings,
         "failed_tools": failed_tools,
         "security_score_breakdown": security_score_breakdown,
+        "security_progress": progress,
 
     }

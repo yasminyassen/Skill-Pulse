@@ -25,6 +25,7 @@ from app.schemas.manager_security_schemas import (
     SecurityTrendPoint,
     TeamSecurityOverview,
 )
+from app.services.issue_progress import user_issue_delta
 from app.services.security_service import normalize_severity
 
 
@@ -141,6 +142,31 @@ def _previous_manager_run_for_repo(
     )
 
 
+def _manager_runs_for_repo_until(
+    db: Session,
+    manager_id: int,
+    repo_id: int,
+    current_run: AnalysisRun,
+) -> list[AnalysisRun]:
+    current_time = _run_time(current_run)
+    runs = (
+        db.query(AnalysisRun)
+        .filter(
+            AnalysisRun.user_id == manager_id,
+            AnalysisRun.repository_id == repo_id,
+            AnalysisRun.analysis_scope == "team_contributions",
+            AnalysisRun.status == "completed",
+        )
+        .order_by(AnalysisRun.completed_at.asc(), AnalysisRun.triggered_at.asc(), AnalysisRun.id.asc())
+        .all()
+    )
+    return [
+        run
+        for run in runs
+        if run.id == current_run.id or _run_time(run) <= current_time
+    ]
+
+
 def _findings_for_runs(db: Session, run_ids: list[int]) -> list[SecurityFinding]:
     if not run_ids:
         return []
@@ -170,43 +196,27 @@ def _dedupe_findings(findings: list[SecurityFinding]) -> list[SecurityFinding]:
     return result
 
 
-def _finding_fingerprint(finding: SecurityFinding) -> tuple:
-    return (
-        (finding.file_path or "").replace("\\", "/").strip().lower(),
-        finding.line_number or 0,
-        (finding.rule or "").strip().lower(),
-        (finding.cwe or "").strip().upper(),
-        (finding.owasp_category or "").strip().lower(),
-    )
-
-
 def _user_issue_delta(
     current_findings: list[SecurityFinding],
     previous_findings: list[SecurityFinding],
 ) -> dict[int, dict[str, int]]:
-    if not previous_findings:
+    return user_issue_delta(current_findings, previous_findings, _dedupe_findings)
+
+
+def _cumulative_user_issue_delta(db: Session, runs: list[AnalysisRun]) -> dict[int, dict[str, int]]:
+    if len(runs) < 2:
         return {}
 
-    current_by_user: dict[int, set[tuple]] = defaultdict(set)
-    previous_by_user: dict[int, set[tuple]] = defaultdict(set)
-
-    for finding in _dedupe_findings(current_findings):
-        if finding.user_id is not None:
-            current_by_user[finding.user_id].add(_finding_fingerprint(finding))
-
-    for finding in _dedupe_findings(previous_findings):
-        if finding.user_id is not None:
-            previous_by_user[finding.user_id].add(_finding_fingerprint(finding))
-
-    result: dict[int, dict[str, int]] = {}
-    for user_id in set(current_by_user) | set(previous_by_user):
-        current = current_by_user.get(user_id, set())
-        previous = previous_by_user.get(user_id, set())
-        result[user_id] = {
-            "introduced": len(current - previous),
-            "fixed": len(previous - current),
-        }
-    return result
+    result: dict[int, dict[str, int]] = defaultdict(lambda: {"introduced": 0, "fixed": 0})
+    previous_findings = _dedupe_findings(_findings_for_runs(db, [runs[0].id]))
+    for run in runs[1:]:
+        current_findings = _dedupe_findings(_findings_for_runs(db, [run.id]))
+        step_delta = _user_issue_delta(current_findings, previous_findings)
+        for user_id, delta in step_delta.items():
+            result[user_id]["introduced"] += int(delta.get("introduced", 0))
+            result[user_id]["fixed"] += int(delta.get("fixed", 0))
+        previous_findings = current_findings
+    return dict(result)
 
 
 def _risk_breakdown(findings: list[SecurityFinding]) -> SecurityRiskBreakdown:
@@ -545,6 +555,7 @@ def _contributor_impacts(
     run_id: int,
     findings: list[SecurityFinding],
     previous_findings: list[SecurityFinding],
+    cumulative_deltas: dict[int, dict[str, int]] | None = None,
 ) -> list[ContributorSecurityImpact]:
     summary_rows = (
         db.query(ContributorAnalysisSummary, User)
@@ -582,7 +593,7 @@ def _contributor_impacts(
         if finding.user_id is not None:
             findings_by_user[finding.user_id].append(finding)
 
-    deltas = _user_issue_delta(findings, previous_findings)
+    deltas = cumulative_deltas if cumulative_deltas is not None else _user_issue_delta(findings, previous_findings)
     result: list[ContributorSecurityImpact] = []
     for score_value_raw, user in rows:
         breakdown = _risk_breakdown(_dedupe_findings(findings_by_user.get(user.id, [])))
@@ -754,6 +765,12 @@ def get_repository_security_detail(
         else None
     )
     previous_team_findings = _dedupe_findings(_findings_for_runs(db, [previous_team_run.id])) if previous_team_run else []
+    team_run_timeline = (
+        _manager_runs_for_repo_until(db, current_user.id, repo_id, team_run)
+        if team_run
+        else []
+    )
+    cumulative_team_deltas = _cumulative_user_issue_delta(db, team_run_timeline)
     team_contributors = _contributors_for_team_run(db, team_run.id) if team_run else []
     users_by_id = _users_by_id_for_findings(
         db,
@@ -789,7 +806,7 @@ def get_repository_security_detail(
         detected_vulnerabilities=vulnerabilities,
         recommended_actions=_recommended_actions(breakdown, common),
         contributor_impacts=(
-            _contributor_impacts(db, team_run.id, team_findings, previous_team_findings)
+            _contributor_impacts(db, team_run.id, team_findings, previous_team_findings, cumulative_team_deltas)
             if team_run
             else []
         ),

@@ -494,8 +494,8 @@ function ResourceCard({ resource }: { resource: LearningResource }) {
           {resource.url && <span style={{ color: "#60a5fa", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap" }}>Open →</span>}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 7 }}>
-          {resource.provider && <span className="chip">{resource.provider}</span>}
-          <span className="chip">{typeLabel(resource.type)}</span>
+          {resource.provider && <span className="chip">Source: {resource.provider}</span>}
+          <span className="chip">Format: {typeLabel(resource.type)}</span>
         </div>
         {resource.reason && <p style={{ color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.55, margin: "9px 0 0" }}>{resource.reason}</p>}
       </div>

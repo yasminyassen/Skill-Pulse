@@ -73,6 +73,11 @@ from app.services.security_service import (
     compute_security_score_breakdown,
     group_findings_by_severity_and_file,
 )
+from app.services.issue_progress import (
+    compare_fingerprints,
+    previous_completed_run_for_user_repo,
+    sonar_issue_fingerprint,
+)
 from app.services.learning_recommendations import build_learning_recommendations
 from app.services.recruiter_candidate_insights import generate_and_cache_recruiter_candidate_insight
 from app.services.sonarqube_score_service import (
@@ -606,6 +611,105 @@ def _count_issues_by_type(issues) -> dict[str, int]:
         if issue_type in counts:
             counts[issue_type] += 1
     return counts
+
+
+def _metric_delta(current: float | None, previous: float | None) -> float | None:
+    if current is None or previous is None:
+        return None
+    return round(float(current) - float(previous), 4)
+
+
+def _quality_progress_payload(
+    db: Session,
+    run: AnalysisRun,
+    user_id: int,
+    current_summary: SonarAnalysisSummary,
+    current_issues: list[SonarIssue],
+    current_measures: dict,
+) -> dict:
+    previous_run = previous_completed_run_for_user_repo(db, run)
+    if previous_run is None:
+        return {
+            "has_previous_analysis": False,
+            "previous_analysis_id": None,
+            "issues_fixed": 0,
+            "issues_introduced": 0,
+            "remaining_issues": len(current_issues),
+            "bugs_delta": None,
+            "code_smells_delta": None,
+            "coverage_delta": None,
+            "duplication_delta": None,
+            "cognitive_complexity_delta": None,
+            "net_impact": "No baseline",
+        }
+
+    previous_summary_query = db.query(SonarAnalysisSummary).filter(SonarAnalysisSummary.analysis_run_id == previous_run.id)
+    previous_issue_query = db.query(SonarIssue).filter(SonarIssue.analysis_run_id == previous_run.id)
+    if run.analysis_scope == "contribution":
+        previous_summary_query = previous_summary_query.filter(SonarAnalysisSummary.user_id == user_id)
+        previous_issue_query = previous_issue_query.filter(SonarIssue.user_id == user_id)
+
+    previous_summary = previous_summary_query.first()
+    previous_issues = (
+        previous_issue_query
+        .filter(or_(SonarIssue.status.is_(None), func.upper(SonarIssue.status) != "CLOSED"))
+        .all()
+    )
+    issue_delta = compare_fingerprints(current_issues, previous_issues, sonar_issue_fingerprint)
+    previous_counts = _count_issues_by_type(previous_issues)
+    current_counts = _count_issues_by_type(current_issues)
+    previous_measures = _numeric_measure_map(previous_summary.measures) if previous_summary else {}
+
+    fixed = issue_delta["fixed"]
+    introduced = issue_delta["introduced"]
+    coverage_delta = _metric_delta(_safe_number(current_measures.get("coverage")), _safe_number(previous_measures.get("coverage")))
+    duplication_delta = _metric_delta(
+        _safe_number(current_measures.get("duplicated_lines_density")),
+        _safe_number(previous_measures.get("duplicated_lines_density")),
+    )
+    complexity_delta = _metric_delta(
+        _safe_number(current_measures.get("cognitive_complexity")),
+        _safe_number(previous_measures.get("cognitive_complexity")),
+    )
+
+    bugs_delta = current_counts["BUG"] - previous_counts["BUG"]
+    code_smells_delta = current_counts["CODE_SMELL"] - previous_counts["CODE_SMELL"]
+
+    positive_moves = fixed + max(0, -int(bugs_delta)) + max(0, -int(code_smells_delta))
+    negative_moves = introduced + max(0, int(bugs_delta)) + max(0, int(code_smells_delta))
+    if coverage_delta is not None and coverage_delta > 0:
+        positive_moves += 1
+    if duplication_delta is not None and duplication_delta < 0:
+        positive_moves += 1
+    if complexity_delta is not None and complexity_delta < 0:
+        positive_moves += 1
+    if coverage_delta is not None and coverage_delta < 0:
+        negative_moves += 1
+    if duplication_delta is not None and duplication_delta > 0:
+        negative_moves += 1
+    if complexity_delta is not None and complexity_delta > 0:
+        negative_moves += 1
+
+    if positive_moves > negative_moves:
+        net_impact = "Improved"
+    elif negative_moves > positive_moves:
+        net_impact = "Needs attention"
+    else:
+        net_impact = "Stable"
+
+    return {
+        "has_previous_analysis": True,
+        "previous_analysis_id": previous_run.id,
+        "issues_fixed": fixed,
+        "issues_introduced": introduced,
+        "remaining_issues": issue_delta["remaining"],
+        "bugs_delta": bugs_delta,
+        "code_smells_delta": code_smells_delta,
+        "coverage_delta": coverage_delta,
+        "duplication_delta": duplication_delta,
+        "cognitive_complexity_delta": complexity_delta,
+        "net_impact": net_impact,
+    }
 
 
 def _sonar_work_duration_minutes(value: object) -> float | None:
@@ -3072,6 +3176,7 @@ async def get_sonar_results(
                 "bugs_count": 0,
                 "code_smells_count": 0,
             },
+            "quality_progress": None,
         }
 
     files = [
@@ -3106,6 +3211,7 @@ async def get_sonar_results(
     ]
     issue_counts = _count_issues_by_type(issue_rows)
     measures = _numeric_measure_map(summary.measures)
+    quality_progress = _quality_progress_payload(db, run, current_user.id, summary, issue_rows, measures)
     if run.analysis_scope == "contribution":
         attributed_debt = _attributed_technical_debt_minutes(issue_rows)
         if attributed_debt is not None:
@@ -3132,6 +3238,7 @@ async def get_sonar_results(
             "bugs_count": issue_counts["BUG"],
             "code_smells_count": issue_counts["CODE_SMELL"],
         },
+        "quality_progress": quality_progress,
     }
 
 

@@ -35,6 +35,7 @@ from app.schemas.manager_schemas import (
     ManagerDashboardMetricCard,
     ManagerDashboardOverview,
     ManagerDashboardOverviewTrendPoint,
+    ManagerDashboardQualityProgress,
     ManagerDashboardRepo,
     ManagerDashboardRecommendations,
     ManagerDashboardRepositorySummary,
@@ -49,6 +50,7 @@ from app.schemas.manager_schemas import (
     ManagerTopPerformer,
     ManagerTrendPoint,
 )
+from app.services.issue_progress import compare_fingerprints, sonar_issue_fingerprint
 from ai_services.insights.ai_insights import generate_insights
 from ai_services.rag.rag_seeder import STANDARDS_DOC_ID
 
@@ -947,6 +949,30 @@ def _latest_repository_run(db: Session, manager_id: int, repo_id: int | None = N
     return runs[0] if runs else None
 
 
+def _repository_runs_for_repo_until(
+    db: Session,
+    manager_id: int,
+    current_run: AnalysisRun | None,
+) -> list[AnalysisRun]:
+    if current_run is None:
+        return []
+    current_time = _run_time(current_run)
+    runs = (
+        db.query(AnalysisRun)
+        .filter(
+            AnalysisRun.user_id == manager_id,
+            AnalysisRun.repository_id == current_run.repository_id,
+            AnalysisRun.analysis_scope == "repository",
+            AnalysisRun.status == "completed",
+        )
+        .order_by(AnalysisRun.completed_at.asc(), AnalysisRun.triggered_at.asc(), AnalysisRun.id.asc())
+        .all()
+    )
+    timeline = [run for run in runs if run.id == current_run.id or _run_time(run) <= current_time]
+    current_index = next((index for index, run in enumerate(timeline) if run.id == current_run.id), None)
+    return timeline[: current_index + 1] if current_index is not None else timeline
+
+
 def _overview_repositories(db: Session, manager_id: int) -> list[ManagerDashboardRepo]:
     latest_runs = _latest_repository_runs(db, manager_id)
     repo_ids = [run.repository_id for run in latest_runs]
@@ -1044,6 +1070,87 @@ def _repository_metric_cards(
     ]
 
 
+def _metric_delta(current: float | int | None, previous: float | int | None) -> float | None:
+    if current is None or previous is None:
+        return None
+    return _round_score(float(current) - float(previous))
+
+
+def _quality_issues(issues: list[SonarIssue]) -> list[SonarIssue]:
+    return [
+        issue for issue in issues
+        if str(issue.type or "").upper() in {"BUG", "CODE_SMELL"}
+    ]
+
+
+def _quality_progress_for_repository(
+    db: Session,
+    current_run: AnalysisRun | None,
+    current_summary: SonarAnalysisSummary | None,
+    current_issues: list[SonarIssue],
+    manager_id: int,
+) -> ManagerDashboardQualityProgress:
+    current_quality_issues = _quality_issues(current_issues)
+    repository_runs = _repository_runs_for_repo_until(db, manager_id, current_run)
+    if current_run is None or len(repository_runs) < 2:
+        return ManagerDashboardQualityProgress(remaining_issues=len(current_quality_issues))
+
+    baseline_run = repository_runs[0]
+    baseline_summary = _summary_for_run(db, baseline_run.id, manager_id)
+    baseline_quality_issues = _quality_issues(_sonar_issue_rows(db, baseline_run))
+    issue_delta = compare_fingerprints(current_quality_issues, baseline_quality_issues, sonar_issue_fingerprint)
+    fixed = int(issue_delta["fixed"])
+    introduced = int(issue_delta["introduced"])
+    remaining = len(current_quality_issues)
+
+    coverage_delta = _metric_delta(
+        _metric_value(current_summary, "coverage"),
+        _metric_value(baseline_summary, "coverage"),
+    )
+    duplication_delta = _metric_delta(
+        _metric_value(current_summary, "duplicated_lines_density"),
+        _metric_value(baseline_summary, "duplicated_lines_density"),
+    )
+    complexity_delta = _metric_delta(
+        _metric_value(current_summary, "cognitive_complexity") or _metric_value(current_summary, "complexity"),
+        _metric_value(baseline_summary, "cognitive_complexity") or _metric_value(baseline_summary, "complexity"),
+    )
+
+    positive_moves = fixed
+    negative_moves = introduced
+    if coverage_delta is not None and coverage_delta > 0:
+        positive_moves += 1
+    if duplication_delta is not None and duplication_delta < 0:
+        positive_moves += 1
+    if complexity_delta is not None and complexity_delta < 0:
+        positive_moves += 1
+    if coverage_delta is not None and coverage_delta < 0:
+        negative_moves += 1
+    if duplication_delta is not None and duplication_delta > 0:
+        negative_moves += 1
+    if complexity_delta is not None and complexity_delta > 0:
+        negative_moves += 1
+
+    if positive_moves > negative_moves:
+        net_impact = "Improved"
+    elif negative_moves > positive_moves:
+        net_impact = "Needs attention"
+    else:
+        net_impact = "Stable"
+
+    return ManagerDashboardQualityProgress(
+        has_baseline_analysis=True,
+        baseline_analysis_id=baseline_run.id,
+        issues_fixed=fixed,
+        issues_introduced=introduced,
+        remaining_issues=remaining,
+        coverage_delta=coverage_delta,
+        duplication_delta=duplication_delta,
+        cognitive_complexity_delta=complexity_delta,
+        net_impact=net_impact,
+    )
+
+
 def _latest_contributor_score_rows(rows: list[ScoreRow]) -> list[ScoreRow]:
     latest: dict[int, ScoreRow] = {}
     for row in rows:
@@ -1129,7 +1236,10 @@ def _highlight_reason(name: str | None, row: ManagerDashboardContributorRow | No
     )
 
 
-def _team_performance(contributors: list[ManagerDashboardContributorRow]) -> ManagerDashboardTeamPerformance:
+def _team_performance(
+    contributors: list[ManagerDashboardContributorRow],
+    quality_progress: ManagerDashboardQualityProgress | None = None,
+) -> ManagerDashboardTeamPerformance:
     scored = [row for row in contributors if row.skill_score is not None]
     best = scored[0] if scored else None
     support = scored[-1] if scored else None
@@ -1161,6 +1271,7 @@ def _team_performance(contributors: list[ManagerDashboardContributorRow]) -> Man
         best_contributor=best_highlight,
         needs_support_contributor=support_highlight,
         total_contributors=len(contributors),
+        quality_progress=quality_progress or ManagerDashboardQualityProgress(),
     )
 
 
@@ -1697,13 +1808,20 @@ def _overview_context(
     effective_repo_id = repository_run.repository_id if repository_run else repo_id
     team_rows = _query_manager_score_rows(db, manager_id, effective_repo_id)
     contributors = _contributor_rows(db, team_rows)
-    team_performance = _team_performance(contributors)
     repository_score = _score_for_run(db, repository_run.id, manager_id) if repository_run else None
     repository_summary_row = _summary_for_run(db, repository_run.id, manager_id) if repository_run else None
     repository_security_score = _number_or_none(getattr(repository_score, "security_awareness_score", None))
     if repository_security_score is None:
         repository_security_score = _repository_security_score(db, repository_run, manager_id)
     issue_rows = _sonar_issue_rows(db, repository_run)
+    quality_progress = _quality_progress_for_repository(
+        db,
+        repository_run,
+        repository_summary_row,
+        issue_rows,
+        manager_id,
+    )
+    team_performance = _team_performance(contributors, quality_progress)
     repository_metrics = _repository_metric_cards(
         db,
         repository_run,

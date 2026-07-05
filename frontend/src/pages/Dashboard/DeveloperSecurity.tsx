@@ -56,6 +56,14 @@ interface SecurityReport {
   top_vulnerable_files?: Record<string, number>;
   categorized_findings: Record<string, Record<string, Omit<SecurityFinding, "severity" | "file_path">[]>>;
   security_score_breakdown?: SecurityScoreBreakdown | null;
+  security_progress?: {
+    has_previous_analysis: boolean;
+    previous_analysis_id: number | null;
+    issues_fixed: number;
+    issues_introduced: number;
+    remaining_issues: number;
+    net_impact: string;
+  };
 }
 
 const severityConfig = {
@@ -608,6 +616,46 @@ export default function DeveloperSecurity() {
                       </div>
                     )}
                   </div>
+
+                  {/* ── Security progress ── */}
+                  {report?.security_progress && (
+                    <div className="dim-card">
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
+                        <div>
+                          <label className="skl-label">Security Progress</label>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-primary)", marginBottom: 4 }}>
+                            Since Previous Analysis
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                            {report.security_progress.has_previous_analysis
+                              ? `Compared with analysis #${report.security_progress.previous_analysis_id}.`
+                              : "No previous analysis exists for this repository yet."}
+                          </div>
+                        </div>
+                        <span style={{
+                          padding: "5px 10px", borderRadius: 999,
+                          color: report.security_progress.net_impact === "Improved" ? "#34d399" : report.security_progress.net_impact === "Risk increased" ? "#f87171" : "#fbbf24",
+                          background: report.security_progress.net_impact === "Improved" ? "rgba(52,211,153,0.12)" : report.security_progress.net_impact === "Risk increased" ? "rgba(248,113,113,0.12)" : "rgba(251,191,36,0.12)",
+                          border: `1px solid ${report.security_progress.net_impact === "Improved" ? "rgba(52,211,153,0.28)" : report.security_progress.net_impact === "Risk increased" ? "rgba(248,113,113,0.28)" : "rgba(251,191,36,0.28)"}`,
+                          fontSize: 11.5, fontWeight: 800, whiteSpace: "nowrap",
+                        }}>
+                          {report.security_progress.net_impact}
+                        </span>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+                        {[
+                          { label: "Issues Fixed", value: report.security_progress.issues_fixed, color: "#34d399" },
+                          { label: "New Issues", value: report.security_progress.issues_introduced, color: "#f87171" },
+                          { label: "Remaining", value: report.security_progress.remaining_issues, color: accent },
+                        ].map(item => (
+                          <div key={item.label} style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+                            <div style={{ fontSize: 24, fontWeight: 900, color: item.color, marginBottom: 4 }}>{item.value}</div>
+                            <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 700 }}>{item.label}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* ── Findings breakdown ── */}
                   <div className="dim-card">

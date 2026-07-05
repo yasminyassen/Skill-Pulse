@@ -125,7 +125,7 @@
     "title": "Clean as You Code",
     "type": "documentation",
     "provider": "SonarSource",
-    "url": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/clean-as-you-code/",
+    "url": "https://docs.sonarsource.com/sonarqube-server/user-guide/about-new-code",
     "topics": ["SonarQube clean code practices", "quality gates", "maintainability", "test coverage"],
     "difficulty": "Beginner",
     "estimated_effort": "2 hours",
@@ -133,21 +133,21 @@
   },
   {
     "id": "sonar-clean-code",
-    "title": "Clean Code",
+    "title": "Managing Quality Gates",
     "type": "documentation",
     "provider": "SonarSource",
-    "url": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/clean-code/",
-    "topics": ["SonarQube clean code practices", "clean code", "maintainability", "reliability", "security"],
+    "url": "https://docs.sonarsource.com/sonarqube-server/quality-standards-administration/managing-quality-gates/introduction",
+    "topics": ["SonarQube quality gates", "quality standards", "clean code", "maintainability", "reliability", "security", "coverage"],
     "difficulty": "Beginner",
-    "estimated_effort": "2-3 hours",
-    "content": "Use Sonar's Clean Code model to connect issues to software qualities and code attributes. Learn how maintainability, reliability, security, consistency, intentionality, adaptability, and responsibility relate to day-to-day fixes. Apply this to prioritize Sonar issues and prevent repeated quality gate failures."
+    "estimated_effort": "1-2 hours",
+    "content": "Use SonarQube quality gates to understand pass/fail conditions for maintainability, reliability, security, coverage, duplication, and new-code standards. Apply this when a repository has a weak quality gate, low test coverage, high duplication, bugs, code smells, or repeated quality standard failures."
   },
   {
     "id": "sonar-duplications",
     "title": "Duplications Metric Definition",
     "type": "documentation",
     "provider": "SonarSource",
-    "url": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/code-metrics/metrics-definition/",
+    "url": "https://docs.sonarsource.com/sonarqube-server/user-guide/code-metrics/metrics-definition",
     "topics": ["duplication reduction", "maintainability", "SonarQube metrics", "clean code"],
     "difficulty": "Beginner",
     "estimated_effort": "1-2 hours",
@@ -163,8 +163,84 @@
     "difficulty": "Beginner",
     "estimated_effort": "4-6 hours",
     "content": "Use a mature Python style guide to improve naming, module structure, imports, docstrings, exception handling, tests, and readability. This is useful when style violations, maintainability issues, inconsistent naming, or hard-to-review Python code appear in analysis."
-  }
-  ,
+  },
+  {
+    "id": "owasp-authorization-cheat-sheet",
+    "title": "Authorization Cheat Sheet",
+    "type": "cheat_sheet",
+    "provider": "OWASP",
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html",
+    "topics": ["authorization", "access control", "least privilege", "deny by default", "secure coding", "Broken Access Control"],
+    "difficulty": "Intermediate",
+    "estimated_effort": "2-3 hours",
+    "content": "Learn practical authorization controls such as deny-by-default decisions, least privilege, centralized authorization checks, and server-side permission enforcement. Use this when findings mention broken access control, missing permission checks, insecure direct object access, role checks, or sensitive endpoint exposure."
+  },
+  {
+    "id": "owasp-authentication-cheat-sheet",
+    "title": "Authentication Cheat Sheet",
+    "type": "cheat_sheet",
+    "provider": "OWASP",
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html",
+    "topics": ["authentication", "password security", "session security", "login", "MFA", "secure coding"],
+    "difficulty": "Intermediate",
+    "estimated_effort": "2-4 hours",
+    "content": "Study authentication implementation practices for login, password handling, account recovery, MFA, and attack resistance. Use this when recommendations mention weak authentication, insecure login flows, missing MFA, credential handling, session abuse, or account security."
+  },
+  {
+    "id": "owasp-logging-cheat-sheet",
+    "title": "Logging Cheat Sheet",
+    "type": "cheat_sheet",
+    "provider": "OWASP",
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html",
+    "topics": ["logging", "monitoring", "audit trails", "security events", "error handling", "secure coding"],
+    "difficulty": "Beginner",
+    "estimated_effort": "2-3 hours",
+    "content": "Learn what security-relevant events to log, how to avoid leaking sensitive data, and how to make logs useful for detection and debugging. Use this when findings mention missing audit trails, poor observability, unsafe logging, exception handling, or incident response gaps."
+  },
+  {
+    "id": "owasp-error-handling-cheat-sheet",
+    "title": "Error Handling Cheat Sheet",
+    "type": "cheat_sheet",
+    "provider": "OWASP",
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Error_Handling_Cheat_Sheet.html",
+    "topics": ["error handling", "exception handling", "information disclosure", "secure coding", "logging"],
+    "difficulty": "Beginner",
+    "estimated_effort": "1-2 hours",
+    "content": "Learn how to handle application errors without exposing stack traces, secrets, internal paths, or implementation details. Use this when findings mention verbose errors, unsafe exception handling, leaked debug information, or missing centralized error handling."
+  },
+  {
+    "id": "sonar-managing-issues",
+    "title": "Managing Issues",
+    "type": "documentation",
+    "provider": "SonarSource",
+    "url": "https://docs.sonarsource.com/sonarqube-server/user-guide/issues",
+    "topics": ["SonarQube issues", "code smells", "bugs", "vulnerabilities", "triage", "fixing issues"],
+    "difficulty": "Beginner",
+    "estimated_effort": "2-3 hours",
+    "content": "Learn how to retrieve, review, triage, edit, and fix SonarQube issues. Use this when recommendations involve code smells, bugs, vulnerabilities, false-positive review, issue prioritization, or converting static analysis results into concrete fixes."
+  },
+  {
+    "id": "python-logging-documentation",
+    "title": "logging - Logging Facility for Python",
+    "type": "documentation",
+    "provider": "Python",
+    "url": "https://docs.python.org/3/library/logging.html",
+    "topics": ["Python logging", "observability", "debugging", "audit trails", "error handling", "secure coding"],
+    "difficulty": "Beginner",
+    "estimated_effort": "2-4 hours",
+    "content": "Learn Python's standard logging module, logger levels, handlers, formatters, and structured logging habits. Use this when findings mention missing logs, print-based debugging, poor observability, exception tracking, or the need to avoid leaking sensitive values in logs."
+  },
+  {
+    "id": "python-packaging-core-metadata",
+    "title": "Core Metadata Specifications",
+    "type": "documentation",
+    "provider": "Python Packaging Authority",
+    "url": "https://packaging.python.org/specifications/core-metadata/",
+    "topics": ["Python packaging", "dependency metadata", "package versions", "supply chain security", "Dependency Management"],
+    "difficulty": "Intermediate",
+    "estimated_effort": "1-2 hours",
+    "content": "Learn how Python package metadata describes names, versions, requirements, classifiers, and project information. Use this when dependency findings require understanding package identity, dependency declarations, vulnerability scanner results, or supply chain metadata."
+  },
   {
     "id": "python-pip-audit-dependency-vulnerability-scanning",
     "title": "pip-audit: Python Dependency Vulnerability Scanning",
@@ -265,27 +341,6 @@
     "content": "Learn how Python dependency version specifiers work, including exact pins, compatible release clauses, minimum versions, exclusions, and version ranges. Use this to replace vulnerable package pins with safe upgrade constraints, avoid accidentally allowing insecure versions, and document why a package version was upgraded. This is relevant for recommendations about requirements.txt pinning, vulnerable pytest versions, dependency upgrades, and Python package compatibility."
   },
   {
-    "id": "pytest-cve-2025-71176-tempdir-dos",
-    "title": "CVE-2025-71176: pytest Temporary Directory Handling",
-    "type": "advisory",
-    "provider": "NVD",
-    "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-71176",
-    "topics": [
-      "pytest CVEs",
-      "vulnerable pytest version",
-      "Denial of Service",
-      "DoS",
-      "temporary directory handling",
-      "tmpdir",
-      "requirements.txt",
-      "Dependency Management",
-      "Secure Coding"
-    ],
-    "difficulty": "Intermediate",
-    "estimated_effort": "1-2 hours",
-    "content": "Review CVE-2025-71176 for pytest temporary directory handling risk on UNIX systems. Use this when a security finding says a vulnerable pytest version in requirements.txt exposes the project to Denial of Service or privilege-related risk through insecure temporary directory handling. Practice identifying the affected pytest version, upgrading pytest to a safe patched version, removing unsafe version pins, rerunning dependency scanning, and confirming the requirements.txt file no longer installs the vulnerable package."
-  },
-  {
     "id": "pytest-temporary-directory-fixtures",
     "title": "pytest Temporary Directory Fixtures",
     "type": "documentation",
@@ -343,26 +398,6 @@
     "difficulty": "Intermediate",
     "estimated_effort": "1-2 hours",
     "content": "Use CWE-400 to understand resource consumption weaknesses where software fails to track or restrict resource usage. Practice reviewing code and dependencies for missing limits, uncontrolled allocation, unbounded loops, unsafe temporary file or directory behavior, and operations that can exhaust CPU, memory, disk, or filesystem resources. This is relevant to Denial of Service recommendations and dependency vulnerabilities that impact availability."
-  },
-  {
-    "id": "pypa-advisory-database-python-vulnerabilities",
-    "title": "Python Packaging Advisory Database",
-    "type": "advisory_database",
-    "provider": "PyPA",
-    "url": "https://github.com/pypa/advisory-database",
-    "topics": [
-      "Python vulnerability advisories",
-      "CVE",
-      "known vulnerabilities",
-      "vulnerable dependencies",
-      "vulnerable components",
-      "Dependency Management",
-      "pip-audit",
-      "Secure Coding"
-    ],
-    "difficulty": "Intermediate",
-    "estimated_effort": "1-2 hours",
-    "content": "Use the Python Packaging Advisory Database to understand how Python package vulnerabilities are tracked and consumed by tools such as pip-audit. Learn to map vulnerable packages to advisories, check affected versions, identify fixed versions, and verify that requirements.txt upgrades remove known vulnerable components. Use this for dependency security, package CVEs, vulnerable pytest findings, and Python supply chain remediation."
   },
   {
     "id": "pytest-cve-2025-71176-tempdir-dos",

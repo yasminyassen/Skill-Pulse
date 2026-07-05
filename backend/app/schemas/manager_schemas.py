@@ -126,6 +126,18 @@ class ManagerDashboardContributorHighlight(BaseModel):
     reasoning: str | None = None
 
 
+class ManagerDashboardQualityProgress(BaseModel):
+    has_baseline_analysis: bool = False
+    baseline_analysis_id: int | None = None
+    issues_fixed: int = 0
+    issues_introduced: int = 0
+    remaining_issues: int = 0
+    coverage_delta: float | None = None
+    duplication_delta: float | None = None
+    cognitive_complexity_delta: float | None = None
+    net_impact: str = "No baseline"
+
+
 class ManagerDashboardTeamPerformance(BaseModel):
     average_team_score: float | None = None
     average_team_security_score: float | None = None
@@ -134,6 +146,7 @@ class ManagerDashboardTeamPerformance(BaseModel):
     best_contributor: ManagerDashboardContributorHighlight | None = None
     needs_support_contributor: ManagerDashboardContributorHighlight | None = None
     total_contributors: int = 0
+    quality_progress: ManagerDashboardQualityProgress = Field(default_factory=ManagerDashboardQualityProgress)
 
 
 class ManagerDashboardContributorRow(BaseModel):

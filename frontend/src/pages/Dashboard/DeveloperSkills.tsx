@@ -40,6 +40,19 @@ interface SkillsSummary {
 }
 
 type Issue = { type: string; severity: string; file: string | null; line: number | null; message: string };
+type QualityProgress = {
+  has_previous_analysis: boolean;
+  previous_analysis_id: number | null;
+  issues_fixed: number;
+  issues_introduced: number;
+  remaining_issues: number;
+  bugs_delta: number | null;
+  code_smells_delta: number | null;
+  coverage_delta: number | null;
+  duplication_delta: number | null;
+  cognitive_complexity_delta: number | null;
+  net_impact: string;
+};
 type FileMetric = {
   file: string | null;
   lines_of_code: number | null;
@@ -66,6 +79,7 @@ interface SonarDashboard {
   complex_functions?: ComplexFunction[];
   issues_explorer?: Issue[];
   analysis_summary?: Record<string, unknown>;
+  quality_progress?: QualityProgress | null;
 }
 
 interface SonarFile {
@@ -119,6 +133,7 @@ interface SonarResultResponse {
     bugs_count: number;
     code_smells_count: number;
   };
+  quality_progress?: QualityProgress | null;
 }
 
 const accent = "#6366f1";
@@ -180,6 +195,61 @@ function SectionTitle({ kicker, title, description, right }: { kicker: string; t
 
 function EmptyState({ text }: { text: string }) {
   return <div className="sp-empty">{text}</div>;
+}
+
+function formatSignedDelta(value: number | null, suffix = "") {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (Math.abs(value) < 0.005) return `0${suffix}`;
+  return `${value > 0 ? "+" : ""}${Math.round(value)}${suffix}`;
+}
+
+function QualityProgressCard({ progress }: { progress?: QualityProgress | null }) {
+  if (!progress) return null;
+  const impactTone = progress.net_impact === "Improved" ? success : progress.net_impact === "Needs attention" ? danger : warning;
+  const metricItems = [
+    { label: "Coverage", value: progress.coverage_delta, suffix: "%", goodWhen: "up" },
+    { label: "Duplication", value: progress.duplication_delta, suffix: "%", goodWhen: "down" },
+    { label: "Cognitive Complexity", value: progress.cognitive_complexity_delta, suffix: "", goodWhen: "down" },
+  ];
+  return (
+    <Card style={{ padding: "20px 22px", marginBottom: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, marginBottom: 16 }}>
+        <div>
+          <div className="sp-label">Quality Progress</div>
+          <div style={{ marginTop: 5, fontSize: 16, fontWeight: 850, color: "var(--text-primary)" }}>Since Previous Analysis</div>
+          <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
+            {progress.has_previous_analysis ? `Compared with analysis #${progress.previous_analysis_id}.` : "No previous analysis exists for this repository yet."}
+          </div>
+        </div>
+        <Badge tone={impactTone}>{progress.net_impact}</Badge>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+        {[
+          { label: "Issues Fixed", value: progress.issues_fixed, color: success },
+          { label: "New Issues", value: progress.issues_introduced, color: danger },
+          { label: "Remaining Issues", value: progress.remaining_issues, color: accent },
+        ].map(item => (
+          <div key={item.label} className="summary-signal" style={{ padding: "13px 14px" }}>
+            <div style={{ fontSize: 23, fontWeight: 900, color: item.color, lineHeight: 1 }}>{item.value}</div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 750 }}>{item.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginTop: 10 }}>
+        {metricItems.map(item => {
+          const value = item.value;
+          const isGood = value == null || Math.abs(value) < 0.005 ? null : item.goodWhen === "up" ? value > 0 : value < 0;
+          const color = isGood === null ? "var(--text-muted)" : isGood ? success : danger;
+          return (
+            <div key={item.label} className="summary-signal" style={{ padding: "13px 14px" }}>
+              <div style={{ fontSize: 18, fontWeight: 900, color }}>{formatSignedDelta(value, item.suffix)}</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 750 }}>{item.label} Change</div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
 }
 
 function ProgressBar({ value, tone = accent, max = 100 }: { value: number | null | undefined; tone?: string; max?: number }) {
@@ -267,6 +337,87 @@ function topFilesByIssues(issues: Issue[] = []) {
   const map = new Map<string, number>();
   issues.forEach(i => map.set(i.file || "n/a", (map.get(i.file || "n/a") || 0) + 1));
   return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+}
+
+function buildSkillRecommendations({
+  skillScore,
+  coverageAvailable,
+  coverageValue,
+  coverageReason,
+  duplicationPercentage,
+  bugSeverity,
+  codeSmells,
+  technicalDebtMinutes,
+  complexFiles,
+  complexFunctions,
+}: {
+  skillScore: number | null;
+  coverageAvailable: boolean;
+  coverageValue: number | null;
+  coverageReason: string;
+  duplicationPercentage: number | null;
+  bugSeverity: ReturnType<typeof groupSeverity>;
+  codeSmells: number | null;
+  technicalDebtMinutes: number | null;
+  complexFiles: FileMetric[];
+  complexFunctions: ComplexFunction[];
+}) {
+  const actions: { priority: number; text: string }[] = [];
+
+  if (bugSeverity.critical > 0) {
+    actions.push({ priority: 100, text: `Fix ${bugSeverity.critical} critical bug${bugSeverity.critical > 1 ? "s" : ""} before release.` });
+  }
+  if (bugSeverity.major > 0) {
+    actions.push({ priority: 90, text: `Review ${bugSeverity.major} major bug${bugSeverity.major > 1 ? "s" : ""} affecting reliability.` });
+  }
+  if (!coverageAvailable) {
+    actions.push({
+      priority: 82,
+      text: coverageReason === "coverage_paths_do_not_match_repository"
+        ? "Regenerate coverage.xml with repository-relative file paths so coverage can be imported."
+        : "Upload a valid coverage.xml report so test coverage can be measured.",
+    });
+  } else if (coverageValue != null && coverageValue < 80) {
+    actions.push({
+      priority: coverageValue < 50 ? 85 : 75,
+      text: `Raise test coverage from ${pct(coverageValue)} toward 80% by adding tests for uncovered critical paths.`,
+    });
+  }
+  if (duplicationPercentage != null && duplicationPercentage > 5) {
+    actions.push({
+      priority: duplicationPercentage > 20 ? 80 : 65,
+      text: `Reduce duplication from ${pct(duplicationPercentage)} by extracting repeated validation/helper logic.`,
+    });
+  }
+  const topComplexFunction = complexFunctions[0];
+  const topComplexFile = complexFiles[0];
+  if (topComplexFunction) {
+    actions.push({
+      priority: 60,
+      text: `Simplify ${topComplexFunction.function}() in ${topComplexFunction.file || "the most complex file"} to reduce complexity.`,
+    });
+  } else if (topComplexFile) {
+    actions.push({
+      priority: 55,
+      text: `Refactor ${topComplexFile.file || "the most complex file"} to reduce cognitive and cyclomatic complexity.`,
+    });
+  }
+  if (codeSmells != null && codeSmells > 0) {
+    actions.push({
+      priority: codeSmells > 20 ? 58 : 45,
+      text: `Resolve ${codeSmells} code smell${codeSmells > 1 ? "s" : ""} to reduce ${minutesFmt(technicalDebtMinutes)} of technical debt.`,
+    });
+  }
+  if (skillScore != null && skillScore >= 80 && actions.length === 0) {
+    actions.push({ priority: 20, text: "Maintain the current quality level and keep new code within quality gate targets." });
+  } else if (actions.length === 0) {
+    actions.push({ priority: 10, text: "Run another analysis after your next changes to refresh quality recommendations." });
+  }
+
+  return actions
+    .sort((a, b) => b.priority - a.priority)
+    .map(action => action.text)
+    .slice(0, 4);
 }
 
 const sonarNumber = (value: number | string | null | undefined): number | null => {
@@ -420,6 +571,7 @@ function mapSonarResultToDashboard(response: SonarResultResponse): SonarDashboar
     complex_functions: [],
     issues_explorer: mappedIssues,
     analysis_summary: response.summary,
+    quality_progress: response.quality_progress ?? null,
   };
 }
 
@@ -520,14 +672,18 @@ export default function DeveloperSkills() {
     return matchesType && matchesSearch;
   }), [allIssues, filter, query]);
 
-  const recommendations = [
-    ...(skillScore != null && skillScore < 70 ? ["Improve the overall Skill Score"] : ["Maintain the current Skill Score level"]),
-    ...(coverageAvailable && coverageValue != null && coverageValue < 80 ? ["Add tests for low coverage files"] : []),
-    ...(!coverageAvailable ? [coverageReason === "coverage_paths_do_not_match_repository" ? "Regenerate coverage.xml with repository-relative file paths" : "Upload coverage.xml to enable test coverage metrics"] : []),
-    ...(detail?.duplication?.percentage != null && detail.duplication.percentage > 5 ? ["Remove duplicate validation and helper logic"] : []),
-    ...(bugSeverity.critical > 0 ? [`Fix ${bugSeverity.critical} critical bugs`] : []),
-    ...(complexFiles[0] ? [`Refactor ${complexFiles[0].file}`] : []),
-  ];
+  const recommendations = buildSkillRecommendations({
+    skillScore,
+    coverageAvailable,
+    coverageValue,
+    coverageReason,
+    duplicationPercentage: detail?.duplication?.percentage ?? current?.duplication_percentage ?? null,
+    bugSeverity,
+    codeSmells: detail?.maintainability?.code_smells ?? current?.code_smells ?? null,
+    technicalDebtMinutes: detail?.maintainability?.technical_debt_minutes ?? current?.technical_debt_minutes ?? null,
+    complexFiles,
+    complexFunctions,
+  });
 
   return (
     <DashboardLayout>
@@ -780,6 +936,7 @@ export default function DeveloperSkills() {
                   </div>
                 </div>
               </div>
+              <QualityProgressCard progress={detail.quality_progress} />
               {recommendations.length > 0 && <>
                 <div className="sp-label" style={{ marginBottom: 12 }}>Recommended Actions</div>
                 <div style={{ display: "grid", gap: 8 }}>
