@@ -42,6 +42,7 @@ from app.schemas.profile_schemas import (
     SetPasswordRequest,
 )
 from app.services.email_service import EmailDeliveryError, send_verification_email
+from app.services.account_deletion import delete_user_account_data
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -284,60 +285,7 @@ def change_password(
 
 
 def _delete_current_user(db: Session, current_user: User) -> MessageResponse:
-    user_id = current_user.id
-    run_ids = [row.id for row in db.query(AnalysisRun.id).filter(AnalysisRun.user_id == user_id).all()]
-
-    if run_ids:
-        db.query(RepositoryAnalysis).filter(RepositoryAnalysis.last_run_id.in_(run_ids)).update(
-            {RepositoryAnalysis.last_run_id: None},
-            synchronize_session=False,
-        )
-        db.query(RecruiterCandidate).filter(RecruiterCandidate.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
-        db.query(CodeMetrics).filter(CodeMetrics.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
-        db.query(SecurityFinding).filter(SecurityFinding.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
-        db.query(SonarIssue).filter(SonarIssue.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
-        db.query(SonarFileMeasure).filter(SonarFileMeasure.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
-        db.query(SonarAnalysisSummary).filter(SonarAnalysisSummary.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
-        db.query(SkillScore).filter(SkillScore.analysis_run_id.in_(run_ids)).delete(synchronize_session=False)
-        db.query(AnalysisRun).filter(AnalysisRun.id.in_(run_ids)).delete(synchronize_session=False)
-
-    uploaded_doc_ids = [
-        row.id
-        for row in db.query(RequirementDocument.id)
-        .filter(RequirementDocument.uploaded_by_id == user_id)
-        .all()
-    ]
-    if uploaded_doc_ids:
-        story_ids = [
-            row.id
-            for row in db.query(UserStory.id)
-            .filter(UserStory.document_id.in_(uploaded_doc_ids))
-            .all()
-        ]
-        if story_ids:
-            db.query(TechnicalTask).filter(TechnicalTask.story_id.in_(story_ids)).delete(synchronize_session=False)
-            db.query(UserStory).filter(UserStory.id.in_(story_ids)).delete(synchronize_session=False)
-        db.query(RequirementDocument).filter(RequirementDocument.id.in_(uploaded_doc_ids)).delete(synchronize_session=False)
-
-    db.query(TechnicalTask).filter(TechnicalTask.assigned_to == user_id).update(
-        {TechnicalTask.assigned_to: None},
-        synchronize_session=False,
-    )
-    db.query(RepositoryAnalysis).filter(RepositoryAnalysis.user_id == user_id).delete(synchronize_session=False)
-    db.query(RepositoryContributor).filter(RepositoryContributor.user_id == user_id).delete(synchronize_session=False)
-    db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete(synchronize_session=False)
-    db.query(SkillScore).filter(SkillScore.user_id == user_id).delete(synchronize_session=False)
-    db.query(ProfileActivityLog).filter(ProfileActivityLog.manager_id == user_id).delete(synchronize_session=False)
-    db.query(ProfileActivityLog).filter(ProfileActivityLog.actor_id == user_id).update(
-        {ProfileActivityLog.actor_id: None},
-        synchronize_session=False,
-    )
-    db.query(ProfileActivityLog).filter(ProfileActivityLog.member_id == user_id).update(
-        {ProfileActivityLog.member_id: None},
-        synchronize_session=False,
-    )
-
-    db.delete(current_user)
+    delete_user_account_data(db, current_user)
     db.commit()
     return MessageResponse(message="Account deleted successfully")
 
